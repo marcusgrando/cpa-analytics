@@ -22,8 +22,13 @@ const (
 const (
 	modelExpr  = "CASE WHEN response_model <> '' THEN response_model ELSE model END"
 	tierExpr   = "CASE WHEN response_service_tier <> '' THEN response_service_tier ELSE effective_service_tier END"
-	traceExpr  = "CASE WHEN trace_id <> '' THEN trace_id ELSE request_id END"
 	clientExpr = "CASE WHEN client_name = '' THEN 'unknown' WHEN client_version = '' THEN client_name ELSE client_name || '/' || client_version END"
+	// callExpr identifies one upstream call: CPA's usage reporter stamps all
+	// records of a call, split billing included, with the same trace and start
+	// time. A WebSocket connection shares one trace across turns, but each
+	// turn gets its own reporter and start time. Rows without a trace fall
+	// back to their own request ID.
+	callExpr = "(CASE WHEN trace_id <> '' THEN trace_id ELSE request_id END) || ':' || requested_at"
 )
 
 // Filter selects the rows every query works on. From is inclusive, To exclusive.

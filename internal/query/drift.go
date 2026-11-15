@@ -16,7 +16,7 @@ type Stats struct {
 	Reasoning     float64 `json:"reasoning"`
 }
 
-// DriftPoint is one day of one group, measured per inbound request.
+// DriftPoint is one day of one group, measured per request (see perRequest).
 type DriftPoint struct {
 	// T is the local day start in unix ms.
 	T            int64   `json:"t"`
@@ -50,10 +50,8 @@ var markerKinds = []struct{ kind, expr, skip string }{
 	{"response_model", modelExpr, "(" + modelExpr + ") = ''"},
 }
 
-// Drift returns daily medians and p90 per inbound request, grouped by the
-// reported model or the client version, plus change markers. An inbound
-// request is the rows sharing a trace ID (or a request ID when the trace is
-// empty), without failed rows and the rows CPA marks as not generating.
+// Drift returns daily medians and p90 per request (see perRequest), grouped
+// by the reported model or the client version, plus change markers.
 func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
 	groupExpr, ok := driftGroups[group]
 	if !ok {
@@ -158,21 +156,22 @@ func markers(db *sql.DB, f Filter) ([]Marker, error) {
 	return out, nil
 }
 
-// inbound is one inbound client request within one group.
+// inbound is one request (one upstream call) within one group.
 type inbound struct {
 	key    string
 	at     int64
 	tokens Tokens
 }
 
-// perRequest sums the successful generating rows per inbound request and
-// group. A request whose attempts land in two groups (a fallback to another
-// model) counts once in each. Failed attempts are left out so an outage does
-// not read as a drop in tokens per request.
+// perRequest sums the successful generating rows per request and group. A
+// request is one upstream call (see callExpr): one per HTTP request once
+// failed attempts are left out, and one per WebSocket turn. Split billing rows
+// of a call that land in two model groups count once in each. Failed attempts
+// are left out so an outage does not read as a drop in tokens per request.
 func perRequest(db *sql.DB, f Filter, keyExpr string) ([]inbound, error) {
 	where, args := f.where(true)
 	q := "SELECT CAST(" + keyExpr + " AS TEXT), MIN(requested_at), " + tokenSums +
-		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY " + traceExpr + ", 1"
+		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY " + callExpr + ", 1"
 	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("per request: %w", err)

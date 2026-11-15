@@ -15,7 +15,7 @@ import (
 type Totals struct {
 	Tokens
 	CostUSD float64 `json:"cost_usd"`
-	// Records counts rows. Requests counts inbound client requests (see Drift).
+	// Records counts rows. Requests counts successful upstream calls (see callExpr).
 	Records         int64       `json:"records"`
 	Requests        int64       `json:"requests"`
 	Sessions        int64       `json:"sessions"`
@@ -81,7 +81,7 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 	})
 
 	where, args := f.where(true)
-	err = db.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN generate = 1 THEN `+traceExpr+` END),
+	err = db.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END),
 		COUNT(DISTINCT NULLIF(session_id, '')), COALESCE(SUM(failed), 0)
 		FROM requests WHERE `+where, args...).Scan(&res.Totals.Requests, &res.Totals.Sessions, &res.Totals.Failed)
 	if err != nil {
@@ -171,7 +171,7 @@ type BreakdownRow struct {
 	CostPerMillion float64 `json:"cost_per_million_tokens"`
 	CacheHitRate   float64 `json:"cache_hit_rate"`
 	UnpricedTokens int64   `json:"unpriced_tokens"`
-	// Medians are per inbound request, input and output including reasoning.
+	// Medians are per request (see callExpr), input and output including reasoning.
 	MedianInput  float64 `json:"median_input"`
 	MedianOutput float64 `json:"median_output"`
 }

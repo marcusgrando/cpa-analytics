@@ -2,6 +2,7 @@ package query
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net/url"
 	"path/filepath"
@@ -68,7 +69,7 @@ func seedDB(t *testing.T) *store.Store {
 		{id: "r0", trace: "t0", provider: "codex", model: "gpt-5", response: "gpt-5", version: "0.129.0", at: day0.Add(10 * h), generate: true, uncached: 777},
 		{id: "r1", trace: "t1", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s1", version: "0.129.0", at: day1.Add(9 * h), generate: true, uncached: 1000, cacheRead: 3000, output: 200, reasoning: 100},
 		{id: "r2a", trace: "t2", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s1", version: "0.129.0", at: day1.Add(10 * h), generate: true, uncached: 500, cacheRead: 1000, output: 100},
-		{id: "r2b", trace: "t2", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s1", version: "0.129.0", at: day1.Add(10*h + time.Second), generate: true, uncached: 500},
+		{id: "r2b", trace: "t2", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s1", version: "0.129.0", at: day1.Add(10 * h), generate: true, uncached: 500},
 		{id: "r3", trace: "t3", provider: "codex", model: "gpt-5", response: "gpt-5", version: "0.129.0", at: day1.Add(11 * h), generate: false, uncached: 99999},
 		{id: "r4", trace: "t4", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s2", version: "0.130.0", at: day2.Add(9 * h), generate: true, uncached: 2000, cacheRead: 6000, output: 400, reasoning: 200},
 		{id: "r5", trace: "t5", provider: "codex", model: "gpt-5", response: "gpt-5", session: "s2", version: "0.130.0", at: day2.Add(10 * h), generate: true, uncached: 3000, cacheRead: 1000, output: 300},
@@ -262,7 +263,7 @@ func TestDriftMediansPerInboundRequest(t *testing.T) {
 		t.Fatalf("points = %+v", d.Points)
 	}
 	p1 := points["11-10 codex/0.129.0"]
-	// t1 and t2 (two rows summed); r3 has generate=false and is left out.
+	// t1 and t2 (two split-billing rows of one call, summed); r3 has generate=false and is left out.
 	if p1.Requests != 2 || p1.Median.UncachedInput != 1000 || p1.Median.CacheRead != 2000 || p1.P90.CacheRead != 2800 {
 		t.Errorf("day1 = %+v", p1)
 	}
@@ -436,5 +437,43 @@ func TestBreakdownByAPIKey(t *testing.T) {
 	}
 	if len(keys) != 2 || keys["abc123"] != 9 || keys["def456def456"] != 1 {
 		t.Errorf("api key rows = %+v", b.Rows)
+	}
+}
+
+// CPA gives every turn of a WebSocket connection the trace of the upgrade
+// request. Each turn is its own upstream call with its own start time, so it
+// counts as its own request.
+func TestDriftCountsEachWebSocketTurn(t *testing.T) {
+	s := seedDB(t)
+	var turns []store.Row
+	for i, input := range []int64{100, 300, 500} {
+		turns = append(turns, store.Row{RequestID: fmt.Sprintf("ws%d", i), TraceID: "ws-conn", RequestedAt: day3.Add(time.Duration(12+i) * time.Hour).UnixMilli(),
+			Provider: "codex", Model: "gpt-5", Generate: true, ClientName: "codex", ClientVersion: "0.131.0", UncachedInput: input})
+	}
+	if err := s.InsertBatch(turns); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pt := range d.Points {
+		if pt.Key == "codex/0.131.0" {
+			found = true
+			if pt.Requests != 3 || pt.Median.UncachedInput != 300 {
+				t.Errorf("websocket turns = %+v, want 3 requests with median 300", pt)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no point for codex/0.131.0: %+v", d.Points)
+	}
+	sum, err := Summary(s.DB(), rangeFilter(), testPrices(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Totals.Requests != 10 {
+		t.Errorf("summary requests = %d, want 7 seeded calls plus 3 turns", sum.Totals.Requests)
 	}
 }

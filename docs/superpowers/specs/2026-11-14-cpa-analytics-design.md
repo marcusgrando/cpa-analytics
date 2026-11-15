@@ -122,7 +122,7 @@ Views:
 
 1. Totals: API-estimate cost, requests, sessions, processed tokens, cache hit rate (cache read / total input), output including reasoning. Per-provider cost share.
 2. Daily cost and tokens, stacked by provider (toggle cost or tokens).
-3. Per-request drift, the main view. CPA emits one record per upstream attempt, and split billing can add extra records for one response (`internal/runtime/executor/helps/usage_helpers.go:564-572`). "Per request" therefore means per inbound client request: rows summed by `trace_id`, excluding rows with `generate = false`. Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output and reasoning, plus daily cache hit rate. Grouped by reported model or by client version. Vertical markers on the days a new `client_version` or a new `response_model` first appears.
+3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output and reasoning, plus daily cache hit rate. Grouped by reported model or by client version. Vertical markers on the days a new `client_version` or a new `response_model` first appears.
 4. Breakdown table by model, by client and version, or by day: requests, tokens by type, cost, share, median input and output per request.
 5. Model detail: cost per 1M tokens, cache hit rate, token-type mix, and the drift chart for that model.
 6. Cost quality and plugin health.
@@ -161,6 +161,17 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - No changes to CPA. The plugin works with stock CPA releases so CPA upgrades stay routine. An upstream PR adding `TokenBreakdown` and `UserAgent` to the plugin usage record was considered and rejected for that reason. Consequences: the plugin keeps its own port of the accounting rules and reads `User-Agent` through the request interceptor.
 - Target host: CPA `v8.0.71`, plugin ABI schema 10.
 
+## Unit of a request
+
+Decided 2026-11-15, replacing "rows summed by `trace_id`".
+
+- CPA emits one usage record per upstream attempt. Split billing adds extra records for the same response with fresh request IDs (`internal/runtime/executor/helps/usage_helpers.go:552-574`).
+- `TraceID` is the ID of the inbound HTTP request (`logging.GetRequestID`). `usage.WithTraceID` is never called in v8.0.71. A Responses WebSocket connection builds every turn from the upgrade request's context (`sdk/api/handlers/openai/openai_responses_websocket.go:697,943`), so all turns of one connection share one trace. Grouping by trace turned a 40-turn session into one request.
+- Every upstream call, including each WebSocket turn and each Codex duplex follow-up, gets its own `UsageReporter`, which stamps `RequestedAt` once (`usage_helpers.go:134-142`, `codex_websockets_duplex.go:974,1060`). Split billing records reuse their reporter, so they share that timestamp.
+- So a request is the generating, non-failed rows sharing `trace_id` and `requested_at`. That is one per HTTP request (failed retries are excluded) and one per WebSocket turn, with split billing kept together. No schema change, no interceptor timing.
+- Rejected: one row per request (splits split billing), segmenting traces by interceptor call times (depends on the order of two clocks inside CPA and needs a new column), and keeping trace grouping with a caveat (the main view misreads Codex WebSocket sessions).
+- Reopen if a CPA upgrade calls `usage.WithTraceID` per turn or passes a per-call ID to plugins.
+
 ## Calls made while writing this (open to correction)
 
 - Join on `TraceID`, not `RequestID`.
@@ -169,7 +180,7 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - Cost computed at query time with current prices.
 - Dashboard is a single static page with hand-written SVG charts.
 - Plugin name `cpa-analytics`.
-- "Per request" in the drift view means per inbound client request, summed by `trace_id`.
+- "Per request" in the drift view means per successful upstream call. See "Unit of a request".
 
 ## Left to the builder
 
