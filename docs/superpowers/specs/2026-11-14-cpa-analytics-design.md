@@ -93,6 +93,8 @@ Schema migrations are numbered SQL files applied at startup inside a transaction
 
 The plugin ports CPA's accounting rules from `sdk/cliproxy/usage/accounting.go` (about 200 lines). The rule set is chosen by `provider` and `executor_type` (`accounting.go:340-364`), both present in `UsageRecord`, and produces the same non-overlapping buckets and quality flag as CPA. Raw counters stay in the row, so a fix to the port can re-derive old rows with one SQL migration.
 
+That function is CPA's fallback for records whose executor attached no breakdown. CPA's Claude executor always attaches one (`internal/runtime/executor/helps/usage_helpers.go`, `parseClaudeUsageNode`): `OutputTokens` includes the thinking counted in `ReasoningTokens`, and `TotalTokens` is input plus cache plus `OutputTokens`. The fallback treats reasoning as separate from output for Anthropic, so a ported-only rule marks every Claude call with thinking as inconsistent. The port therefore recognizes that layout first and splits it the way the executor does. Plugin 0.1.3 and earlier lacked this rule, and migration `002_claude_thinking.sql` re-derives the rows they stored.
+
 The port names the CPA release it was copied from. Table tests use fixtures taken from CPA's own `accounting_test.go` cases, so a CPA upgrade that changes the rules shows up as a diff when the fixtures are refreshed.
 
 ### Writer and failure behavior

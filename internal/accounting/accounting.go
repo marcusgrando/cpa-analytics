@@ -74,6 +74,9 @@ func breakdownFor(d pluginapi.UsageDetail, sem semantics) Breakdown {
 			return unclassified(total)
 		}
 	}
+	if sem == semanticsIndependent && claudeThinkingInsideOutput(d) {
+		return independent(d.InputTokens, d.CacheReadTokens, d.CacheCreationTokens, d.OutputTokens-d.ReasoningTokens, d.ReasoningTokens, d.TotalTokens)
+	}
 	switch sem {
 	case semanticsSubset:
 		return subset(d.InputTokens, d.CacheReadTokens, d.CacheCreationTokens, d.OutputTokens, d.ReasoningTokens, d.TotalTokens)
@@ -147,6 +150,20 @@ func separateReasoning(inputTotal, cacheRead, cacheWrite, nonReasoning, reasonin
 		OutputNonReasoning: nonReasoning, Reasoning: reasoning,
 		Total: resolved, Quality: QualityComplete,
 	}
+}
+
+// claudeThinkingInsideOutput reports the layout of CPA's Claude executor
+// (helps.parseClaudeUsageNode): OutputTokens includes the thinking counted in
+// ReasoningTokens, and TotalTokens is input + cache + OutputTokens. CPA attaches
+// its own breakdown to those records, so its fallback function, ported above,
+// never sees them. Without this rule every Claude call with thinking would be
+// inconsistent.
+func claudeThinkingInsideOutput(d pluginapi.UsageDetail) bool {
+	if d.ReasoningTokens <= 0 || d.ReasoningTokens > d.OutputTokens || d.TotalTokens <= 0 {
+		return false
+	}
+	total, ok := sum(d.InputTokens, d.CacheReadTokens, d.CacheCreationTokens, d.OutputTokens)
+	return ok && total == d.TotalTokens
 }
 
 func unclassified(total int64) Breakdown {

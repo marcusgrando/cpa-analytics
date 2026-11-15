@@ -9,7 +9,10 @@ import (
 )
 
 // TestMatchesCPA compares the port with CPA's own implementation, so a CPA
-// upgrade that changes the rules fails here.
+// upgrade that changes the rules fails here. Claude records in the executor's
+// layout (thinking inside output, total of input, cache and output) never reach
+// CPA's fallback function: the executor attaches NewIndependentTokenBreakdown
+// with output minus thinking, so that is their reference.
 func TestMatchesCPA(t *testing.T) {
 	providers := [][2]string{
 		{"codex", "CodexExecutor"}, {"claude", "ClaudeExecutor"}, {"gemini", "GeminiExecutor"},
@@ -33,15 +36,24 @@ func TestMatchesCPA(t *testing.T) {
 			InputTokens: pick(), OutputTokens: pick(), ReasoningTokens: pick(),
 			CachedTokens: pick(), CacheReadTokens: pick(), CacheCreationTokens: pick(),
 		}
-		if rng.Intn(3) == 0 {
+		switch rng.Intn(4) {
+		case 0:
 			d.TotalTokens = d.InputTokens + d.OutputTokens
+		case 1:
+			d.TotalTokens = d.InputTokens + d.CacheReadTokens + d.CacheCreationTokens + d.OutputTokens
 		}
 		got := Normalize(pv[0], pv[1], d)
-		ref := cpausage.EnsureTokenBreakdownForProvider(cpausage.Detail{
-			InputTokens: d.InputTokens, OutputTokens: d.OutputTokens, ReasoningTokens: d.ReasoningTokens,
-			CachedTokens: d.CachedTokens, CacheReadTokens: d.CacheReadTokens, CacheCreationTokens: d.CacheCreationTokens,
-			TotalTokens: d.TotalTokens,
-		}, pv[0], pv[1]).TokenBreakdown
+		var ref cpausage.TokenBreakdown
+		if pv[0] == "claude" && claudeThinkingInsideOutput(d) {
+			ref = cpausage.NewIndependentTokenBreakdown(d.InputTokens, d.CacheReadTokens, d.CacheCreationTokens,
+				d.OutputTokens-d.ReasoningTokens, d.ReasoningTokens, d.TotalTokens)
+		} else {
+			ref = cpausage.EnsureTokenBreakdownForProvider(cpausage.Detail{
+				InputTokens: d.InputTokens, OutputTokens: d.OutputTokens, ReasoningTokens: d.ReasoningTokens,
+				CachedTokens: d.CachedTokens, CacheReadTokens: d.CacheReadTokens, CacheCreationTokens: d.CacheCreationTokens,
+				TotalTokens: d.TotalTokens,
+			}, pv[0], pv[1]).TokenBreakdown
+		}
 		want := Breakdown{
 			Uncached: ref.Input.UncachedTokens, CacheRead: ref.Input.CacheReadTokens, CacheWrite: ref.Input.CacheWriteTokens,
 			OutputNonReasoning: ref.Output.NonReasoningTokens, Reasoning: ref.Output.ReasoningTokens,

@@ -5,7 +5,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 ## Decisions
 
 - **No CPA changes.** The plugin must work with stock CPA so CPA upgrades stay routine. An upstream PR that added `TokenBreakdown` and `UserAgent` to the plugin usage record was rejected. Do not reopen it, and do not propose forks or patches to CPA. Everything the plugin needs comes from the existing plugin API: `usage.handle`, the request interceptors, the management routes and resources, and `host.http.do`.
-- **Token buckets are a port, not an import.** CPA computes the token breakdown internally but does not pass it to plugins, so `internal/accounting` ports `sdk/cliproxy/usage/accounting.go` from the pinned CPA tag.
+- **Token buckets are a port, not an import.** CPA computes the token breakdown internally but does not pass it to plugins, so `internal/accounting` ports `sdk/cliproxy/usage/accounting.go` from the pinned CPA tag. That file is only CPA's fallback. CPA's Claude executor attaches its own breakdown with thinking inside output, so the port matches that layout before the fallback rules (`claudeThinkingInsideOutput`). Without it every Claude call with thinking is stored as unclassified.
 - **The client version comes from a TraceID join.** `request.intercept_before` sees the inbound `User-Agent`, and `usage.handle` sees the tokens. Both carry the same TraceID, and `internal/client` keeps a bounded TTL map between them. A miss is stored as an empty client and shown as `unknown`.
 - **Cost is computed at query time** from raw token columns. Never store a cost column.
 - **A request is one upstream call**: rows sharing `trace_id` and `requested_at`. A WebSocket connection shares one trace across turns, so never group per-request statistics by trace alone. The reasoning is in the spec under "Unit of a request".
@@ -21,7 +21,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 
 ## Upgrading CPA
 
-1. Diff `sdk/cliproxy/usage/accounting.go` between the old tag and the new one, and port any rule change into `internal/accounting/accounting.go`. Update the tag named in its package comment.
+1. Diff `sdk/cliproxy/usage/accounting.go` and `parseClaudeUsageNode` in `internal/runtime/executor/helps/usage_helpers.go` between the old tag and the new one, and port any rule change into `internal/accounting/accounting.go`. Update the tag named in its package comment.
 2. Bump `github.com/router-for-me/CLIProxyAPI/v8` in `go.mod` and run `go mod tidy`.
 3. Run `go test ./internal/accounting/`. `TestMatchesCPA` compares the port with CPA's own function on random inputs and fails on any divergence.
 4. Update `CPA_TAG` in `test/e2e/run.sh` and run `make e2e`. It proves the TraceID join and the inbound headers against the real host.

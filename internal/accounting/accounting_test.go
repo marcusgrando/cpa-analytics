@@ -25,6 +25,16 @@ func TestNormalize(t *testing.T) {
 			want:   Breakdown{Uncached: 100, CacheRead: 900, CacheWrite: 50, OutputNonReasoning: 300, Total: 1350, Quality: QualityComplete},
 		},
 		{
+			name: "claude thinking inside output", provider: "claude", executor: "ClaudeExecutor",
+			detail: pluginapi.UsageDetail{InputTokens: 6, CacheReadTokens: 90000, CachedTokens: 90000, CacheCreationTokens: 1200, OutputTokens: 500, ReasoningTokens: 300, TotalTokens: 91706},
+			want:   Breakdown{Uncached: 6, CacheRead: 90000, CacheWrite: 1200, OutputNonReasoning: 200, Reasoning: 300, Total: 91706, Quality: QualityComplete},
+		},
+		{
+			name: "claude total matching neither layout is inconsistent", provider: "claude", executor: "ClaudeExecutor",
+			detail: pluginapi.UsageDetail{InputTokens: 6, CacheReadTokens: 900, OutputTokens: 500, ReasoningTokens: 300, TotalTokens: 1000},
+			want:   Breakdown{Unclassified: 1000, Total: 1000, Quality: QualityInconsistent},
+		},
+		{
 			name: "gemini separate reasoning", provider: "gemini", executor: "GeminiExecutor",
 			detail: pluginapi.UsageDetail{InputTokens: 500, CacheReadTokens: 100, OutputTokens: 40, ReasoningTokens: 60},
 			want:   Breakdown{Uncached: 400, CacheRead: 100, OutputNonReasoning: 40, Reasoning: 60, Total: 600, Quality: QualityComplete},

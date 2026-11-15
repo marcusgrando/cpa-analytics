@@ -100,6 +100,27 @@ func TestUsageJoinsUserAgentByTrace(t *testing.T) {
 	}
 }
 
+// CPA's Claude executor reports output_tokens with thinking included, the
+// thinking count in ReasoningTokens, and a total of input, cache and output
+// (helps.parseClaudeUsageNode at v8.0.71). The values below are what CPA hands
+// the plugin for a Claude Code call with extended thinking.
+func TestClaudeThinkingCallIsClassified(t *testing.T) {
+	p, path := startPlugin(t)
+	rec := pluginapi.UsageRecord{
+		RequestID: "c1", TraceID: "t-claude", Provider: "claude", ExecutorType: "ClaudeExecutor",
+		Model: "claude-opus-5-5", Generate: true, RequestedAt: time.Unix(1_800_000_000, 0),
+		Detail: pluginapi.UsageDetail{InputTokens: 6, CacheReadTokens: 90000, CachedTokens: 90000, CacheCreationTokens: 1200,
+			OutputTokens: 500, ReasoningTokens: 300, TotalTokens: 91706},
+	}
+	if env := call(t, p, pluginabi.MethodUsageHandle, rec); !env.OK {
+		t.Fatalf("usage: %+v", env.Error)
+	}
+	r := rowsAfterClose(t, p, path)["c1"]
+	if r.AccountingQuality != "complete" || r.UncachedInput != 6 || r.CacheRead != 90000 || r.OutputReasoning != 300 {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
 func TestUsageWithUnknownTraceIsStoredWithoutClient(t *testing.T) {
 	p, path := startPlugin(t)
 	call(t, p, pluginabi.MethodUsageHandle, codexRecord("r1", "never-seen"))
