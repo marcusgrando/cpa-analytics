@@ -29,6 +29,7 @@ const (
 	queueCapacity = 10_000
 	flushEvery    = time.Second
 	batchSize     = 500
+	pruneEvery    = 24 * time.Hour
 )
 
 // Host calls back into CLIProxyAPI (host.http.do, host.log).
@@ -51,6 +52,7 @@ type Plugin struct {
 	writer     *store.Writer
 	storageErr string
 	refresher  *pricing.Refresher
+	pruneStop  chan struct{}
 
 	// droppedNoStore counts records received while the database could not be opened.
 	droppedNoStore atomic.Uint64
@@ -58,11 +60,13 @@ type Plugin struct {
 
 // Health is what the plugin reports about itself.
 type Health struct {
-	DBPath       string            `json:"db_path"`
-	StorageError string            `json:"storage_error,omitempty"`
-	Writer       store.WriterStats `json:"writer"`
-	TraceHits    uint64            `json:"trace_hits"`
-	TraceMisses  uint64            `json:"trace_misses"`
+	DBPath        string            `json:"db_path"`
+	StorageError  string            `json:"storage_error,omitempty"`
+	RetentionDays int               `json:"retention_days"`
+	Writer        store.WriterStats `json:"writer"`
+	TraceHits     uint64            `json:"trace_hits"`
+	TraceMisses   uint64            `json:"trace_misses"`
+	Pricing       pricing.Status    `json:"pricing"`
 }
 
 // New builds a plugin. host may be nil in tests that do not need callbacks.
@@ -75,6 +79,8 @@ func New(host Host) *Plugin {
 		pluginabi.MethodUsageHandle:            p.handleUsage,
 		pluginabi.MethodRequestInterceptBefore: p.interceptBefore,
 		pluginabi.MethodRequestInterceptAfter:  passThrough,
+		pluginabi.MethodManagementRegister:     p.managementRegister,
+		pluginabi.MethodManagementHandle:       p.managementHandle,
 	}
 	return p
 }
@@ -104,9 +110,12 @@ func (p *Plugin) Handle(method string, req []byte) (out []byte) {
 // Close flushes queued rows and closes the database. Safe to call more than once.
 func (p *Plugin) Close() {
 	p.mu.Lock()
-	w, s, r := p.writer, p.store, p.refresher
-	p.writer, p.store, p.refresher = nil, nil, nil
+	w, s, r, prune := p.writer, p.store, p.refresher, p.pruneStop
+	p.writer, p.store, p.refresher, p.pruneStop = nil, nil, nil, nil
 	p.mu.Unlock()
+	if prune != nil {
+		close(prune)
+	}
 	r.Stop()
 	w.Close()
 	if s != nil {
@@ -114,11 +123,12 @@ func (p *Plugin) Close() {
 	}
 }
 
-// Health returns storage, writer and join statistics.
+// Health returns storage, writer, join and pricing statistics.
 func (p *Plugin) Health() Health {
 	p.mu.Lock()
-	h := Health{DBPath: p.cfg.DBPath, StorageError: p.storageErr, Writer: p.writer.Stats()}
+	h := Health{DBPath: p.cfg.DBPath, StorageError: p.storageErr, RetentionDays: p.cfg.RetentionDays, Writer: p.writer.Stats()}
 	p.mu.Unlock()
+	h.Pricing = p.pricingStatus()
 	h.Writer.Dropped += p.droppedNoStore.Load()
 	h.TraceHits, h.TraceMisses = p.traces.Stats()
 	return h
@@ -215,6 +225,7 @@ func (p *Plugin) register(raw []byte) ([]byte, error) {
 	if restartPricing {
 		p.startPricing(cfg.PricingURL, kv)
 	}
+	p.startPrune()
 	return json.Marshal(registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata:      metadata(),

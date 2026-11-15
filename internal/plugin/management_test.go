@@ -1,0 +1,239 @@
+package plugin
+
+import (
+	"encoding/json"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+)
+
+const apiBase = "/v0/management/cpa-analytics/"
+
+func manage(t *testing.T, p *Plugin, method, route string, q url.Values) pluginapi.ManagementResponse {
+	t.Helper()
+	env := call(t, p, pluginabi.MethodManagementHandle, map[string]any{
+		"Method": method, "Path": apiBase + route, "Query": q, "host_callback_id": "cb-1",
+	})
+	if !env.OK {
+		t.Fatalf("management.handle %s: %+v", route, env.Error)
+	}
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func errorCode(t *testing.T, resp pluginapi.ManagementResponse) (string, string) {
+	t.Helper()
+	var body struct {
+		Error struct{ Code, Message string } `json:"error"`
+	}
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatalf("error body %q: %v", resp.Body, err)
+	}
+	return body.Error.Code, body.Error.Message
+}
+
+func insertRows(t *testing.T, p *Plugin, rows ...store.Row) {
+	t.Helper()
+	p.mu.Lock()
+	s := p.store
+	p.mu.Unlock()
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func usageRow(id string, at time.Time) store.Row {
+	return store.Row{RequestID: id, TraceID: id, RequestedAt: at.UnixMilli(), Provider: "codex", Model: "gpt-5",
+		Generate: true, ClientName: "codex", ClientVersion: "0.130.0", UncachedInput: 100, OutputNonReasoning: 10}
+}
+
+func TestManagementRegisterListsRoutes(t *testing.T) {
+	p, _ := startPlugin(t)
+	env := call(t, p, pluginabi.MethodManagementRegister, map[string]any{"BasePath": "/v0/management"})
+	if !env.OK {
+		t.Fatalf("register: %+v", env.Error)
+	}
+	var reg struct {
+		Routes []struct{ Method, Path string } `json:"routes"`
+	}
+	if err := json.Unmarshal(env.Result, &reg); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range reg.Routes {
+		if r.Method != "GET" {
+			t.Errorf("route %s method %s", r.Path, r.Method)
+		}
+		got[r.Path] = true
+	}
+	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing"} {
+		if !got[apiBase+name] {
+			t.Errorf("missing route %s in %+v", name, reg.Routes)
+		}
+	}
+}
+
+func TestManagementSummaryReturnsJSON(t *testing.T) {
+	p, _ := startPlugin(t)
+	now := time.Now()
+	insertRows(t, p, usageRow("a", now.Add(-time.Hour)), usageRow("b", now.Add(-2*time.Hour)))
+	resp := manage(t, p, "GET", "summary", nil)
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Headers.Get("Content-Type"), "application/json") {
+		t.Fatalf("status %d headers %v body %s", resp.StatusCode, resp.Headers, resp.Body)
+	}
+	var sum struct {
+		Totals struct {
+			Records       int64 `json:"records"`
+			UncachedInput int64 `json:"uncached_input"`
+		} `json:"totals"`
+	}
+	if err := json.Unmarshal(resp.Body, &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Totals.Records != 2 || sum.Totals.UncachedInput != 200 {
+		t.Errorf("summary = %s", resp.Body)
+	}
+}
+
+func TestManagementRoutesAnswer(t *testing.T) {
+	p, _ := startPlugin(t)
+	insertRows(t, p, usageRow("a", time.Now().Add(-time.Hour)))
+	for _, route := range []string{"timeseries", "drift", "breakdown", "health", "pricing"} {
+		resp := manage(t, p, "GET", route, nil)
+		if resp.StatusCode != 200 || !json.Valid(resp.Body) {
+			t.Errorf("%s: status %d body %s", route, resp.StatusCode, resp.Body)
+		}
+	}
+}
+
+func TestManagementRejectsBadParameters(t *testing.T) {
+	p, _ := startPlugin(t)
+	cases := []struct {
+		route string
+		q     url.Values
+		param string
+	}{
+		{"summary", url.Values{"from": {"abc"}}, "from"},
+		{"summary", url.Values{"from": {"2000"}, "to": {"1000"}}, "from"},
+		{"timeseries", url.Values{"group": {"nope"}}, "group"},
+		{"timeseries", url.Values{"bucket": {"week"}}, "bucket"},
+		{"drift", url.Values{"group": {"nope"}}, "group"},
+		{"breakdown", url.Values{"by": {"nope"}}, "by"},
+	}
+	for _, c := range cases {
+		resp := manage(t, p, "GET", c.route, c.q)
+		code, msg := errorCode(t, resp)
+		if resp.StatusCode != 400 || code != "invalid_parameter" || !strings.Contains(msg, strconv.Quote(c.param)) {
+			t.Errorf("%s %v: %d %s %q", c.route, c.q, resp.StatusCode, code, msg)
+		}
+	}
+}
+
+func TestManagementReportsStorageFaults(t *testing.T) {
+	p, _ := startPlugin(t)
+	p.mu.Lock()
+	p.store.Close()
+	p.mu.Unlock()
+	resp := manage(t, p, "GET", "summary", nil)
+	if code, _ := errorCode(t, resp); resp.StatusCode != 503 || code != "storage_unavailable" {
+		t.Errorf("closed db: %d %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestManagementWithoutStorage(t *testing.T) {
+	p := New(nil)
+	defer p.Close()
+	// A regular file where the database directory should be: MkdirAll fails, even as root.
+	parent := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "db_path: " + parent + "/a.db\n"
+	if env := decodeEnvelope(t, p.Handle(pluginabi.MethodPluginRegister, lifecycle(t, pluginabi.SchemaVersion, cfg))); !env.OK {
+		t.Fatalf("register: %+v", env.Error)
+	}
+	resp := manage(t, p, "GET", "drift", nil)
+	if code, msg := errorCode(t, resp); resp.StatusCode != 503 || code != "storage_unavailable" || msg == "" {
+		t.Errorf("no storage: %d %s", resp.StatusCode, resp.Body)
+	}
+	// Health still answers so the dashboard can show why.
+	resp = manage(t, p, "GET", "health", nil)
+	var h struct {
+		StorageError string `json:"storage_error"`
+	}
+	if err := json.Unmarshal(resp.Body, &h); err != nil || resp.StatusCode != 200 || h.StorageError == "" {
+		t.Errorf("health: %d %s", resp.StatusCode, resp.Body)
+	}
+}
+
+func TestManagementUnknownRouteAndMethod(t *testing.T) {
+	p, _ := startPlugin(t)
+	if resp := manage(t, p, "GET", "nope", nil); resp.StatusCode != 404 {
+		t.Errorf("unknown route: %d", resp.StatusCode)
+	}
+	if resp := manage(t, p, "POST", "summary", nil); resp.StatusCode != 405 {
+		t.Errorf("POST: %d", resp.StatusCode)
+	}
+}
+
+func TestHealthIncludesPricingAndRetention(t *testing.T) {
+	p, _ := startPluginWith(t, "retention_days: 30\n")
+	resp := manage(t, p, "GET", "health", nil)
+	var h struct {
+		RetentionDays int `json:"retention_days"`
+		Pricing       struct {
+			URL       string `json:"url"`
+			LastError string `json:"last_error"`
+		} `json:"pricing"`
+	}
+	if err := json.Unmarshal(resp.Body, &h); err != nil {
+		t.Fatal(err)
+	}
+	if h.RetentionDays != 30 || h.Pricing.URL == "" {
+		t.Errorf("health = %s", resp.Body)
+	}
+}
+
+func TestRetentionPrunesOldRows(t *testing.T) {
+	p, _ := startPluginWith(t, "retention_days: 1\n")
+	now := time.Now()
+	insertRows(t, p, usageRow("old", now.Add(-49*time.Hour)), usageRow("new", now.Add(-time.Hour)))
+	p.pruneOnce()
+	var n int
+	p.mu.Lock()
+	err := p.store.DB().QueryRow(`SELECT COUNT(*) FROM requests WHERE request_id = 'old'`).Scan(&n)
+	p.mu.Unlock()
+	if err != nil || n != 0 {
+		t.Errorf("old rows left = %d, err %v", n, err)
+	}
+	p.mu.Lock()
+	err = p.store.DB().QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&n)
+	p.mu.Unlock()
+	if err != nil || n != 1 {
+		t.Errorf("rows = %d, want the recent one kept", n)
+	}
+}
+
+func TestRetentionZeroKeepsEverything(t *testing.T) {
+	p, _ := startPlugin(t)
+	insertRows(t, p, usageRow("ancient", time.Now().AddDate(-3, 0, 0)))
+	p.pruneOnce()
+	var n int
+	p.mu.Lock()
+	err := p.store.DB().QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&n)
+	p.mu.Unlock()
+	if err != nil || n != 1 {
+		t.Errorf("rows = %d, err %v", n, err)
+	}
+}

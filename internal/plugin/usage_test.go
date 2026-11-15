@@ -17,9 +17,15 @@ import (
 // startPlugin registers a plugin with a temp database and returns it with the db path.
 func startPlugin(t *testing.T) (*Plugin, string) {
 	t.Helper()
+	return startPluginWith(t, "")
+}
+
+// startPluginWith registers a plugin with a temp database plus extra config YAML.
+func startPluginWith(t *testing.T, extraYAML string) (*Plugin, string) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "a.db")
 	p := New(nil)
-	env := decodeEnvelope(t, p.Handle(pluginabi.MethodPluginRegister, lifecycle(t, pluginabi.SchemaVersion, "db_path: "+path+"\n")))
+	env := decodeEnvelope(t, p.Handle(pluginabi.MethodPluginRegister, lifecycle(t, pluginabi.SchemaVersion, "db_path: "+path+"\n"+extraYAML)))
 	if !env.OK {
 		t.Fatalf("register: %+v", env.Error)
 	}

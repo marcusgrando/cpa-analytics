@@ -61,3 +61,14 @@ func (p *Plugin) startPricing(url string, kv pricing.KV) {
 	p.mu.Unlock()
 	r.Start()
 }
+
+// pricingStatus reports the refresher state, or just the URL before it starts.
+func (p *Plugin) pricingStatus() pricing.Status {
+	p.mu.Lock()
+	r, url := p.refresher, p.cfg.PricingURL
+	p.mu.Unlock()
+	if r == nil {
+		return pricing.Status{URL: url}
+	}
+	return r.Status()
+}

@@ -1,0 +1,46 @@
+package plugin
+
+import "time"
+
+// startPrune runs the retention job now and then every pruneEvery, until Close.
+func (p *Plugin) startPrune() {
+	p.mu.Lock()
+	if p.pruneStop != nil {
+		p.mu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	p.pruneStop = stop
+	p.mu.Unlock()
+	go func() {
+		p.pruneOnce()
+		ticker := time.NewTicker(pruneEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				p.pruneOnce()
+			}
+		}
+	}()
+}
+
+// pruneOnce deletes rows older than retention_days. Zero keeps everything.
+func (p *Plugin) pruneOnce() {
+	p.mu.Lock()
+	s, days := p.store, p.cfg.RetentionDays
+	p.mu.Unlock()
+	if s == nil || days <= 0 {
+		return
+	}
+	n, err := s.Prune(time.Now().AddDate(0, 0, -days))
+	if err != nil {
+		p.logf("warn", "cpa-analytics: retention prune failed: %v", err)
+		return
+	}
+	if n > 0 {
+		p.logf("info", "cpa-analytics: pruned %d rows older than %d days", n, days)
+	}
+}
