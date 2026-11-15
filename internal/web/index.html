@@ -55,7 +55,8 @@ button { cursor: pointer; }
 button:hover, select:hover { background: var(--wash); }
 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 :focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 12px; }
+.updated { color: var(--muted); font-size: 12px; align-self: center; }
 .filters label, .controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--ink-2); gap: 2px; }
 .filters input { width: 9em; }
 .grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
@@ -115,7 +116,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
   <header class="top">
     <h1>CPA analytics</h1>
     <div id="health" class="health" role="status" aria-live="polite"></div>
-    <button id="change-key" type="button" hidden>Change key</button>
   </header>
 
   <form id="key-form" class="key-form" hidden>
@@ -142,6 +142,14 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <label>Model <select id="f-model"><option value="">All models</option></select></label>
       <label>Client <select id="f-client"><option value="">All clients</option></select></label>
       <label>API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
+      <label>Auto refresh
+        <select id="auto-refresh">
+          <option value="60" selected>Every 60 s</option>
+          <option value="0">Off</option>
+        </select>
+      </label>
+      <button id="change-key" type="button">Change key</button>
+      <span id="updated" class="updated" aria-live="off"></span>
     </div>
 
     <div class="grid">
@@ -296,7 +304,6 @@ function forgetKey() {
 
 function showKeyForm(message) {
   document.getElementById('app').hidden = true;
-  document.getElementById('change-key').hidden = true;
   document.getElementById('key-form').hidden = false;
   document.getElementById('key-error').textContent = message || '';
   document.getElementById('key-input').focus();
@@ -778,9 +785,9 @@ async function loadOptions() {
 }
 
 let loadSeq = 0;
-async function guarded(work) {
+async function guarded(work, quiet) {
   const seq = ++loadSeq;
-  document.body.classList.add('loading');
+  if (!quiet) document.body.classList.add('loading');
   document.getElementById('load-error').textContent = '';
   try {
     await work(() => seq === loadSeq);
@@ -792,7 +799,8 @@ async function guarded(work) {
   }
 }
 
-function refresh() {
+function refresh(quiet) {
+  clearTimeout(autoRefresh.timer);
   return guarded(async (current) => {
     const p = filterParams();
     // Health renders even when the data routes fail, since that is when it explains why.
@@ -810,10 +818,39 @@ function refresh() {
     data = { summary, daily, drift, breakdown, pricing };
     document.getElementById('key-form').hidden = true;
     document.getElementById('app').hidden = false;
-    document.getElementById('change-key').hidden = false;
     renderAll();
+    document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     await loadOptions();
-  });
+  }, quiet).finally(scheduleAutoRefresh);
+}
+
+/* ---------- auto refresh ---------- */
+
+const AUTO_REFRESH_STORE = 'cpa-analytics.auto-refresh';
+const autoRefresh = { timer: 0, due: false };
+
+function autoRefreshSeconds() {
+  return Number(document.getElementById('auto-refresh').value);
+}
+
+// The next refresh is scheduled after each load, so a slow load never stacks
+// requests. A hidden tab skips the tick and catches up when it is shown again.
+function scheduleAutoRefresh() {
+  clearTimeout(autoRefresh.timer);
+  autoRefresh.due = false;
+  const seconds = autoRefreshSeconds();
+  if (seconds <= 0 || document.getElementById('app').hidden) return;
+  autoRefresh.timer = setTimeout(() => {
+    if (document.hidden) autoRefresh.due = true;
+    else refresh(true);
+  }, seconds * 1000);
+}
+
+function restoreAutoRefresh() {
+  const select = document.getElementById('auto-refresh');
+  let saved = null;
+  try { saved = sessionStorage.getItem(AUTO_REFRESH_STORE); } catch (_) { /* storage blocked: keep the default */ }
+  if ([...select.options].some((o) => o.value === saved)) select.value = saved;
 }
 
 function reload(route, params, apply) {
@@ -843,7 +880,14 @@ document.getElementById('key-form').addEventListener('submit', (e) => {
   document.getElementById('key-input').value = '';
   refresh();
 });
-document.getElementById('change-key').addEventListener('click', () => { forgetKey(); showKeyForm(''); });
+document.getElementById('change-key').addEventListener('click', () => { clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
+document.getElementById('auto-refresh').addEventListener('change', (e) => {
+  try { sessionStorage.setItem(AUTO_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }
+  scheduleAutoRefresh();
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && autoRefresh.due) refresh(true);
+});
 document.getElementById('f-period').addEventListener('change', (e) => { state.period = Number(e.target.value); refresh(); });
 for (const name of ['provider', 'model', 'client']) {
   document.getElementById('f-' + name).addEventListener('change', (e) => { state[name] = e.target.value; refresh(); });
@@ -877,6 +921,7 @@ new ResizeObserver(() => {
   resizeTimer = setTimeout(() => { if (data.summary) { renderDrift(); renderDaily(); } }, 100);
 }).observe(document.querySelector('.wrap'));
 
+restoreAutoRefresh();
 managementKey = storedKey() || managementCenterKey();
 if (managementKey) refresh(); else showKeyForm('');
 </script>

@@ -78,6 +78,8 @@ http://<cpa-host>:<port>/v0/resource/plugins/cpa-analytics/dashboard
 
 The page itself holds no data. It reads every number from the management routes below with your management key. Inside the management center it reuses the key the center stored, when you enabled "remember password". Otherwise it asks for the key and keeps it in `sessionStorage` for that tab only.
 
+The page reloads its data every 60 seconds while the tab is visible. **Auto refresh** in the filter row turns it off for that tab.
+
 The drift chart is the main view. It plots median or p90 input and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider.
 
 A request is one successful upstream call: one per HTTP request, and one per turn on a Responses WebSocket connection. Failed attempts count in totals and cost but not in the per-request medians.

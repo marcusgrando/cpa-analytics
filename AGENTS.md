@@ -15,6 +15,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 - The resource route (`/v0/resource/plugins/cpa-analytics/dashboard`) is unauthenticated in CPA. It serves only the static embedded page. Never put data, config or secrets in it.
 - The dashboard never writes the management key to `localStorage`. It reads the key the management center saved, only when the center runs on the same origin, and otherwise keeps a typed key in `sessionStorage`.
 - The page loads nothing from other origins. `internal/web/web_test.go` enforces this.
+- The management center floats its own toolbar (refresh, language, theme, logout) over the top-right corner of the page. Keep buttons and selects out of the header and put page controls in the filter row. `TestIndexKeepsHeaderFreeOfControls` enforces this.
 - Reject invalid query parameters with `invalid_parameter` naming the parameter. Never clamp or guess.
 - Never read or store request or response bodies.
 

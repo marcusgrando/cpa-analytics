@@ -43,3 +43,35 @@ func TestIndexOffersAPIKeyBreakdown(t *testing.T) {
 		t.Error("page has no API key breakdown")
 	}
 }
+
+// The management center floats its own toolbar (refresh, language, theme,
+// logout) over the top-right corner of the page, so the header holds no
+// controls.
+func TestIndexKeepsHeaderFreeOfControls(t *testing.T) {
+	page := string(Index())
+	start := strings.Index(page, `<header class="top">`)
+	end := strings.Index(page, `</header>`)
+	if start < 0 || end < start {
+		t.Fatal("page has no top header")
+	}
+	if header := page[start:end]; strings.Contains(header, "<button") || strings.Contains(header, "<select") {
+		t.Errorf("header holds a control, it would sit under the management center toolbar:\n%s", header)
+	}
+	if !strings.Contains(page, `id="change-key"`) {
+		t.Error("page lost the change key button")
+	}
+}
+
+func TestIndexAutoRefreshesEverySixtySecondsByDefault(t *testing.T) {
+	page := string(Index())
+	m := regexp.MustCompile(`(?s)<select id="auto-refresh">(.*?)</select>`).FindStringSubmatch(page)
+	if m == nil {
+		t.Fatal("page has no auto-refresh select")
+	}
+	if !strings.Contains(m[1], `<option value="60" selected>`) {
+		t.Errorf("60 seconds is not the default: %s", m[1])
+	}
+	if !strings.Contains(m[1], `<option value="0">Off</option>`) {
+		t.Errorf("auto-refresh cannot be turned off: %s", m[1])
+	}
+}
