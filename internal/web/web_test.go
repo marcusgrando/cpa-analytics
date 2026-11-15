@@ -451,3 +451,20 @@ func TestIndexLabelsAndHighlightsDriftLines(t *testing.T) {
 		}
 	}
 }
+
+// A sparkline tooltip names the metric it reads, opens beside the hovered
+// point and the point is marked on the line.
+func TestIndexTiesSparklineTooltipToItsTile(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		"[{ value: v === null ? 'no data' : trend.fmt(v), label }]",
+		"showTooltip(e, trend.fmtX(trend.xs[i]), rows, { left: x, right: x, top: box.top, height: box.height })",
+		"el('span', { class: 'spark-cursor' })",
+		"drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost')",
+		"recordedValues(sums.map(value), xs, size, data.summary.data_since)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}

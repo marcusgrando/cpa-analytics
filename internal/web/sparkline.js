@@ -15,9 +15,16 @@ function sumBuckets(points, xs) {
   return xs.map((t) => sums.get(t));
 }
 
-// sparkline returns the path from zero to the largest value and the last
-// measured point. A null value is a bucket with nothing to measure and breaks
-// the line. It returns null when there is nothing to draw.
+// recordedValues drops the values of buckets that ended before recording
+// began, so the line does not show unrecorded days as idle ones.
+function recordedValues(values, xs, size, since) {
+  return values.map((v, i) => (xs[i] + size <= since ? null : v));
+}
+
+// sparkline returns the path from zero to the largest value, the last
+// measured point and each bucket's point. A null value is a bucket with
+// nothing to measure and breaks the line. It returns null when there is
+// nothing to draw.
 function sparkline(values, height, pad) {
   const measured = values.filter((v) => v !== null);
   if (values.length < 2 || !measured.length) return null;
@@ -26,14 +33,15 @@ function sparkline(values, height, pad) {
   let d = '';
   let end = null;
   let drawing = false;
-  values.forEach((v, i) => {
-    if (v === null) { drawing = false; return; }
+  const points = values.map((v, i) => {
+    if (v === null) { drawing = false; return null; }
     const point = { x: round((i / (values.length - 1)) * 100), y: round(height - pad - (max > 0 ? v / max : 0) * (height - 2 * pad)) };
     d += (drawing ? 'L' : 'M') + point.x + ' ' + point.y;
     drawing = true;
     end = point;
+    return point;
   });
-  return { d, end };
+  return { d, end, points };
 }
 
-if (typeof module !== 'undefined') { module.exports = { sparkline, sumBuckets }; }
+if (typeof module !== 'undefined') { module.exports = { recordedValues, sparkline, sumBuckets }; }

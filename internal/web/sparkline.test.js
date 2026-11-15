@@ -1,6 +1,6 @@
 // Run with: bun test internal/web
 import { expect, test } from 'bun:test';
-import { sparkline, sumBuckets } from './sparkline.js';
+import { recordedValues, sparkline, sumBuckets } from './sparkline.js';
 
 test('sumBuckets adds every group of a bucket and fills empty buckets with zeros', () => {
   const points = [
@@ -16,18 +16,29 @@ test('sumBuckets adds every group of a bucket and fills empty buckets with zeros
 });
 
 test('sparkline spans the full width and scales from zero to the largest value', () => {
-  expect(sparkline([0, 5, 10], 24, 3)).toEqual({ d: 'M0 21L50 12L100 3', end: { x: 100, y: 3 } });
+  expect(sparkline([0, 5, 10], 24, 3)).toEqual({
+    d: 'M0 21L50 12L100 3', end: { x: 100, y: 3 },
+    points: [{ x: 0, y: 21 }, { x: 50, y: 12 }, { x: 100, y: 3 }],
+  });
 });
 
 test('a bucket with nothing to measure breaks the line and the end is the last measured bucket', () => {
-  expect(sparkline([1, null, 1, null], 24, 3)).toEqual({ d: 'M0 3M66.67 3', end: { x: 66.67, y: 3 } });
+  expect(sparkline([1, null, 1, null], 24, 3)).toEqual({
+    d: 'M0 3M66.67 3', end: { x: 66.67, y: 3 },
+    points: [{ x: 0, y: 3 }, null, { x: 66.67, y: 3 }, null],
+  });
 });
 
 test('all zeros draw a flat line on the baseline', () => {
-  expect(sparkline([0, 0], 24, 3)).toEqual({ d: 'M0 21L100 21', end: { x: 100, y: 21 } });
+  expect(sparkline([0, 0], 24, 3)).toEqual({ d: 'M0 21L100 21', end: { x: 100, y: 21 }, points: [{ x: 0, y: 21 }, { x: 100, y: 21 }] });
 });
 
 test('fewer than two buckets or no measured value draws nothing', () => {
   expect(sparkline([5], 24, 3)).toBeNull();
   expect(sparkline([null, null], 24, 3)).toBeNull();
+});
+
+test('buckets that ended before recording began have no value, the bucket it began in keeps one', () => {
+  expect(recordedValues([0, 0, 4, 7], [0, 10, 20, 30], 10, 25)).toEqual([null, null, 4, 7]);
+  expect(recordedValues([0, 3], [0, 10], 10, 10)).toEqual([null, 3]);
 });

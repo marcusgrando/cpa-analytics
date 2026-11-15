@@ -95,6 +95,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .spark-plot { position: relative; }
 .spark-plot svg { display: block; width: 100%; overflow: visible; }
 .spark-dot { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); pointer-events: none; }
+.spark-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--axis); pointer-events: none; }
 .chart svg.focusing .series:not(.focus) { opacity: 0.15; }
 .chart .end-label { fill: var(--ink-2); }
 .provider-name { color: var(--muted); font-size: 12px; margin-left: 6px; }
@@ -706,7 +707,7 @@ function segmentedBar(container, parts, fmtValue) {
 // when given, charts the value per bucket under it.
 function tile(label, value, note, change, trend) {
   const spark = trend ? el('div', { class: 'spark' }) : null;
-  if (spark) drawTrend(spark, trend);
+  if (spark) drawTrend(spark, trend, label);
   return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }),
     note ? el('div', { class: 'note', text: note }) : null,
     change ? el('div', { class: 'note', text: change + ' vs previous' }) : null,
@@ -716,20 +717,31 @@ function tile(label, value, note, change, trend) {
 const SPARK_HEIGHT = 24;
 
 // drawTrend draws a sparkline in the de-emphasis gray with the latest bucket
-// marked. Hovering names the bucket and its value.
-function drawTrend(container, trend) {
+// marked. Hovering marks the nearest bucket on the line and opens a tooltip
+// beside it that names the metric, so it reads apart from the tiles around it.
+function drawTrend(container, trend, label) {
   const line = sparkline(trend.values, SPARK_HEIGHT, 3);
   if (!line) { container.replaceChildren(); return; }
   const svg = svgEl('svg', { viewBox: `0 0 100 ${SPARK_HEIGHT}`, preserveAspectRatio: 'none', height: SPARK_HEIGHT, 'aria-hidden': 'true' });
   svg.append(svgEl('path', { d: line.d, fill: 'none', 'stroke-width': 1.5, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke', style: 'stroke:var(--tone4)' }));
-  const plot = el('div', { class: 'spark-plot' }, svg, el('span', { class: 'spark-dot', style: `left:${line.end.x}%;top:${line.end.y}px` }));
+  const cursor = el('span', { class: 'spark-cursor' });
+  const hovered = el('span', { class: 'spark-dot' });
+  cursor.hidden = hovered.hidden = true;
+  const plot = el('div', { class: 'spark-plot' }, svg, el('span', { class: 'spark-dot', style: `left:${line.end.x}%;top:${line.end.y}px` }), cursor, hovered);
   plot.addEventListener('pointermove', (e) => {
     const box = plot.getBoundingClientRect();
     const i = Math.round(Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1) * (trend.values.length - 1));
     const v = trend.values[i];
-    showTooltip(e, trend.fmtX(trend.xs[i]), [{ value: v === null ? '-' : trend.fmt(v), label: '' }]);
+    const at = (i / (trend.values.length - 1)) * 100;
+    cursor.style.left = at + '%';
+    cursor.hidden = false;
+    hovered.hidden = !line.points[i];
+    if (line.points[i]) { hovered.style.left = at + '%'; hovered.style.top = line.points[i].y + 'px'; }
+    const x = box.left + (at / 100) * box.width;
+    const rows = [{ value: v === null ? 'no data' : trend.fmt(v), label }];
+    showTooltip(e, trend.fmtX(trend.xs[i]), rows, { left: x, right: x, top: box.top, height: box.height });
   });
-  plot.addEventListener('pointerleave', hideTooltip);
+  plot.addEventListener('pointerleave', () => { cursor.hidden = hovered.hidden = true; hideTooltip(); });
   container.replaceChildren(plot);
 }
 
@@ -761,8 +773,8 @@ function renderTotals() {
   const size = data.daily.bucket === 'hour' ? HOUR : DAY;
   const xs = buckets(size);
   const sums = sumBuckets(data.daily.points, xs);
-  const trend = (value, fmt) => ({ values: sums.map(value), xs, fmt, fmtX: size === HOUR ? fmtHour : fmtDay });
-  drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD));
+  const trend = (value, fmt) => ({ values: recordedValues(sums.map(value), xs, size, data.summary.data_since), xs, fmt, fmtX: size === HOUR ? fmtHour : fmtDay });
+  drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost');
   document.getElementById('t-tiles').replaceChildren(
     tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact)),
     tile('Sessions', fmtCompact(t.sessions), '', change(() => relativeChange(t.sessions, prev.sessions))),
