@@ -117,6 +117,8 @@ done
 mgmt pricing | check "price table fetched through host.http.do" 'd["status"]["models"] >= 1'
 mgmt summary | check "cost priced from the table" 'd["totals"]["cost_usd"] > 0 and d["totals"]["cost_quality"]["unpriced_tokens"] == 0'
 mgmt limit-burn | check "weekly limit read from response headers" 'len(d["points"]) == 1 and d["points"][0]["weekly_pct"] == 2 and d["points"][0]["auth_index"] != ""'
+mgmt limit-history | check "weekly snapshots listed per account" 'len(d["accounts"]) == 1 and d["accounts"][0]["points"][-1]["weekly_pct"] == 12'
+mgmt "breakdown?by=account" | check "rows grouped by account" 'len(d["rows"]) == 1 and d["rows"][0]["key"] != ""'
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/summary")
 [ "$code" = 401 ] && echo "ok   management routes require the key" || fail "summary without key returned $code"
 curl -fsS "http://127.0.0.1:$CPA_PORT/v0/resource/plugins/cpa-analytics/dashboard" | grep -q 'id="drift"' \

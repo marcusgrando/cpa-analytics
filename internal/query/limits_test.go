@@ -3,6 +3,7 @@ package query
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -102,5 +103,125 @@ func TestLimitBurnRejectsPartialAccountFilters(t *testing.T) {
 	f.Provider = "codex"
 	if _, err := LimitBurn(s.DB(), f, testPrices(t)); err != nil {
 		t.Errorf("provider filter: %v", err)
+	}
+}
+
+func insertSamples(t *testing.T, samples []sample) *store.Store {
+	t.Helper()
+	s, err := store.Open(filepath.Join(t.TempDir(), "l.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	rows := make([]store.Row, len(samples))
+	for i, sm := range samples {
+		rows[i] = sm.row()
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// What an account had left of its weekly limit when the cycle ended is quota
+// it paid for and never used. The value of each point comes from the cycle's
+// own traffic.
+func TestLimitLeftoverPricesWhatEachCycleLeftUnused(t *testing.T) {
+	h := time.Hour
+	now := day4.Add(-time.Minute)
+	samples := []sample{
+		// acc1 used 30% of a cycle that reset at day1 20:00: 4000 tokens moved it 20 points.
+		{id: "a1", account: "acc1", model: "gpt-5", at: day1.Add(9 * h), uncached: 1000, weekly: 10, reset: day1.Add(20 * h)},
+		{id: "a2", account: "acc1", model: "gpt-5", at: day1.Add(10 * h), uncached: 4000, weekly: -1},
+		{id: "a3", account: "acc1", model: "gpt-5", at: day1.Add(11 * h), weekly: 30, reset: day1.Add(20 * h)},
+		// Its next cycle is still running at now.
+		{id: "a4", account: "acc1", model: "gpt-5", at: day2.Add(9 * h), weekly: 5, reset: day1.Add(20*h + 7*24*h)},
+		// acc2 redeemed a reset early: a new cycle showed up before day3 12:00.
+		{id: "b1", account: "acc2", model: "gpt-5", at: day1.Add(10 * h), weekly: 50, reset: day3.Add(12 * h)},
+		{id: "b2", account: "acc2", model: "gpt-5", at: day2.Add(10 * h), weekly: 0, reset: day2.Add(10*h + 7*24*h)},
+		// acc3's cycle ended before the range.
+		{id: "c1", account: "acc3", model: "gpt-5", at: day0.Add(1 * h), weekly: 40, reset: day0.Add(12 * h)},
+		// acc4's cycle began before the range and ended inside it.
+		{id: "d1", account: "acc4", model: "gpt-5", at: day1.Add(-3 * 24 * h), weekly: 80, reset: day1.Add(2 * h)},
+		// A Claude reset refills the percent within the same cycle.
+		{id: "e1", account: "acc5", model: "gpt-5", at: day1.Add(9 * h), weekly: 90, reset: day3},
+		{id: "e2", account: "acc5", model: "gpt-5", at: day1.Add(10 * h), weekly: 20, reset: day3},
+		{id: "e3", account: "acc5", model: "gpt-5", at: day1.Add(11 * h), uncached: 2000, weekly: 25, reset: day3},
+	}
+	s := insertSamples(t, samples)
+
+	got, err := LimitLeftover(s.DB(), rangeFilter(), testPrices(t), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perPoint := 4000 * gpt5Input / 20
+	want := []LeftoverCycle{
+		{AuthIndex: "acc4", Provider: "codex", EndedAt: day1.Add(2 * h).UnixMilli(), LastReadingAt: day1.Add(-3 * 24 * h).UnixMilli(), UsedPct: 80, LeftPct: 20},
+		{AuthIndex: "acc1", Provider: "codex", EndedAt: day1.Add(20 * h).UnixMilli(), LastReadingAt: day1.Add(11 * h).UnixMilli(), UsedPct: 30, LeftPct: 70, USDPerPct: perPoint, LeftUSD: 70 * perPoint},
+		{AuthIndex: "acc2", Provider: "codex", EndedAt: day2.Add(10 * h).UnixMilli(), LastReadingAt: day1.Add(10 * h).UnixMilli(), Early: true, UsedPct: 50, LeftPct: 50},
+		{AuthIndex: "acc5", Provider: "codex", EndedAt: day3.UnixMilli(), LastReadingAt: day1.Add(11 * h).UnixMilli(), UsedPct: 25, LeftPct: 75, USDPerPct: 2000 * gpt5Input / 5, LeftUSD: 75 * 2000 * gpt5Input / 5},
+	}
+	if len(got.Cycles) != len(want) {
+		t.Fatalf("cycles = %+v, want %+v", got.Cycles, want)
+	}
+	for i, w := range want {
+		g := got.Cycles[i]
+		if g.AuthIndex != w.AuthIndex || g.Provider != w.Provider || g.EndedAt != w.EndedAt || g.LastReadingAt != w.LastReadingAt || g.Early != w.Early ||
+			!near(g.UsedPct, w.UsedPct) || !near(g.LeftPct, w.LeftPct) || !near(g.USDPerPct, w.USDPerPct) || !near(g.LeftUSD, w.LeftUSD) {
+			t.Errorf("cycle %d = %+v, want %+v", i, g, w)
+		}
+	}
+}
+
+func TestLimitLeftoverRejectsPartialAccountFilters(t *testing.T) {
+	s := seedDB(t)
+	f := rangeFilter()
+	f.Model = "gpt-5"
+	var pe *ParamError
+	if _, err := LimitLeftover(s.DB(), f, testPrices(t), day4); !errors.As(err, &pe) {
+		t.Errorf("err = %v, want a ParamError", err)
+	}
+}
+
+// The history keeps the last reading of each account per bucket, and the last
+// reading before the range so the page knows where each account started.
+func TestLimitHistoryKeepsTheLastReadingPerBucket(t *testing.T) {
+	h := time.Hour
+	reset := day3.Add(5 * h)
+	s := insertSamples(t, []sample{
+		{id: "old", account: "acc1", model: "gpt-5", at: day0.Add(-8 * 24 * h), weekly: 99, reset: day0},
+		{id: "before", account: "acc1", model: "gpt-5", at: day0.Add(20 * h), weekly: 40, reset: reset},
+		{id: "a1", account: "acc1", model: "gpt-5", at: day1.Add(9 * h), weekly: 41, reset: reset},
+		{id: "a2", account: "acc1", model: "gpt-5", at: day1.Add(9*h + 5*time.Minute), weekly: 42, reset: reset},
+		{id: "a3", account: "acc1", model: "gpt-5", at: day1.Add(9*h + 20*time.Minute), weekly: 44, reset: reset},
+		{id: "a4", account: "acc1", model: "gpt-5", at: day1.Add(10 * h), weekly: -1},
+		{id: "b1", account: "acc2", model: "gpt-5", at: day2.Add(1 * h), weekly: 3, reset: reset.Add(24 * h)},
+		{id: "n1", account: "", model: "gpt-5", at: day2.Add(1 * h), weekly: 3, reset: reset},
+	})
+	got, err := LimitHistory(s.DB(), rangeFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BucketMs != 15*60*1000 {
+		t.Errorf("bucket = %d, want 15 minutes", got.BucketMs)
+	}
+	want := []HistoryAccount{
+		{AuthIndex: "acc1", Provider: "codex", Points: []HistoryPoint{
+			{T: day0.Add(20 * h).UnixMilli(), WeeklyPct: 40, WeeklyReset: reset.UnixMilli()},
+			{T: day1.Add(9*h + 5*time.Minute).UnixMilli(), WeeklyPct: 42, WeeklyReset: reset.UnixMilli()},
+			{T: day1.Add(9*h + 20*time.Minute).UnixMilli(), WeeklyPct: 44, WeeklyReset: reset.UnixMilli()},
+		}},
+		{AuthIndex: "acc2", Provider: "codex", Points: []HistoryPoint{
+			{T: day2.Add(1 * h).UnixMilli(), WeeklyPct: 3, WeeklyReset: reset.Add(24 * h).UnixMilli()},
+		}},
+	}
+	if fmt.Sprint(got.Accounts) != fmt.Sprint(want) {
+		t.Errorf("accounts = %+v\nwant %+v", got.Accounts, want)
+	}
+	f := rangeFilter()
+	f.Client = "codex"
+	var pe *ParamError
+	if _, err := LimitHistory(s.DB(), f); !errors.As(err, &pe) {
+		t.Errorf("client filter: err = %v, want a ParamError", err)
 	}
 }

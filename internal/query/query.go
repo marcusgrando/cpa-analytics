@@ -290,8 +290,10 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 		keyExpr = "api_key_hash"
 	case "reasoning_effort":
 		keyExpr = effortExpr
+	case "account":
+		keyExpr = "auth_index"
 	default:
-		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day, api_key or reasoning_effort"}
+		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day, api_key, reasoning_effort or account"}
 	}
 	rows, err := aggregate(db, f, table, keyExpr)
 	if err != nil {

@@ -637,3 +637,39 @@ func TestEmptyRangeAnswersEmptyLists(t *testing.T) {
 		}
 	}
 }
+
+// Each credential gets its own row, so its API-priced value can be read
+// against the plan it pays for. Rows from before the plugin recorded the
+// credential share the empty key.
+func TestBreakdownByAccount(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows := []store.Row{
+		{RequestID: "a", RequestedAt: day1.Add(time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, AuthIndex: "acc1", UncachedInput: 1000},
+		{RequestID: "b", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, AuthIndex: "acc1", UncachedInput: 3000},
+		{RequestID: "c", RequestedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, AuthIndex: "acc2", UncachedInput: 2000},
+		{RequestID: "d", RequestedAt: day1.Add(4 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, UncachedInput: 500},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"acc1": 4000 * gpt5Input, "acc2": 2000 * gpt5Input, "": 500 * gpt5Input}
+	if len(b.Rows) != len(want) {
+		t.Fatalf("rows = %+v", b.Rows)
+	}
+	for _, r := range b.Rows {
+		if cost, ok := want[r.Key]; !ok || !near(r.CostUSD, cost) {
+			t.Errorf("row %q cost = %v, want %v", r.Key, r.CostUSD, cost)
+		}
+	}
+	if b.Rows[0].Key != "acc1" {
+		t.Errorf("first row = %q, want the costliest account", b.Rows[0].Key)
+	}
+}

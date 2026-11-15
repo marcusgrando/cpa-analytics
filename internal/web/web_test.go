@@ -264,3 +264,45 @@ func TestIndexKeepsViewSwitchOutOfHeader(t *testing.T) {
 		t.Error("the view switch belongs in the filter row")
 	}
 }
+
+// The Limits view charts each weekly pool's recorded history and projects it
+// from the burn rate, next to the live reading.
+func TestIndexChartsWeeklyPoolHistoryAndProjection(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`api('limit-history'`,
+		`poolHistory(`,
+		`burnRate(`,
+		`projectPool(`,
+		`First at limit`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexShowsQuotaLeftAtReset(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`id="leftover"`, `api('limit-leftover', { ...rangeParams(), provider: state.provider })`, `c.left_usd`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexShowsAccountAffinity(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`id="affinity"`, `api('affinity', p)`, `r.switch_cache_write_usd`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexOffersAccountBreakdown(t *testing.T) {
+	page := string(Index())
+	if !strings.Contains(page, `data-by="account"`) {
+		t.Error("breakdown has no account option")
+	}
+}

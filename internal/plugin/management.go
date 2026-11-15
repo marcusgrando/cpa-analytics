@@ -59,7 +59,7 @@ func (p *Plugin) routes() map[string]route {
 		"drift": {"Per-request token drift with change markers", func(db *sql.DB, f query.Filter, _ *pricing.Table, q url.Values) (any, error) {
 			return query.Drift(db, f, paramOr(q, "group", "response_model"))
 		}},
-		"breakdown": {"Usage by provider and model, client, day, API key hash or reasoning effort", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+		"breakdown": {"Usage by provider and model, client, day, API key hash, reasoning effort or account", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Breakdown(db, f, t, paramOr(q, "by", "model"))
 		}},
 		"pricing": {"Price table status, unpriced and overridden models", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
@@ -71,6 +71,15 @@ func (p *Plugin) routes() map[string]route {
 		}},
 		"limit-burn": {"API-priced cost per point of each account's weekly subscription limit, per day", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.LimitBurn(db, f, t)
+		}},
+		"limit-history": {"Each account's weekly subscription limit readings over time", func(db *sql.DB, f query.Filter, _ *pricing.Table, _ url.Values) (any, error) {
+			return query.LimitHistory(db, f)
+		}},
+		"limit-leftover": {"Weekly limit each account left unused when its cycle ended, priced at the cycle's cost per point", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
+			return query.LimitLeftover(db, f, t, time.Now())
+		}},
+		"affinity": {"Account switches within sessions, and the cache they wrote again", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
+			return query.Affinity(db, f, t)
 		}},
 		"health": {"Plugin storage, writer, join and pricing health", nil},
 	}

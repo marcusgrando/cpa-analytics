@@ -89,9 +89,17 @@ The same chart plots median or p90 latency and time to first token per request. 
 
 **Value of the weekly limit** plots, per day and account, the API-priced cost of each 1% of the account's weekly limit. For the same kind of work, a drop means the provider tightened the limit. Days on which an account used less than 1% of its week are left out. Snapshots start with plugin 0.1.11, so the chart fills from the day you install it.
 
+**Quota left at reset** lists each weekly cycle that ended in the range, per account: how much of the limit was left unused and what that part is worth at the cycle's own cost per 1%. A cycle ends early when a new one starts before the reset, as when a banked Codex reset is redeemed.
+
+**Account affinity** shows, per provider, how many sessions moved to another account and how much cache was written again after the move. CPA keeps a session and model on one account because the prompt cache belongs to that account, so a high share here means paying for cache writes twice.
+
+The breakdown table can also group by **Account**. Rows recorded before plugin 0.1.11 have no account and show as "not recorded".
+
 A request is one successful upstream call: one per HTTP request, and one per turn on a Responses WebSocket connection. Failed attempts count in totals and cost but not in the per-request medians.
 
 **Limits** in the filter row switches to the subscription limits of the Claude and Codex accounts in CPA. Each window (5-hour, weekly, weekly per model) is one bar pooled across the accounts, with a bar per account below it showing that account against its own limit. Accounts are weighted by plan (Pro 1, Max 5x 5, Max 20x 20; Codex Plus 1, Pro Lite 5, Pro 20) when every plan in the pool is known, and equally otherwise. Next to each bar the page shows whether usage runs ahead of or under an even pace over the window, and how much of the pool the next reset gives back. An account whose weekly limit is spent shows its 5-hour window as blocked until the week resets. Under the Claude pools, the page lists each account's extra usage this month against its limit.
+
+Each weekly pool also has a chart of its recorded usage over the past 7 days and a projection for the next 7, with each account running at its rate over the last 24 hours and starting over at its reset. Above the chart: the burn over the last 3 and 24 hours, the first account to hit its limit and when the whole pool would. The history comes from the limit headers the plugin records, so it starts with plugin 0.1.11.
 
 The page asks CPA to call each provider's usage endpoint with the account's token (`/v8/management/requests/api-call`), so tokens never reach the browser. It checks when the view opens and every 5 minutes. CPA renews Claude and Codex tokens when it proxies a request, not on these calls, so an idle account can show "Token expired" until its next proxied request.
 
@@ -104,9 +112,12 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | `/v0/management/cpa-analytics/summary` | |
 | `/v0/management/cpa-analytics/timeseries` | `bucket=day\|hour`, `group=provider\|model\|client` |
 | `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version\|reasoning_effort` |
-| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key\|reasoning_effort` |
+| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key\|reasoning_effort\|account` |
 | `/v0/management/cpa-analytics/pricing` | |
 | `/v0/management/cpa-analytics/limit-burn` | only `from`, `to`, `tz` and `provider`. A weekly limit covers the whole account, so `model`, `client` and `api_key` are rejected. |
+| `/v0/management/cpa-analytics/limit-leftover` | same as `limit-burn` |
+| `/v0/management/cpa-analytics/limit-history` | same as `limit-burn` |
+| `/v0/management/cpa-analytics/affinity` | |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 
 Shared filters:

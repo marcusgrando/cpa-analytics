@@ -87,6 +87,9 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .chart svg { display: block; width: 100%; overflow: visible; }
 .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart .marker-label { fill: var(--ink-2); }
+.trend { margin-top: 10px; }
+.trend-stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--ink-2); margin-top: 10px; }
+.key-line.dashed { background: repeating-linear-gradient(90deg, var(--s1) 0 5px, transparent 5px 9px); opacity: 0.7; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .key-rect { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
@@ -278,6 +281,19 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
       </section>
 
+      <section id="leftover" class="card" aria-labelledby="leftover-title">
+        <h2 id="leftover-title">Quota left at reset</h2>
+        <p class="sub">What each Claude and Codex account had not used of its weekly limit when a cycle ended in this range, priced at what that cycle's own traffic paid per 1%. Unused quota does not carry over. A cycle ends early when a new one begins before the reset, as when a banked Codex reset is redeemed.</p>
+        <p id="leftover-total" class="hero-label"></p>
+        <div id="leftover-table" class="table-wrap"></div>
+      </section>
+
+      <section id="affinity" class="card" aria-labelledby="affinity-title">
+        <h2 id="affinity-title">Account affinity</h2>
+        <p class="sub">CPA keeps each session and model on one account, since the prompt cache belongs to the account. When a call lands on another account, it writes its cache again. Sessions here are session and model pairs with two or more calls.</p>
+        <div id="affinity-table" class="table-wrap"></div>
+      </section>
+
       <section id="daily" class="card" aria-labelledby="daily-title">
         <div class="card-head">
           <div>
@@ -306,6 +322,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             <button type="button" data-by="day" aria-pressed="false">Day</button>
             <button type="button" data-by="api_key" aria-pressed="false">API key</button>
             <button type="button" data-by="reasoning_effort" aria-pressed="false">Effort</button>
+            <button type="button" data-by="account" aria-pressed="false">Account</button>
           </div>
         </div>
         <div id="breakdown-table" class="table-wrap"></div>
@@ -934,6 +951,42 @@ function renderBurn() {
   ));
 }
 
+function renderLeftover() {
+  const cycles = data.leftover.cycles;
+  const total = document.getElementById('leftover-total');
+  const container = document.getElementById('leftover-table');
+  if (!cycles.length) {
+    total.textContent = '';
+    container.replaceChildren(el('div', { class: 'empty', text: 'No weekly cycle ended in this range. Limit usage is recorded from plugin 0.1.11 on.' }));
+    return;
+  }
+  const priced = cycles.filter((c) => c.usd_per_pct > 0);
+  const lost = priced.reduce((s, c) => s + c.left_usd, 0);
+  const unpriced = cycles.length - priced.length;
+  total.textContent = `${fmtUSD(lost)} of quota left unused at API prices, over ${cycles.length} cycle${cycles.length === 1 ? '' : 's'}` +
+    (unpriced ? `. ${unpriced} cycle${unpriced === 1 ? '' : 's'} moved less than 1% through CPA, so ${unpriced === 1 ? 'its' : 'their'} unused part has no price.` : '.');
+  container.replaceChildren(table(
+    ['Cycle ended', 'Account', 'Provider', 'Used', 'Left', 'Per 1%', 'Left, at API prices', 'Last reading'],
+    cycles.map((c) => [fmtStamp(c.ended_at) + (c.early ? ' (early)' : ''), burnAccountName(c.auth_index), c.provider, fmtShare(c.used_pct), fmtShare(c.left_pct),
+      c.usd_per_pct > 0 ? fmtUSD(c.usd_per_pct) : '-', c.usd_per_pct > 0 ? fmtUSD(c.left_usd) : '-', fmtStamp(c.last_reading_at)]),
+  ));
+}
+
+function renderAffinity() {
+  const rows = data.affinity.providers;
+  const container = document.getElementById('affinity-table');
+  if (!rows.length) {
+    container.replaceChildren(el('div', { class: 'empty', text: 'No calls named both a session and an account in this range. The account is recorded from plugin 0.1.11 on.' }));
+    return;
+  }
+  container.replaceChildren(table(
+    ['Provider', 'Calls', 'Sessions', 'Switched sessions', 'Switches', 'Cache write', 'Written again after a switch'],
+    rows.map((r) => [r.provider, fmtInt(r.calls), fmtInt(r.sessions), r.sessions ? `${fmtInt(r.switched_sessions)} (${fmtPct(r.switched_sessions / r.sessions)})` : '0',
+      fmtInt(r.switches), `${fmtCompact(r.cache_write)} · ${fmtUSD(r.cache_write_usd)}`,
+      `${fmtCompact(r.switch_cache_write)} · ${fmtUSD(r.switch_cache_write_usd)}` + (r.cache_write_usd > 0 ? ` (${fmtPct(r.switch_cache_write_usd / r.cache_write_usd)})` : '')]),
+  ));
+}
+
 function renderBreakdown() {
   const b = data.breakdown;
   const container = document.getElementById('breakdown-table');
@@ -954,6 +1007,7 @@ function renderBreakdown() {
       const name = key.split('/')[0];
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by client ' + name, onclick: () => setFilter('client', name) });
     }
+    if (b.by === 'account') return key ? burnAccountName(key) : 'not recorded';
     if (b.by === 'api_key') {
       if (!key) return 'no key';
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by this API key', onclick: () => {
@@ -964,7 +1018,7 @@ function renderBreakdown() {
     return key;
   };
   container.replaceChildren(table(
-    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
+    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort', account: 'Account' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
     b.rows.map((r) => [keyCell(r), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
       fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
       r.requests > 0 && r.cost_usd > 0 ? fmtUSD(r.cost_usd / r.requests) : '-', fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
@@ -1054,7 +1108,21 @@ async function readCodex(account) {
 const LIMIT_READERS = { claude: readClaude, codex: readCodex };
 const providerOf = (account) => String(account.provider || '').toLowerCase();
 
+// The weekly trend shows a week of recorded readings and projects a week ahead.
+const TREND_PAST = 7 * DAY;
+const TREND_AHEAD = 7 * DAY;
+const TREND_STEP = 15 * 60000;
+// The projection runs at each account's rate over the last day, which spans
+// a day's rhythm. The last 3 hours show how fast the pool burns right now.
+const RECENT_BURN = 3 * HOUR;
+const PROJECTION_BURN = DAY;
+
 async function loadLimits(current) {
+  const started = Date.now();
+  // The live reading draws without the history, so a failed history read only
+  // drops the trend. A rejected key fails the credentials call below anyway.
+  const history = api('limit-history', { from: started - TREND_PAST, to: started, tz: -new Date().getTimezoneOffset() })
+    .catch(() => null);
   const creds = await management('/v8/management/credentials');
   const files = (creds.files || []).filter((f) => LIMIT_READERS[providerOf(f)]);
   const active = files.filter((f) => !f.disabled);
@@ -1069,7 +1137,8 @@ async function loadLimits(current) {
     }
   });
   if (!current()) return;
-  limitsData = { checkedAt: Date.now(), results, disabled: files.length - active.length };
+  limitsData = { checkedAt: Date.now(), results, disabled: files.length - active.length, history: await history };
+  if (!current()) return;
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
   renderLimits();
@@ -1079,6 +1148,7 @@ async function loadLimits(current) {
 const accountName = (a) => a.label || a.email || a.name || a.auth_index;
 const fmtWhen = (t) => new Date(t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtShare = (v) => Math.round(v) + '%';
+const fmtStamp = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 function fmtMoney(amount, currency) {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
@@ -1131,7 +1201,7 @@ function accountRow(m, share, r, now) {
     el('div', { class: 'acct-value' }, status));
 }
 
-function renderPool(pool, byAccount, now) {
+function renderPool(pool, byAccount, now, readings) {
   const pace = PACE[pool.pace];
   const next = pool.restores[0];
   return el('div', { class: 'pool' },
@@ -1143,11 +1213,13 @@ function renderPool(pool, byAccount, now) {
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
     meter(pool.used, pool.expected, { big: true, color: 'var(--s1)',
       label: `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
+    pool.id === 'weekly' && readings ? weeklyTrend(pool, byAccount, readings, now) : null,
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
 function renderLimits() {
   const body = document.getElementById('limits-body');
+  pendingTrends = [];
   const now = limitsData.checkedAt;
   const sections = [];
   for (const provider of LIMIT_PROVIDERS) {
@@ -1160,12 +1232,114 @@ function renderLimits() {
     const sub = `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now)),
+      ...list.map((p) => renderPool(p, byAccount, now, limitsData.history && limitsData.history.accounts)),
       ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
       ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` }))));
   }
   if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
   body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no Claude or Codex accounts.' })]));
+  drawTrends();
+}
+
+// Trend charts are drawn once their containers are in the page, since the
+// width comes from the layout.
+let pendingTrends = [];
+function drawTrends() {
+  for (const draw of pendingTrends) draw();
+}
+
+// weeklyTrend pools the recorded readings of the accounts in the live pool,
+// with the same weights, and projects the pool from each account's burn rate.
+function weeklyTrend(pool, byAccount, readings, now) {
+  const pointsOf = new Map(readings.map((a) => [a.auth_index, a.points]));
+  const members = pool.members.map((m) => ({ account: m.account, weight: m.weight, points: pointsOf.get(m.account) || [] }));
+  if (!members.some((m) => m.points.length)) {
+    return el('p', { class: 'sub', text: 'No recorded readings yet. The plugin records weekly limit usage from the traffic it proxies, from 0.1.11 on.' });
+  }
+  const times = [];
+  for (let t = now - TREND_PAST; t <= now; t += TREND_STEP) times.push(t);
+  const recorded = poolHistory(members, times);
+  const rates = members.map((m) => burnRate(m.points, now, PROJECTION_BURN));
+  const recent = members.map((m) => burnRate(m.points, now, RECENT_BURN));
+  const projection = projectPool(pool.members.map((m, i) => ({
+    account: m.account, weight: m.weight, used: m.used, resetsAt: m.resetsAt, lengthMs: m.lengthMs, rate: rates[i],
+  })), now, TREND_AHEAD, TREND_STEP);
+  const weights = weightsOf(pool.members);
+  const total = weights.reduce((sum, w) => sum + w, 0);
+  // A pool rate in points of the pool per hour, or null when no account has two readings.
+  const poolRate = (list) => (list.some((r) => r !== null) ? list.reduce((sum, r, i) => sum + weights[i] * (r || 0), 0) / total : null);
+  const fmtRate = (r) => (r === null ? 'not enough readings' : r.toFixed(1) + '% of the pool per hour');
+  const nameOf = (account) => accountName(byAccount.get(account).account);
+  const first = projection.firstFull;
+  const stats = el('div', { class: 'trend-stats' },
+    el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
+    el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
+    el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
+    el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : fmtWhen(projection.poolFull) })));
+  const chart = el('div', { class: 'chart trend' });
+  pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label));
+  return el('div', {}, stats, chart,
+    el('div', { class: 'legend' },
+      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--s1)' }), 'Recorded'),
+      el('span', {}, el('span', { class: 'key-line dashed' }), `Projected at each account's rate over the last 24 h`)));
+}
+
+// trendChart draws pool usage over time: recorded up to now, projected after.
+function trendChart(container, recorded, projected, now, label) {
+  if (!container.isConnected) return;
+  const width = Math.max(280, container.clientWidth);
+  const height = 180;
+  const m = { top: 18, right: 8, bottom: 24, left: 40 };
+  const from = recorded[0].t;
+  const to = projected[projected.length - 1].t;
+  const x = (t) => m.left + ((t - from) / (to - from)) * (width - m.left - m.right);
+  const y = (v) => m.top + (1 - v / 100) * (height - m.top - m.bottom);
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': `${label} pool usage, recorded for 7 days and projected for 7 days` });
+  for (const v of [0, 50, 100]) {
+    svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
+    svg.append(svgEl('text', { x: m.left - 6, y: y(v) + 4, 'text-anchor': 'end', text: v + '%' }));
+  }
+  container.replaceChildren(svg);
+  const fits = labelSpacer();
+  const off = tzMs();
+  for (let t = from + off - (((from + off) % DAY) + DAY) % DAY + DAY - off; t < to; t += DAY) {
+    const text = svgEl('text', { y: height - 6, 'text-anchor': 'middle', text: fmtDay(t) });
+    svg.append(text);
+    const half = text.getComputedTextLength() / 2;
+    const cx = Math.min(Math.max(x(t), m.left + half), width - m.right - half);
+    text.setAttribute('x', cx);
+    if (!fits(cx - half, cx + half)) text.remove();
+  }
+  const path = (points) => {
+    let d = '';
+    let pen = 'M';
+    for (const p of points) {
+      if (p.used === null) { pen = 'M'; continue; }
+      d += pen + x(p.t).toFixed(1) + ',' + y(p.used).toFixed(1) + ' ';
+      pen = 'L';
+    }
+    return d;
+  };
+  svg.append(svgEl('line', { x1: x(now), x2: x(now), y1: m.top - 6, y2: height - m.bottom, stroke: 'var(--axis)', 'stroke-width': 1 }));
+  svg.append(svgEl('text', { x: x(now), y: m.top - 8, 'text-anchor': 'middle', class: 'marker-label', text: 'Now' }));
+  svg.append(svgEl('path', { d: path(recorded), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: 'stroke:var(--s1)' }));
+  svg.append(svgEl('path', { d: path(projected), fill: 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:var(--s1);opacity:0.7' }));
+  const all = recorded.concat(projected.slice(1));
+  const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: 'fill:var(--s1);stroke:var(--surface)', visibility: 'hidden' });
+  svg.append(dot);
+  const hit = svgEl('rect', { x: m.left, y: m.top, width: width - m.left - m.right, height: height - m.top - m.bottom, fill: 'transparent' });
+  hit.addEventListener('pointermove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const t = from + ((e.clientX - box.left) * (width / box.width) - m.left) / (width - m.left - m.right) * (to - from);
+    const p = all.reduce((best, q) => (Math.abs(q.t - t) < Math.abs(best.t - t) ? q : best), all[0]);
+    if (p.used === null) { dot.setAttribute('visibility', 'hidden'); hideTooltip(); return; }
+    dot.setAttribute('cx', x(p.t));
+    dot.setAttribute('cy', y(p.used));
+    dot.setAttribute('visibility', 'visible');
+    showTooltip(e, fmtStamp(p.t), [{ value: fmtShare(p.used), label: p.t > now ? 'of the pool used, projected' : 'of the pool used' }]);
+  });
+  hit.addEventListener('pointerleave', () => { dot.setAttribute('visibility', 'hidden'); hideTooltip(); });
+  svg.append(hit);
 }
 
 function renderAll() {
@@ -1173,6 +1347,8 @@ function renderAll() {
   renderModelDetail();
   renderDrift();
   renderBurn();
+  renderLeftover();
+  renderAffinity();
   renderDaily();
   renderBreakdown();
   renderQuality();
@@ -1227,19 +1403,21 @@ async function loadUsage(current) {
   const prevRange = previousPeriod(p);
   // Credentials only name the accounts, so the chart still draws without them.
   const credentials = management('/v8/management/credentials').then((c) => c.files || [], () => []);
-  const [summary, prev, daily, drift, burn, breakdown, pricing] = await Promise.all([
+  const [summary, prev, daily, drift, burn, leftover, affinity, breakdown, pricing] = await Promise.all([
     api('summary', p),
     api('summary', { ...p, ...prevRange }),
     api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
     api('drift', { ...p, group: state.driftGroup }),
     api('limit-burn', { ...rangeParams(), provider: state.provider }),
+    api('limit-leftover', { ...rangeParams(), provider: state.provider }),
+    api('affinity', p),
     api('breakdown', { ...p, by: state.by }),
     api('pricing', p),
   ]);
   await health;
   if (!current()) return;
   data = {
-    summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, burn, breakdown, pricing,
+    summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, burn, leftover, affinity, breakdown, pricing,
     credentials: await credentials,
   };
   document.getElementById('key-form').hidden = true;
@@ -1355,7 +1533,10 @@ document.querySelectorAll('[data-by]').forEach((b) => b.addEventListener('click'
 let resizeTimer = 0;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (data.summary) { renderDrift(); renderBurn(); renderDaily(); } }, 100);
+  resizeTimer = setTimeout(() => {
+    if (data.summary) { renderDrift(); renderBurn(); renderDaily(); }
+    if (limitsData) drawTrends();
+  }, 100);
 }).observe(document.querySelector('.wrap'));
 
 restoreAutoRefresh();

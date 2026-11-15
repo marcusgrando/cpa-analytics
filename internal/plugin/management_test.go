@@ -77,7 +77,7 @@ func TestManagementRegisterListsRoutes(t *testing.T) {
 		}
 		got[r.Path] = true
 	}
-	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing", "limit-burn"} {
+	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity"} {
 		if !got[apiBase+name] {
 			t.Errorf("missing route %s in %+v", name, reg.Routes)
 		}
@@ -109,7 +109,7 @@ func TestManagementSummaryReturnsJSON(t *testing.T) {
 func TestManagementRoutesAnswer(t *testing.T) {
 	p, _ := startPlugin(t)
 	insertRows(t, p, usageRow("a", time.Now().Add(-time.Hour)))
-	for _, route := range []string{"timeseries", "drift", "breakdown", "health", "pricing", "limit-burn"} {
+	for _, route := range []string{"timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity"} {
 		resp := manage(t, p, "GET", route, nil)
 		if resp.StatusCode != 200 || !json.Valid(resp.Body) {
 			t.Errorf("%s: status %d body %s", route, resp.StatusCode, resp.Body)
@@ -131,6 +131,8 @@ func TestManagementRejectsBadParameters(t *testing.T) {
 		{"drift", url.Values{"group": {"nope"}}, "group"},
 		{"breakdown", url.Values{"by": {"nope"}}, "by"},
 		{"limit-burn", url.Values{"model": {"gpt-5"}}, "model"},
+		{"limit-history", url.Values{"client": {"codex"}}, "client"},
+		{"limit-leftover", url.Values{"api_key": {"abc123"}}, "api_key"},
 	}
 	for _, c := range cases {
 		resp := manage(t, p, "GET", c.route, c.q)

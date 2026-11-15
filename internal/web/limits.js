@@ -164,6 +164,111 @@ function fmtDuration(ms) {
   return Math.floor(hours / 24) + ' d ' + (hours % 24) + ' h';
 }
 
+// History and projection of the weekly pool. Readings come from the plugin's
+// limit-history route: {t, weekly_pct, weekly_reset}, oldest first, with
+// weekly_reset 0 when unknown.
+
+// RESET_JITTER matches the plugin's tolerance for resets a provider
+// recomputes per response.
+const RESET_JITTER = LIMIT_HOUR;
+
+function lastReading(points, t) {
+  let last = null;
+  for (const p of points) {
+    if (p.t > t) break;
+    last = p;
+  }
+  return last;
+}
+
+// readingAt is an account's weekly percent at t: its last reading, or 0 once
+// that reading's reset has passed, or null before its first reading.
+function readingAt(points, t) {
+  const p = lastReading(points, t);
+  if (!p) return null;
+  return p.weekly_reset > 0 && p.weekly_reset <= t ? 0 : p.weekly_pct;
+}
+
+// weightsOf applies the live pool's rule: plan weights only when every plan is known.
+function weightsOf(members) {
+  const weighted = members.every((m) => m.weight > 0);
+  return members.map((m) => (weighted ? m.weight : 1));
+}
+
+// poolHistory pools accounts ({account, weight, points}) at each time. An
+// account joins the pool at its first reading, so used is null until one exists.
+function poolHistory(accounts, times) {
+  const weights = weightsOf(accounts);
+  return times.map((t) => {
+    let sum = 0;
+    let total = 0;
+    accounts.forEach((a, i) => {
+      const v = readingAt(a.points, t);
+      if (v === null) return;
+      sum += weights[i] * v;
+      total += weights[i];
+    });
+    return { t, used: total > 0 ? sum / total : null };
+  });
+}
+
+const sameCycle = (a, b) => Math.abs(a.weekly_reset - b.weekly_reset) <= RESET_JITTER;
+
+// burnRate is the weekly points an account gained per hour over the window
+// ending at now. It measures from the window start when the reading there
+// belongs to the current cycle, otherwise from the cycle's first reading in
+// the window. Null when one reading is all there is to go on.
+function burnRate(points, now, windowMs) {
+  const latest = lastReading(points, now);
+  if (!latest) return null;
+  if (latest.weekly_reset > 0 && latest.weekly_reset <= now) return 0;
+  const start = now - windowMs;
+  const before = lastReading(points, start);
+  let base;
+  if (before && sameCycle(before, latest) && !(before.weekly_reset > 0 && before.weekly_reset <= start)) {
+    base = { t: start, pct: before.weekly_pct };
+  } else {
+    const first = points.find((p) => p.t > start && p.t <= now && sameCycle(p, latest));
+    if (!first || first === latest) return null;
+    base = { t: first.t, pct: first.weekly_pct };
+  }
+  return Math.max(0, (latest.weekly_pct - base.pct) / ((now - base.t) / LIMIT_HOUR));
+}
+
+// projectedUsed runs one account forward at its rate: it stops at the limit
+// and starts over from 0 at each reset, a window length apart.
+function projectedUsed(m, now, t) {
+  let base = m.used;
+  let from = now;
+  let reset = m.resetsAt;
+  while (reset !== null && reset > from && t >= reset) {
+    base = 0;
+    from = reset;
+    reset += m.lengthMs;
+  }
+  return Math.min(100, base + ((m.rate || 0) * (t - from)) / LIMIT_HOUR);
+}
+
+// projectPool projects the weekly pool if every account keeps its current
+// rate. Members carry account, weight, used, resetsAt, lengthMs and rate
+// (points per hour, null when unknown, which holds the account still).
+function projectPool(members, now, horizonMs, stepMs) {
+  const weights = weightsOf(members);
+  const total = weights.reduce((s, w) => s + w, 0);
+  const points = [];
+  let firstFull = null;
+  let poolFull = null;
+  for (let t = now; t <= now + horizonMs; t += stepMs) {
+    const used = members.map((m) => projectedUsed(m, now, t));
+    const pooled = used.reduce((s, u, i) => s + weights[i] * u, 0) / total;
+    points.push({ t, used: pooled });
+    const full = used.findIndex((u) => u >= 100);
+    if (!firstFull && full >= 0) firstFull = { account: members[full].account, at: t };
+    if (poolFull === null && used.every((u) => u >= 100)) poolFull = t;
+  }
+  return { points, firstFull, poolFull };
+}
+
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
   let next = 0;
@@ -178,5 +283,8 @@ async function mapLimit(items, limit, fn) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend };
+  module.exports = {
+    claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
+    readingAt, poolHistory, burnRate, projectPool,
+  };
 }

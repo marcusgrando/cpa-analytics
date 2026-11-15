@@ -127,10 +127,12 @@ Views:
 1. Totals: API-estimate cost, requests, sessions, cost per request, processed tokens (with the average per active day, or per active hour in the 24-hour view), cache hit rate (cache read / total input), cache savings (cache reads priced as uncached input, minus their actual price), output including reasoning. Cost share by provider, with each provider's tokens and sessions. A session that used two providers counts once in each. Cost and tokens by token type (input, cache read, cache write, output), and cost by service tier. The tier split shows the premium paid over standard rates for priority calls and the discount for flex calls, since turning on a fast mode raises cost without changing any token count. Cost, requests, sessions, cost per request, processed tokens and output show their change against the previous period of the same length, and cache hit rate its change in percentage points. The change is left out when recording began inside that previous period (`data_since` in `summary`), since its partial totals would read as growth.
 2. Daily cost and tokens, stacked by provider (toggle cost or tokens).
 3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output, reasoning, latency and time to first token, plus daily cache hit rate. CPA reports time to first token only for streamed calls, so its percentiles leave out calls without one, and a day with none has no point. Grouped by reported model, by client version or by reasoning effort, since a client that raises its default effort spends more output with no model change. Vertical markers on the days a new `client_version`, `response_model` or `reasoning_effort` first appears. A request that names no effort is grouped as `unset` and never gets a marker. The default measure is input including cache, which moves when the context grows whether or not the cache absorbs it. The first recorded day gets no markers, since every value is new on it.
-4. Breakdown table by model (one row per provider and model, since the same model can be reached through two providers at different prices), by client and version, by day, by API key hash or by reasoning effort: requests, tokens by type, cost, cost per request, share, median input and output per request.
+4. Breakdown table by model (one row per provider and model, since the same model can be reached through two providers at different prices), by client and version, by day, by API key hash, by reasoning effort or by account (CPA's `auth_index`, named from the credential list, and "not recorded" for rows stored before plugin 0.1.11): requests, tokens by type, cost, cost per request, share, median input and output per request.
 5. Model detail: cost per 1M tokens, cache hit rate, token-type mix, and the drift chart for that model.
 6. Cost quality and plugin health.
 7. Weekly limit value: API-priced cost per 1% of each Claude and Codex account's weekly limit, per day. For the same kind of work, a lower value means the provider tightened the limit. See below.
+8. Quota left at reset: for each weekly cycle that ended in the range, what the account had not used, priced at that cycle's own cost per 1%. Unused quota does not carry over, so this is what the subscription paid for and nobody used. See below.
+9. Account affinity: per provider, how often a session moved to another account and how much cache it wrote again because of it. See below.
 
 ### Weekly limit value
 
@@ -139,11 +141,14 @@ Decided 2026-11-15. Claude and Codex report the account's limit usage on every r
 - Claude: `Anthropic-Ratelimit-Unified-5h-Utilization` and `-7d-Utilization` are fractions of the limit, `-Reset` epoch seconds. Scoped windows such as `7d_opus` are not read.
 - Codex: `X-Codex-Primary-*` and `X-Codex-Secondary-*` with `Used-Percent` (0 to 100), `Window-Minutes`, and `Reset-At` (epoch seconds) or `Reset-After-Seconds` (counted from the response). A window of a day or less is the session, 7 to 30 days the week. Code review and other windows are not read.
 - A value that cannot be read is stored as NULL, never clamped or guessed. A readable percent with an unreadable reset keeps the percent.
-- `limit-burn` walks each account's rows in time order. Between two consecutive weekly snapshots of the same cycle (resets within an hour of each other and the percent not lower), the cost of the rows after the first snapshot up to the second is what moved the percent. A pair that crosses a reset or goes down is dropped. Each pair counts on the day of its second snapshot. Days on which an account moved less than 1 point, or cost nothing, are left out. The weekly percent belongs to the whole account, so the route takes only the range and provider and rejects model, client and API key filters.
+- `limit-burn` walks each account's rows in time order. Between two consecutive weekly snapshots of the same cycle (resets within an hour of each other and the percent not lower), the cost of the rows after the first snapshot up to the second is what moved the percent. A pair that crosses a reset or goes down is dropped. Each pair counts on the day of its second snapshot. Days on which an account moved less than 1 point, or cost nothing, are left out. The weekly percent belongs to the whole account, so the route takes only the range and provider and rejects model, client and API key filters. The same rule holds for `limit-leftover` and `limit-history`.
+- A weekly cycle is the run of an account's snapshots whose resets stay within an hour of each other. A percent that drops inside a cycle is a Claude refill: that pair is dropped and the cycle goes on.
+- `limit-leftover` ends each cycle at its reset, or earlier at the first snapshot of the next cycle, as when a banked Codex reset is redeemed. Those are marked early. Used is the last snapshot's percent, capped at 100, and left is 100 minus it. The cycle's cost per 1% is the cost of its pairs over the points they moved, and a cycle that moved less than 1 point through CPA has no price. To catch a cycle that started before the range, the walk starts 8 days before `from`. Only cycles that ended inside the range and before now are listed.
+- `limit-history` returns each account's weekly snapshots, the last one per bucket. The bucket is 15 minutes, or wider when the range would need more than 700. The last snapshot before `from` comes first, so the chart starts from a known value.
 
 ### Limits view
 
-Decided 2026-11-15. A second view, picked by a Usage | Limits switch in the filter row, shows the subscription limits of the Claude and Codex accounts in CPA, pooled across accounts. It reads live and stores nothing.
+Decided 2026-11-15. A second view, picked by a Usage | Limits switch in the filter row, shows the subscription limits of the Claude and Codex accounts in CPA, pooled across accounts. It reads live. Its weekly trend also reads `limit-history`, which the plugin records from response headers (see "Weekly limit value").
 
 - Accounts come from `GET /v8/management/credentials`, provider `claude` or `codex`, disabled ones left out. Each account's usage is read with `POST /v8/management/requests/api-call` and `Authorization: Bearer $TOKEN$`, so CPA substitutes the token and applies the credential's proxy. At most 4 calls run at once. The view reads when it opens and every 5 minutes.
 - Claude: `GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20`. Windows come from `limits[]`: `session` (5 hours), `weekly_all`, and `weekly_scoped` per model. Without `limits[]` the page falls back to `five_hour` and `seven_day`. An account with no session limit has no session in progress and joins the 5-hour pool at 0%. The plan comes from `GET /api/oauth/profile`, `organization.rate_limit_tier` (`max_20x` weighs 20, `max_5x` 5) or `account.has_claude_pro` (1), read once per page load.
@@ -156,7 +161,16 @@ Decided 2026-11-15. A second view, picked by a Usage | Limits switch in the filt
 - A spent weekly limit blocks the account's session window, which counts as 100% used. It comes back whole at the weekly reset when the session resets first or has no reset, whole at its own reset when it is spent and resets after the week, and otherwise gives back its unused part at the weekly reset.
 - Errors are per account and do not stop the others. CPA's `api-call` renews tokens only for antigravity, xai and meta, so a Claude or Codex 401 or 403 reads "Token expired. CPA renews it on the next proxied request", or asks for a sign-in when the credential has `requires_sign_in`.
 - Never called: routes that spend credits or quota, such as Codex `rate-limit-reset-credits/consume`.
+- Weekly trend, under each pool's weekly bar: the pool's used percent over the past 7 days and projected over the next 7, in 15-minute steps. History pools the accounts the view reads live, with their live weights, and holds each account's last snapshot until its reset, after which it reads 0. The projection runs each account linearly at its own rate over the last 24 hours, caps it at 100 and starts it from 0 at each reset, a week apart. It ignores traffic moving to other accounts when one is spent. The stats above the chart show the pool's burn over the last 3 hours and the last 24 hours, the first account to reach its limit and when the whole pool would. A projection on the 3-hour rate read "never" every morning after an idle night, which is why the projection uses 24 hours and the 3-hour rate is shown next to it. An account with one snapshot or none has no rate and stays flat.
 - The math is in `internal/web/limits.js`, a DOM-free script tested with bun and inlined into the page by `web.go`, so the page stays one static file.
+
+### Account affinity
+
+CPA keeps a session on one account, keyed by provider, session and model (`Pick` in `sdk/cliproxy/auth/selector.go`), because the prompt cache belongs to the account. A call that lands on another account writes its cache again.
+
+- `affinity` groups generating, non-failed rows that name both a session and an account by provider, session and model, in request order (see "Unit of a request"). A switch is a request on a different account from the one before it. A session is a key with two or more requests.
+- Per provider: requests, sessions, sessions with at least one switch, switches, cache write tokens and their cost, and the cache written by requests right after a switch, with its cost.
+- Unverified: that `UsageRecord.SessionID` is the ID the selector keys on. Both come from the client's request metadata in v8.0.71.
 
 ### Management API
 
@@ -165,10 +179,13 @@ All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and 
 - `summary`: totals, cost by provider, token type and service tier, and `data_since`, the first recorded row of any filter.
 - `timeseries?bucket=day|hour&group=provider|model|client`: tokens and cost per bucket.
 - `drift?group=response_model|client_version|reasoning_effort`: medians and p90 per bucket, plus change markers.
-- `breakdown?by=model|client|day|api_key|reasoning_effort`
+- `breakdown?by=model|client|day|api_key|reasoning_effort|account`
 - `health`
 - `pricing`: table age, unmatched models, overrides in use.
 - `limit-burn`: per day and account, the weekly limit points used, their cost and the cost per point.
+- `limit-leftover`: per ended weekly cycle and account, the percent used and left, the cost per point and the left part at API prices.
+- `limit-history`: per account, weekly snapshots, the last one per bucket.
+- `affinity`: per provider, session switches between accounts and the cache written again after them.
 
 ### Configuration
 
@@ -195,6 +212,8 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - Limits view (2026-11-15): pooled subscription limits per account, like T3 Code's Limits page. The browser reads them through CPA's `api-call`, so tokens stay in CPA. Rejected: a plugin backend reading tokens with `host.auth.get` and calling out with `host.http.do`. First version covers Claude and Codex only. Claude accounts are weighted by plan, at the cost of one profile call per account per page load.
 - Limit history (2026-11-15): the plugin keeps the limit snapshot each response reports in its headers, and the dashboard prices each point of the weekly limit to show when a provider changes it. Rejected: response interceptors, which receive bodies with no opt-out, run per stream chunk and sit in the delivery path. Not chosen: snapshots taken by the dashboard page from the Limits view, which would record only while the page is open.
 - Previous-period comparison on the totals and total input as the default drift measure (2026-11-15). Alerts and an automatic "what changed" summary were deferred.
+- After comparing the plugin with Theo's CPA setup (the prox dashboard and T3 Code's Limits page), 2026-11-15: add the weekly pool history and projection, quota left at reset, account affinity and the breakdown by account. The Limits view keeps its live reading and gains the history, since both matter.
+- Codex banked resets are not shown. The CPA management center already shows them, so the plugin would only repeat it. Reopen if the owner asks.
 
 ## Unit of a request
 
