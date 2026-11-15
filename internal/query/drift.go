@@ -9,6 +9,8 @@ import (
 
 // Stats holds one value per token bucket and per timing, for a median or a p90.
 type Stats struct {
+	// Input is the whole prompt: uncached input, cache read and cache write.
+	Input         float64 `json:"input"`
 	UncachedInput float64 `json:"uncached_input"`
 	CacheRead     float64 `json:"cache_read"`
 	CacheWrite    float64 `json:"cache_write"`
@@ -100,6 +102,7 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 		}
 		return out
 	}
+	input := columns(func(c inbound) int64 { return c.tokens.input() })
 	uncached := columns(func(c inbound) int64 { return c.tokens.UncachedInput })
 	cacheRead := columns(func(c inbound) int64 { return c.tokens.CacheRead })
 	cacheWrite := columns(func(c inbound) int64 { return c.tokens.CacheWrite })
@@ -114,7 +117,7 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 	}
 	stats := func(p float64) Stats {
 		return Stats{
-			UncachedInput: percentile(uncached, p), CacheRead: percentile(cacheRead, p),
+			Input: percentile(input, p), UncachedInput: percentile(uncached, p), CacheRead: percentile(cacheRead, p),
 			CacheWrite: percentile(cacheWrite, p), Output: percentile(output, p), Reasoning: percentile(reasoning, p),
 			LatencyMs: percentile(latency, p), TTFTMs: percentile(ttft, p),
 		}
@@ -130,8 +133,15 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 }
 
 // markers returns the first local day each client version, reported model
-// and reasoning effort appears in the range. Values already seen before From get no marker.
+// and reasoning effort appears in the range. Values already seen before From
+// get no marker, and neither does the first day the plugin recorded anything,
+// since every value is new on that day.
 func markers(db *sql.DB, f Filter) ([]Marker, error) {
+	first, err := dataSince(db)
+	if err != nil {
+		return nil, fmt.Errorf("markers: %w", err)
+	}
+	firstDay := f.bucketStart(first, dayMillis)
 	where, args := f.where(false)
 	out := []Marker{}
 	for _, mk := range markerKinds {
@@ -149,7 +159,9 @@ func markers(db *sql.DB, f Filter) ([]Marker, error) {
 				return nil, fmt.Errorf("markers %s scan: %w", mk.kind, err)
 			}
 			m.Kind, m.T = mk.kind, f.bucketStart(first, dayMillis)
-			out = append(out, m)
+			if m.T != firstDay {
+				out = append(out, m)
+			}
 		}
 		err = rows.Err()
 		rows.Close()

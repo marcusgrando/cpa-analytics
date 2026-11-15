@@ -162,7 +162,7 @@ func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 
 func TestIndexShowsProcessedTokensPerActiveDay(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`function tile(label, value, note)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
+	for _, want := range []string{`function tile(label, value, note, change)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -180,14 +180,48 @@ func TestIndexModelRowsCarryProvider(t *testing.T) {
 	}
 }
 
-// limits.js is tested by bun on its own and inlined into the page.
-func TestIndexInlinesLimitsScript(t *testing.T) {
+// The totals compare each figure with the period before it, when recording
+// covered that period, so a jump shows without opening the charts.
+func TestIndexComparesWithPreviousPeriod(t *testing.T) {
 	page := string(Index())
-	if strings.Contains(page, limitsPlaceholder) {
-		t.Error("limits.js placeholder was not replaced")
+	for _, want := range []string{
+		`recordedThrough(prevRange, prev.data_since)`,
+		`relativeChange(t.cost_usd, prev.cost_usd)`,
+		`relativeChange(t.requests, prev.requests)`,
+		`relativeChange(t.processed_tokens, prev.processed_tokens)`,
+		`pointChange(t.cache_hit_rate, prev.cache_hit_rate)`,
+		`id="t-cost-change"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
 	}
-	if !strings.Contains(page, "function poolWindow(members, now)") {
-		t.Error("page lacks the limits functions")
+}
+
+// Total input per request is the default drift measure: it moves when the
+// context grows, whether or not the cache absorbs it.
+func TestIndexDriftDefaultsToTotalInput(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`driftMetric: 'input'`, `<option value="input" selected>Input incl. cache</option>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+// limits.js and compare.js are tested by bun on their own and inlined into the page.
+func TestIndexInlinesScripts(t *testing.T) {
+	page := string(Index())
+	for placeholder, function := range map[string]string{
+		"/* limits.js */":  "function poolWindow(members, now)",
+		"/* compare.js */": "function relativeChange(current, previous)",
+	} {
+		if strings.Contains(page, placeholder) {
+			t.Errorf("%s placeholder was not replaced", placeholder)
+		}
+		if !strings.Contains(page, function) {
+			t.Errorf("page lacks %q", function)
+		}
 	}
 }
 

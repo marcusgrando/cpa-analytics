@@ -9,15 +9,27 @@ import (
 //go:embed index.html
 var page []byte
 
-// limits.js holds the Limits math as a plain script so bun can test it. The
-// page stays a single static file, so it is inlined at this placeholder.
-//
-//go:embed limits.js
-var limitsScript []byte
+// The Limits math and the period comparison live in plain scripts so bun can
+// test them. The page stays a single static file, so each is inlined at its
+// placeholder.
+var (
+	//go:embed limits.js
+	limitsScript []byte
+	//go:embed compare.js
+	compareScript []byte
+)
 
-const limitsPlaceholder = "/* limits.js */"
+var index = inline(page, map[string][]byte{
+	"/* limits.js */":  limitsScript,
+	"/* compare.js */": compareScript,
+})
 
-var index = bytes.Replace(page, []byte(limitsPlaceholder), limitsScript, 1)
+func inline(page []byte, scripts map[string][]byte) []byte {
+	for placeholder, script := range scripts {
+		page = bytes.Replace(page, []byte(placeholder), script, 1)
+	}
+	return page
+}
 
 // Index returns the dashboard page. It is static: data comes from the
 // authenticated management routes, never from the resource route.

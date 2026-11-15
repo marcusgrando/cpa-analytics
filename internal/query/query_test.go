@@ -175,6 +175,30 @@ func TestSummaryTotalsCountEveryRow(t *testing.T) {
 	}
 }
 
+// The page compares a period with the one before it only when recording had
+// started by then, so the summary reports when the data begins, whatever the
+// filter.
+func TestSummaryReportsWhenDataBegins(t *testing.T) {
+	s := seedDB(t)
+	f := rangeFilter()
+	f.Provider = "openai-compat"
+	sum, err := Summary(s.DB(), f, testPrices(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := day0.Add(10 * time.Hour).UnixMilli(); sum.DataSince != want {
+		t.Errorf("data since = %d, want %d (the first row of any provider)", sum.DataSince, want)
+	}
+	empty, err := store.Open(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Close()
+	if sum, err = Summary(empty.DB(), rangeFilter(), testPrices(t)); err != nil || sum.DataSince != 0 {
+		t.Errorf("empty database: data since = %d, err = %v, want 0", sum.DataSince, err)
+	}
+}
+
 func TestSummaryAppliesFilters(t *testing.T) {
 	s := seedDB(t)
 	f := rangeFilter()
@@ -269,6 +293,10 @@ func TestDriftMediansPerInboundRequest(t *testing.T) {
 	if p1.Requests != 2 || p1.Median.UncachedInput != 1000 || p1.Median.CacheRead != 2000 || p1.P90.CacheRead != 2800 {
 		t.Errorf("day1 = %+v", p1)
 	}
+	// Input is the whole prompt: t1 has 4000, t2 has 2000 across its two rows.
+	if p1.Median.Input != 3000 || p1.P90.Input != 3800 {
+		t.Errorf("day1 input median/p90 = %v/%v, want 3000/3800", p1.Median.Input, p1.P90.Input)
+	}
 	if !near(p1.CacheHitRate, 4000.0/6000.0) {
 		t.Errorf("day1 cache hit rate = %v", p1.CacheHitRate)
 	}
@@ -306,6 +334,24 @@ func TestDriftMarksFirstSeenValuesInRange(t *testing.T) {
 	}
 	if !keys["gpt-5"] || !keys["gpt-5.1"] || len(keys) != 2 {
 		t.Errorf("response_model keys = %v", keys)
+	}
+}
+
+// Everything is new on the first day the plugin recorded, so that day says
+// nothing about a change and gets no marker.
+func TestDriftSkipsMarkersOnTheFirstDayOfData(t *testing.T) {
+	s := seedDB(t)
+	d, err := Drift(s.DB(), Filter{From: day0, To: day4}, "response_model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range d.Markers {
+		if m.T == day0.UnixMilli() {
+			t.Errorf("marker on the first day of data: %+v", m)
+		}
+	}
+	if len(d.Markers) != 2 {
+		t.Errorf("markers = %+v, want the day 2 and day 3 changes", d.Markers)
 	}
 }
 

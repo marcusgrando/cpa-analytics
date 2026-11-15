@@ -55,6 +55,18 @@ type ProviderShare struct {
 type SummaryResult struct {
 	Totals    Totals          `json:"totals"`
 	Providers []ProviderShare `json:"providers"`
+	// DataSince is the first recorded row of any filter, in Unix milliseconds,
+	// or 0 with no rows. Before it nothing was recorded.
+	DataSince int64 `json:"data_since"`
+}
+
+// dataSince returns the first recorded row in Unix milliseconds, or 0 with no rows.
+func dataSince(db *sql.DB) (int64, error) {
+	var first sql.NullInt64
+	if err := db.QueryRow("SELECT MIN(requested_at) FROM requests").Scan(&first); err != nil {
+		return 0, fmt.Errorf("first row: %w", err)
+	}
+	return first.Int64, nil
 }
 
 // Summary returns totals and the per-provider cost share.
@@ -128,6 +140,9 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 		FROM requests WHERE `+where, args...).Scan(&res.Totals.Requests, &res.Totals.Sessions, &res.Totals.Failed)
 	if err != nil {
 		return SummaryResult{}, fmt.Errorf("summary counts: %w", err)
+	}
+	if res.DataSince, err = dataSince(db); err != nil {
+		return SummaryResult{}, err
 	}
 	if err := providerSessions(db, where, args, res.Providers); err != nil {
 		return SummaryResult{}, err

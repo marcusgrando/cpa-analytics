@@ -202,6 +202,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <h2 id="totals-title" class="sr-only">Totals</h2>
         <div class="hero-label">Cost, API estimate</div>
         <div id="t-cost" class="hero-value">-</div>
+        <div id="t-cost-change" class="hero-label"></div>
         <div id="t-tiles" class="tiles"></div>
         <div class="hero-label">Cost share by provider</div>
         <div id="t-providers"></div>
@@ -244,6 +245,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             </label>
             <label>Measure
               <select id="drift-metric">
+                <option value="input" selected>Input incl. cache</option>
                 <option value="uncached_input">Uncached input</option>
                 <option value="cache_read">Cache read</option>
                 <option value="cache_write">Cache write</option>
@@ -314,6 +316,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
 <script>
 /* limits.js */
+/* compare.js */
 </script>
 <script>
 'use strict';
@@ -327,7 +330,7 @@ const SERIES_SLOTS = 8;
 
 const state = {
   period: 7, provider: '', model: '', client: '', apiKey: '',
-  view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'uncached_input', driftStat: 'median', by: 'model',
+  view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', by: 'model',
 };
 let data = {};
 let managementKey = '';
@@ -639,10 +642,14 @@ function segmentedBar(container, parts, fmtValue) {
 
 /* ---------- views ---------- */
 
-function tile(label, value, note) {
+// change compares value with the previous period. Null leaves it out.
+function tile(label, value, note, change) {
   return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }),
-    note ? el('div', { class: 'note', text: note }) : null);
+    note ? el('div', { class: 'note', text: note }) : null,
+    change ? el('div', { class: 'note', text: change + ' vs previous' }) : null);
 }
+
+const periodName = () => (state.period <= 1 ? '24 hours' : state.period + ' days');
 
 // Average over the buckets that had traffic, so idle days do not dilute it.
 function perActiveBucket(total) {
@@ -653,15 +660,22 @@ function perActiveBucket(total) {
 
 function renderTotals() {
   const t = data.summary.totals;
+  // Without a fully recorded previous period every change is left out.
+  const prev = data.previous;
+  const change = (fn) => (prev ? fn() : null);
+  const perRequest = (x) => (x.requests > 0 ? x.cost_usd / x.requests : 0);
   document.getElementById('t-cost').textContent = fmtUSD(t.cost_usd);
+  const costChange = change(() => relativeChange(t.cost_usd, prev.cost_usd));
+  document.getElementById('t-cost-change').textContent = costChange ? costChange + ' vs the previous ' + periodName() : '';
   document.getElementById('t-tiles').replaceChildren(
-    tile('Requests', fmtCompact(t.requests)),
-    tile('Sessions', fmtCompact(t.sessions)),
-    tile('Cost per request', t.requests > 0 ? fmtUSD(t.cost_usd / t.requests) : '-'),
-    tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens)),
-    tile('Cache hit rate', fmtPct(t.cache_hit_rate)),
+    tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests))),
+    tile('Sessions', fmtCompact(t.sessions), '', change(() => relativeChange(t.sessions, prev.sessions))),
+    tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => relativeChange(perRequest(t), perRequest(prev)))),
+    tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens),
+      change(() => relativeChange(t.processed_tokens, prev.processed_tokens))),
+    tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null))),
     tile('Cache savings', fmtUSD(t.cache_savings_usd)),
-    tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning)),
+    tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning), '', change(() => relativeChange(t.output + t.reasoning, prev.output + prev.reasoning))),
     tile('Failed records', fmtCompact(t.failed)),
   );
   segmentedBar(document.getElementById('t-providers'),
@@ -853,10 +867,10 @@ function renderDrift() {
   });
   legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + state.driftGroup, s.key), label: s.key })), 'line');
   document.getElementById('drift-table').replaceChildren(table(
-    ['Day', 'Group', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit', 'Latency', 'TTFT'],
+    ['Day', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit', 'Latency', 'TTFT'],
     drift.points.map((p) => {
       const st = p[state.driftStat];
-      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write), fmtInt(st.output), fmtInt(st.reasoning), fmtPct(p.cache_hit_rate),
+      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write), fmtInt(st.output), fmtInt(st.reasoning), fmtPct(p.cache_hit_rate),
         fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-'];
     }),
   ));
@@ -1150,8 +1164,11 @@ async function loadUsage(current) {
   // Health renders even when the data routes fail, since that is when it explains why.
   const health = api('health').then((h) => { if (current()) renderHealth(h); });
   health.catch(() => {});
-  const [summary, daily, drift, breakdown, pricing] = await Promise.all([
+  // The previous period is fetched alongside and kept only if recording covered it.
+  const prevRange = previousPeriod(p);
+  const [summary, prev, daily, drift, breakdown, pricing] = await Promise.all([
     api('summary', p),
+    api('summary', { ...p, ...prevRange }),
     api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
     api('drift', { ...p, group: state.driftGroup }),
     api('breakdown', { ...p, by: state.by }),
@@ -1159,7 +1176,7 @@ async function loadUsage(current) {
   ]);
   await health;
   if (!current()) return;
-  data = { summary, daily, drift, breakdown, pricing };
+  data = { summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, breakdown, pricing };
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
   renderAll();
