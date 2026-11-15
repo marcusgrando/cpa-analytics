@@ -86,9 +86,17 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .hero-value { font-size: 48px; font-weight: 600; line-height: 1.1; }
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; margin: 16px 0 20px; }
 @media (min-width: 720px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.tile { display: flex; flex-direction: column; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { font-size: 22px; font-weight: 600; }
 .tile .note { color: var(--muted); font-size: 12px; }
+.tile .spark { margin-top: auto; padding-top: 6px; }
+.hero-spark { max-width: 320px; margin-top: 6px; }
+.spark-plot { position: relative; }
+.spark-plot svg { display: block; width: 100%; overflow: visible; }
+.spark-dot { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); transform: translate(-50%, -50%); pointer-events: none; }
+.chart svg.focusing .series:not(.focus) { opacity: 0.15; }
+.chart .end-label { fill: var(--ink-2); }
 .provider-name { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .chart { position: relative; width: 100%; }
 .chart svg { display: block; width: 100%; overflow: visible; }
@@ -212,6 +220,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="hero-label">Cost, API estimate</div>
         <div id="t-cost" class="hero-value">-</div>
         <div id="t-cost-change" class="hero-label"></div>
+        <div id="t-cost-trend" class="spark hero-spark"></div>
         <div id="t-tiles" class="tiles"></div>
         <div class="hero-label">Cost share by provider</div>
         <div id="t-providers"></div>
@@ -351,6 +360,8 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 /* compare.js */
 /* colors.js */
 /* tooltip.js */
+/* sparkline.js */
+/* endlabels.js */
 </script>
 <script>
 'use strict';
@@ -361,6 +372,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const DAY = 86400000;
 const HOUR = 3600000;
 const SERIES_SLOTS = 8;
+// END_LABELS caps the lines named at their end. Past four, converging lines crowd them.
+const END_LABELS = 4;
 
 const state = {
   period: 7, provider: '', model: '', client: '', apiKey: '',
@@ -585,11 +598,12 @@ function niceStep(max, count) {
 }
 
 // frame draws the y grid and x labels and returns the plot geometry.
-// minStep keeps count axes on whole numbers.
-function frame(container, xs, maxY, fmtY, fmtX, minStep = 0) {
+// minStep keeps count axes on whole numbers. right leaves room for labels at
+// the end of lines.
+function frame(container, xs, maxY, fmtY, fmtX, minStep = 0, right = 8) {
   const width = Math.max(280, container.clientWidth);
   const height = 240;
-  const m = { top: 22, right: 8, bottom: 24, left: 52 };
+  const m = { top: 22, right, bottom: 24, left: 52 };
   const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img' });
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
@@ -688,11 +702,41 @@ function segmentedBar(container, parts, fmtValue) {
 
 /* ---------- views ---------- */
 
-// change compares value with the previous period. Null leaves it out.
-function tile(label, value, note, change) {
+// change compares value with the previous period. Null leaves it out. trend,
+// when given, charts the value per bucket under it.
+function tile(label, value, note, change, trend) {
+  const spark = trend ? el('div', { class: 'spark' }) : null;
+  if (spark) drawTrend(spark, trend);
   return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }),
     note ? el('div', { class: 'note', text: note }) : null,
-    change ? el('div', { class: 'note', text: change + ' vs previous' }) : null);
+    change ? el('div', { class: 'note', text: change + ' vs previous' }) : null,
+    spark);
+}
+
+const SPARK_HEIGHT = 24;
+
+// drawTrend draws a sparkline in the de-emphasis gray with the latest bucket
+// marked. Hovering names the bucket and its value.
+function drawTrend(container, trend) {
+  const line = sparkline(trend.values, SPARK_HEIGHT, 3);
+  if (!line) { container.replaceChildren(); return; }
+  const svg = svgEl('svg', { viewBox: `0 0 100 ${SPARK_HEIGHT}`, preserveAspectRatio: 'none', height: SPARK_HEIGHT, 'aria-hidden': 'true' });
+  svg.append(svgEl('path', { d: line.d, fill: 'none', 'stroke-width': 1.5, 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke', style: 'stroke:var(--tone4)' }));
+  const plot = el('div', { class: 'spark-plot' }, svg, el('span', { class: 'spark-dot', style: `left:${line.end.x}%;top:${line.end.y}px` }));
+  plot.addEventListener('pointermove', (e) => {
+    const box = plot.getBoundingClientRect();
+    const i = Math.round(Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1) * (trend.values.length - 1));
+    const v = trend.values[i];
+    showTooltip(e, trend.fmtX(trend.xs[i]), [{ value: v === null ? '-' : trend.fmt(v), label: '' }]);
+  });
+  plot.addEventListener('pointerleave', hideTooltip);
+  container.replaceChildren(plot);
+}
+
+// cacheHitOf is a bucket's cache reads over its input, or null without input.
+function cacheHitOf(b) {
+  const input = (b.uncached_input || 0) + (b.cache_read || 0) + (b.cache_write || 0);
+  return input > 0 ? b.cache_read / input : null;
 }
 
 const periodName = () => (state.period <= 1 ? '24 hours' : state.period + ' days');
@@ -713,16 +757,24 @@ function renderTotals() {
   document.getElementById('t-cost').textContent = fmtUSD(t.cost_usd);
   const costChange = change(() => relativeChange(t.cost_usd, prev.cost_usd));
   document.getElementById('t-cost-change').textContent = costChange ? costChange + ' vs the previous ' + periodName() : '';
+  // Sessions and cache savings are not in the series, so their tiles have no trend.
+  const size = data.daily.bucket === 'hour' ? HOUR : DAY;
+  const xs = buckets(size);
+  const sums = sumBuckets(data.daily.points, xs);
+  const trend = (value, fmt) => ({ values: sums.map(value), xs, fmt, fmtX: size === HOUR ? fmtHour : fmtDay });
+  drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD));
   document.getElementById('t-tiles').replaceChildren(
-    tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests))),
+    tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact)),
     tile('Sessions', fmtCompact(t.sessions), '', change(() => relativeChange(t.sessions, prev.sessions))),
-    tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => relativeChange(perRequest(t), perRequest(prev)))),
+    tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => relativeChange(perRequest(t), perRequest(prev))),
+      trend((b) => (b.requests > 0 ? b.cost_usd / b.requests : null), fmtUSD)),
     tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens),
-      change(() => relativeChange(t.processed_tokens, prev.processed_tokens))),
-    tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null))),
+      change(() => relativeChange(t.processed_tokens, prev.processed_tokens)), trend((b) => (b.records ? totalTokens(b) : 0), fmtCompact)),
+    tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct)),
     tile('Cache savings', fmtUSD(t.cache_savings_usd)),
-    tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning), '', change(() => relativeChange(t.output + t.reasoning, prev.output + prev.reasoning))),
-    tile('Failed records', fmtCompact(t.failed)),
+    tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning), '', change(() => relativeChange(t.output + t.reasoning, prev.output + prev.reasoning)),
+      trend((b) => (b.output || 0) + (b.reasoning || 0), fmtCompact)),
+    tile('Failed records', fmtCompact(t.failed), '', null, trend((b) => b.failed || 0, fmtCompact)),
   );
   segmentedBar(document.getElementById('t-providers'),
     data.summary.providers.map((p) => ({
@@ -867,7 +919,9 @@ function renderDrift() {
     return;
   }
   const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.filter(driftPlotted).map(driftValue)));
-  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate ? 0 : 1);
+  // End labels need room to the right, so narrow charts keep the legend only.
+  const labelRoom = container.clientWidth >= 560 ? Math.min(160, Math.round(container.clientWidth * 0.2)) : 0;
+  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate ? 0 : 1, 8 + labelRoom);
   g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by day');
   const index = new Map(xs.map((t, i) => [t, i]));
   // Change markers: one hairline per day, values listed above it.
@@ -891,15 +945,32 @@ function renderDrift() {
     label.setAttribute('x', left);
     if (!fits(left, left + w)) label.remove();
   }
-  for (const s of shown) {
+  // One group per line, in legend order, so a legend entry can highlight it.
+  const lines = shown.map((s) => {
     const color = colorFor('drift:' + state.driftGroup, s.key);
     const pts = s.pts.filter((p) => index.has(p.t) && driftPlotted(p)).sort((a, b) => a.t - b.t);
+    const group = svgEl('g', { class: 'series' });
     if (pts.length > 1) {
       const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(driftValue(p))).join(' ');
-      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
+      group.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
     }
     for (const p of pts) {
-      g.svg.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(driftValue(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
+      group.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(driftValue(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
+    }
+    g.svg.append(group);
+    return { key: s.key, group, last: pts[pts.length - 1] };
+  });
+  if (labelRoom) {
+    // Only lines that reach the latest plotted day are named, at their end.
+    const lastT = Math.max(...lines.filter((l) => l.last).map((l) => l.last.t));
+    const ends = lines.filter((l) => l.last && l.last.t === lastT).map((l) => ({ key: l.key, y: g.y(driftValue(l.last)) }));
+    const named = new Set(endLabels(ends, END_LABELS, 14));
+    for (const l of lines) {
+      if (!named.has(l.key)) continue;
+      const label = svgEl('text', { x: g.x(index.get(lastT)) + 8, y: g.y(driftValue(l.last)) + 4, class: 'end-label', text: l.key });
+      l.group.append(label);
+      const room = g.width - label.getAttribute('x') - 4;
+      while (label.getComputedTextLength() > room && label.textContent.length > 4) label.textContent = label.textContent.slice(0, -2) + '…';
     }
   }
   hitColumns(g, xs, (i) => {
@@ -914,6 +985,15 @@ function renderDrift() {
     return { title, label: title, rows: rows.concat(marks) };
   });
   legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + state.driftGroup, s.key), label: s.key })), 'line');
+  [...document.getElementById('drift-legend').children].forEach((entry, i) => {
+    entry.tabIndex = 0;
+    const focus = () => { g.svg.classList.add('focusing'); lines[i].group.classList.add('focus'); };
+    const blur = () => { g.svg.classList.remove('focusing'); lines[i].group.classList.remove('focus'); };
+    entry.addEventListener('pointerenter', focus);
+    entry.addEventListener('focus', focus);
+    entry.addEventListener('pointerleave', blur);
+    entry.addEventListener('blur', blur);
+  });
   document.getElementById('drift-table').replaceChildren(table(
     ['Day', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit', 'Latency', 'TTFT'],
     drift.points.map((p) => {

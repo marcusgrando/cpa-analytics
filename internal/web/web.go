@@ -9,8 +9,9 @@ import (
 //go:embed index.html
 var page []byte
 
-// The Limits math, the period comparison, the provider colors and the
-// tooltip placement live in plain scripts so bun can test them. The page
+// The Limits math, the period comparison, the provider colors, the tooltip
+// placement, the sparklines and the line end labels live in plain scripts so
+// bun can test them. The page
 // stays a single static file, so each is inlined at its placeholder.
 var (
 	//go:embed limits.js
@@ -21,13 +22,19 @@ var (
 	colorsScript []byte
 	//go:embed tooltip.js
 	tooltipScript []byte
+	//go:embed sparkline.js
+	sparklineScript []byte
+	//go:embed endlabels.js
+	endLabelsScript []byte
 )
 
 var index = inline(page, map[string][]byte{
-	"/* limits.js */":  limitsScript,
-	"/* compare.js */": compareScript,
-	"/* colors.js */":  colorsScript,
-	"/* tooltip.js */": tooltipScript,
+	"/* limits.js */":    limitsScript,
+	"/* compare.js */":   compareScript,
+	"/* colors.js */":    colorsScript,
+	"/* tooltip.js */":   tooltipScript,
+	"/* sparkline.js */": sparklineScript,
+	"/* endlabels.js */": endLabelsScript,
 })
 
 func inline(page []byte, scripts map[string][]byte) []byte {

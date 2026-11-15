@@ -130,6 +130,13 @@ Copy (owner's request, 2026-11-15): each section explains itself in one or two s
 
 Tooltips on bar and column charts open beside the hovered column, flipping left at the viewport edge, so they never cover the marks they describe (owner's request, 2026-11-15). Other tooltips follow the pointer.
 
+Reading aids (owner's decision, 2026-11-15, from common dashboard practice):
+
+- The cost figure and every totals tile with a per-bucket value carry a sparkline of that value per day, or per hour in the 24-hour view, in the de-emphasis gray with the latest bucket marked. Sessions and cache savings have no per-bucket value in the series, so their tiles have none. The failed-records sparkline is the failure trend, so there is no separate failure chart.
+- The drift chart names up to four lines at their end, only lines that reach the latest plotted day, and drops a name that would sit within 14 px of a busier line's name instead of moving it away from its line. Charts narrower than 560 px keep the legend only. Hovering or focusing a legend entry dims the other lines.
+- Not built: a month-end cost forecast (the cost is an API estimate, and the weekly limit, which the Limits view already projects, is what constrains subscription accounts), a cost-per-1M-tokens trend per model (the drift view and model detail cover it), and an hour-by-weekday heatmap (no question needs it yet). Reopen the heatmap if the owner wants to plan usage around the limit windows.
+- Drift lines keep the categorical slots and never take the provider color, since several models of one provider would get hard-to-tell shades and the provider means nothing when grouping by client version or effort. Limits bars keep neutral fills with warning and critical for state. Claude orange sits between those two and would read as a state, and texture is only for accessibility or print, never a default fill.
+
 Views:
 
 1. Totals: API-estimate cost, requests, sessions, cost per request, processed tokens (with the average per active day, or per active hour in the 24-hour view), cache hit rate (cache read / total input), cache savings (cache reads priced as uncached input, minus their actual price), output including reasoning. Cost share by provider, with each provider's tokens and sessions. A session that used two providers counts once in each. Cost and tokens by token type (input, cache read, cache write, output), and cost by service tier. The tier split shows the premium paid over standard rates for priority calls and the discount for flex calls, since turning on a fast mode raises cost without changing any token count. Cost, requests, sessions, cost per request, processed tokens and output show their change against the previous period of the same length, and cache hit rate its change in percentage points. The change is left out when recording began inside that previous period (`data_since` in `summary`), since its partial totals would read as growth.
@@ -185,7 +192,7 @@ CPA keeps a session on one account, keyed by provider, session and model (`Pick`
 All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and the filters above. Invalid parameters return `400` with a JSON error naming the parameter. Database faults return `503` with a distinct error code.
 
 - `summary`: totals, cost by provider, token type and service tier, and `data_since`, the first recorded row of any filter.
-- `timeseries?bucket=day|hour&group=provider|model|client`: tokens and cost per bucket.
+- `timeseries?bucket=day|hour&group=provider|model|client`: tokens, cost, requests and failed records per bucket.
 - `drift?group=response_model|client_version|reasoning_effort`: medians and p90 per bucket, plus change markers.
 - `breakdown?by=model|client|day|api_key|reasoning_effort|account`
 - `health`

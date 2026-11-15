@@ -184,6 +184,9 @@ type Point struct {
 	Tokens
 	Records int64   `json:"records"`
 	CostUSD float64 `json:"cost_usd"`
+	// Requests and Failed count as Totals does.
+	Requests int64 `json:"requests"`
+	Failed   int64 `json:"failed"`
 }
 
 // Series answers the timeseries route.
@@ -231,6 +234,32 @@ func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string
 		pt.Tokens.add(r.tokens)
 		pt.Records += r.records
 		pt.CostUSD += r.cost
+	}
+	where, args := f.where(true)
+	counts, err := db.Query(`SELECT CAST(`+f.bucketSQL(size)+` AS TEXT), `+groupExpr+`,
+		COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END), COALESCE(SUM(failed), 0)
+		FROM requests WHERE `+where+` GROUP BY 1, 2`, args...)
+	if err != nil {
+		return Series{}, fmt.Errorf("timeseries counts: %w", err)
+	}
+	defer counts.Close()
+	for counts.Next() {
+		var bucketKey, key string
+		var requests, failed int64
+		if err := counts.Scan(&bucketKey, &key, &requests, &failed); err != nil {
+			return Series{}, fmt.Errorf("timeseries counts row: %w", err)
+		}
+		t, err := strconv.ParseInt(bucketKey, 10, 64)
+		if err != nil {
+			return Series{}, fmt.Errorf("timeseries counts bucket %q: %w", bucketKey, err)
+		}
+		// Both queries read the same rows, so every count has its point.
+		if pt := merged[pointKey{t, key}]; pt != nil {
+			pt.Requests, pt.Failed = requests, failed
+		}
+	}
+	if err := counts.Err(); err != nil {
+		return Series{}, fmt.Errorf("timeseries counts rows: %w", err)
 	}
 	s := Series{Bucket: bucket, Group: group, Points: make([]Point, 0, len(merged))}
 	for _, pt := range merged {

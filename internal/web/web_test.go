@@ -116,7 +116,7 @@ func TestIndexFollowsManagementCenterTheme(t *testing.T) {
 // step drew the labels 0, 1, 1, 2, 2, so count axes step by at least one.
 func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate ? 0 : 1)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
+	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -162,7 +162,7 @@ func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 
 func TestIndexShowsProcessedTokensPerActiveDay(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`function tile(label, value, note, change)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
+	for _, want := range []string{`function tile(label, value, note, change, trend)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -229,10 +229,12 @@ func TestIndexChartsWeeklyLimitValue(t *testing.T) {
 func TestIndexInlinesScripts(t *testing.T) {
 	page := string(Index())
 	for placeholder, function := range map[string]string{
-		"/* limits.js */":  "function poolWindow(members, now)",
-		"/* compare.js */": "function relativeChange(current, previous)",
-		"/* colors.js */":  "function providerPalette()",
-		"/* tooltip.js */": "function besideColumn(column, box, viewport, pointerY)",
+		"/* limits.js */":    "function poolWindow(members, now)",
+		"/* compare.js */":   "function relativeChange(current, previous)",
+		"/* colors.js */":    "function providerPalette()",
+		"/* tooltip.js */":   "function besideColumn(column, box, viewport, pointerY)",
+		"/* sparkline.js */": "function sparkline(values, height, pad)",
+		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)
@@ -414,5 +416,38 @@ func TestIndexFoldsDriftChangesIntoDetails(t *testing.T) {
 func TestIndexEmptyStatesNameNoPluginVersion(t *testing.T) {
 	if strings.Contains(string(Index()), "from plugin 0.1.11") || strings.Contains(string(Index()), "from 0.1.11 on") {
 		t.Errorf("empty states still name the plugin version that started recording")
+	}
+}
+
+// Each totals tile that has a value per bucket charts it under the number.
+// Sessions and cache savings have no per-bucket value in the series.
+func TestIndexChartsTotalsPerBucket(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`<div id="t-cost-trend" class="spark hero-spark"></div>`,
+		"tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact))",
+		"tile('Failed records', fmtCompact(t.failed), '', null, trend((b) => b.failed || 0, fmtCompact))",
+		"tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct))",
+		"sumBuckets(data.daily.points, xs)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+// The drift chart names the busiest lines at their end and highlights a line
+// while its legend entry is hovered or focused.
+func TestIndexLabelsAndHighlightsDriftLines(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		"endLabels(ends, END_LABELS, 14)",
+		".chart svg.focusing .series:not(.focus) { opacity: 0.15; }",
+		"entry.addEventListener('pointerenter', focus)",
+		"entry.addEventListener('focus', focus)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
 	}
 }

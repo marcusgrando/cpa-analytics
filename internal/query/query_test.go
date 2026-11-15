@@ -243,6 +243,33 @@ func TestTimeseriesByDayAndProvider(t *testing.T) {
 	}
 }
 
+// The totals tiles chart requests and failures per bucket, so each point
+// carries them, counted the way summary counts them.
+func TestTimeseriesCountsRequestsAndFailures(t *testing.T) {
+	s := seedDB(t)
+	failed := store.Row{RequestID: "f1", TraceID: "tf1", RequestedAt: day2.Add(12 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5",
+		Generate: true, Failed: true, ClientName: "codex", ClientVersion: "0.130.0"}
+	if err := s.InsertBatch([]store.Row{failed}); err != nil {
+		t.Fatal(err)
+	}
+	ts, err := Timeseries(s.DB(), rangeFilter(), testPrices(t), "day", "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type counts struct{ requests, failed int64 }
+	want := map[string]counts{
+		fmt.Sprint(day1.UnixMilli(), "codex"):         {2, 0},
+		fmt.Sprint(day2.UnixMilli(), "codex"):         {3, 1},
+		fmt.Sprint(day3.UnixMilli(), "openai-compat"): {2, 0},
+	}
+	for _, pt := range ts.Points {
+		got := counts{pt.Requests, pt.Failed}
+		if w := want[fmt.Sprint(pt.T, pt.Key)]; got != w {
+			t.Errorf("%s on %s = %+v, want %+v", pt.Key, time.UnixMilli(pt.T).UTC().Format("01-02"), got, w)
+		}
+	}
+}
+
 func TestTimeseriesBucketsInLocalDays(t *testing.T) {
 	s := seedDB(t)
 	f := rangeFilter()
