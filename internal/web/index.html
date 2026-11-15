@@ -923,7 +923,7 @@ async function readClaude(account) {
     if (profile) claudeProfiles.set(account.auth_index, profile);
   }
   const weight = claudeWeight(profile);
-  return { windows: parseClaudeUsage(usage), weight, plan: CLAUDE_PLANS[weight] || '' };
+  return { windows: parseClaudeUsage(usage), weight, plan: CLAUDE_PLANS[weight] || '', spend: parseClaudeSpend(usage) };
 }
 
 async function readCodex(account) {
@@ -961,6 +961,18 @@ async function loadLimits(current) {
 const accountName = (a) => a.label || a.email || a.name || a.auth_index;
 const fmtWhen = (t) => new Date(t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtShare = (v) => Math.round(v) + '%';
+function fmtMoney(amount, currency) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
+  } catch (_) {
+    return amount.toFixed(2) + ' ' + currency;
+  }
+}
+function fmtSpend(r) {
+  const { used, limit, currency } = r.spend;
+  const amount = limit === null ? fmtMoney(used, currency) : `${fmtMoney(used, currency)} of ${fmtMoney(limit, currency)}`;
+  return `${accountName(r.account)} ${amount}` + (limit !== null && used >= limit ? ' (limit reached)' : '');
+}
 const PACE = {
   ahead: { color: 'var(--warning)', label: 'Ahead of pace' },
   on: { color: 'var(--good)', label: 'On pace' },
@@ -1027,6 +1039,7 @@ function renderLimits() {
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
       ...list.map((p) => renderPool(p, byAccount, now)),
+      ok.some((r) => r.spend) ? el('p', { class: 'sub', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
       ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` })),
       ok.length ? el('details', {}, el('summary', { text: 'Accounts' }), el('div', { class: 'table-wrap' }, table(
         ['Account', 'Plan', ...list.map((p) => p.label)],

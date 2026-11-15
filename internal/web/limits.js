@@ -54,6 +54,22 @@ function parseClaudeUsage(body) {
   return windows;
 }
 
+// parseClaudeSpend returns the extra usage bought past the plan limits, in
+// major currency units, or null when extra usage is off. `spend` is the newer
+// field; `extra_usage` carries the same amounts in older responses.
+function parseClaudeSpend(body) {
+  const spend = body && body.spend;
+  if (spend) {
+    if (!spend.enabled || !spend.used) return null;
+    const major = (m) => Number(m.amount_minor) / 10 ** Number(m.exponent);
+    return { used: major(spend.used), limit: spend.limit ? major(spend.limit) : null, currency: spend.used.currency };
+  }
+  const extra = body && body.extra_usage;
+  if (!extra || !extra.is_enabled) return null;
+  const major = (v) => Number(v) / 10 ** Number(extra.decimal_places);
+  return { used: major(extra.used_credits), limit: extra.monthly_limit == null ? null : major(extra.monthly_limit), currency: extra.currency };
+}
+
 function codexWindow(raw) {
   const lengthMs = Number(raw.limit_window_seconds) * 1000;
   const resetsAt = Number(raw.reset_at) > 0 ? Number(raw.reset_at) * 1000 : null;
@@ -161,5 +177,5 @@ async function mapLimit(items, limit, fn) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration };
+  module.exports = { claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend };
 }

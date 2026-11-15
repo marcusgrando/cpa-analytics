@@ -3,7 +3,7 @@
 // on 2026-11-15, trimmed to the fields the page reads.
 import { describe, expect, test } from 'bun:test';
 import {
-  claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration,
+  claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
 } from './limits.js';
 
 const HOUR = 3600000;
@@ -244,4 +244,28 @@ test('durations round before they are split into units', () => {
   expect(fmtDuration(DAY + 23 * HOUR + 40 * 60000)).toBe('2 d 0 h');
   expect(fmtDuration(20000)).toBe('1 min');
   expect(fmtDuration(3 * DAY + 9 * HOUR + 10 * 60000)).toBe('3 d 9 h');
+});
+
+describe('Claude extra usage', () => {
+  const money = (amount) => ({ amount_minor: amount, currency: 'USD', exponent: 2 });
+
+  test('spend is read in major units', () => {
+    const body = { spend: { used: money(50000), limit: money(50000), percent: 100, enabled: true } };
+    expect(parseClaudeSpend(body)).toEqual({ used: 500, limit: 500, currency: 'USD' });
+  });
+
+  test('spend without a limit has no limit', () => {
+    expect(parseClaudeSpend({ spend: { used: money(1234), limit: null, enabled: true } })).toEqual({ used: 12.34, limit: null, currency: 'USD' });
+  });
+
+  test('disabled extra usage reads as none', () => {
+    expect(parseClaudeSpend({ spend: { used: money(0), limit: null, enabled: false } })).toBeNull();
+    expect(parseClaudeSpend({ extra_usage: { is_enabled: false, used_credits: null } })).toBeNull();
+    expect(parseClaudeSpend({})).toBeNull();
+  });
+
+  test('extra_usage is read when spend is missing', () => {
+    const body = { extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 1234.0, currency: 'USD', decimal_places: 2 } };
+    expect(parseClaudeSpend(body)).toEqual({ used: 12.34, limit: 500, currency: 'USD' });
+  });
 });
