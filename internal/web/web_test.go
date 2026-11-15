@@ -232,6 +232,7 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* limits.js */":  "function poolWindow(members, now)",
 		"/* compare.js */": "function relativeChange(current, previous)",
 		"/* colors.js */":  "function providerPalette()",
+		"/* tooltip.js */": "function besideColumn(column, box, viewport, pointerY)",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)
@@ -385,5 +386,33 @@ func TestIndexMutedTextClearsContrast(t *testing.T) {
 func TestIndexJoinsMetaWithoutMiddleDots(t *testing.T) {
 	if strings.Contains(string(Index()), "·") {
 		t.Error("page joins text with middle dots")
+	}
+}
+
+// A chart column's tooltip opens beside the column, so it never hides the
+// points of the day it describes.
+func TestIndexOpensColumnTooltipBesideTheColumn(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{"showTooltip(e, info.title, info.rows, hit.getBoundingClientRect())", "besideColumn(column, box, { width: window.innerWidth, height: window.innerHeight }"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestIndexFoldsDriftChangesIntoDetails(t *testing.T) {
+	page := string(Index())
+	want := `<details id="drift-changes" hidden><summary id="drift-changes-summary"></summary><ul id="drift-markers" class="markers"></ul></details>`
+	if !strings.Contains(page, want) {
+		t.Errorf("drift change list is not folded into a details element")
+	}
+	if !strings.Contains(page, "`Changes (${drift.markers.length})`") {
+		t.Errorf("drift changes summary does not count the changes")
+	}
+}
+
+func TestIndexEmptyStatesNameNoPluginVersion(t *testing.T) {
+	if strings.Contains(string(Index()), "from plugin 0.1.11") || strings.Contains(string(Index()), "from 0.1.11 on") {
+		t.Errorf("empty states still name the plugin version that started recording")
 	}
 }

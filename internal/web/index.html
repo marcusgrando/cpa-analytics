@@ -202,7 +202,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
     <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
       <h2 id="limits-title">Subscription limits</h2>
-      <p class="sub">For each window, the top bar pools the accounts in CPA, weighted by plan when every plan is known. Each account below is shown against its own limit. The tick marks where usage would be if it were spread evenly over the window.</p>
+      <p class="sub">The top bar pools every account, weighted by plan. Each row below is one account against its own limit. The tick marks an even pace.</p>
       <div id="limits-body"></div>
     </section>
 
@@ -242,7 +242,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="drift-title">Per request</h2>
-            <p class="sub">Per request (one HTTP request or WebSocket turn), daily. Vertical lines mark the first day a client version, reported model or reasoning effort appears.</p>
+            <p class="sub">Daily, per upstream call. A vertical line marks the first day of a new client version, model or reasoning effort.</p>
           </div>
           <div class="controls">
             <label>Group by
@@ -274,13 +274,13 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div id="drift-chart" class="chart"></div>
         <div id="drift-legend" class="legend"></div>
         <p id="drift-note" class="notice"></p>
-        <ul id="drift-markers" class="markers"></ul>
+        <details id="drift-changes" hidden><summary id="drift-changes-summary"></summary><ul id="drift-markers" class="markers"></ul></details>
         <details><summary>Table</summary><div id="drift-table" class="table-wrap"></div></details>
       </section>
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
-        <p class="sub">API-priced cost per 1% of each account's weekly limit, per day, from the limit usage Claude and Codex report on every response. For the same kind of work, a lower value means the provider tightened the limit. Days on which an account's weekly usage moved less than 1% are left out. Each account counts all its traffic, whatever the model, client or API key filter.</p>
+        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day. For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
         <div id="burn-chart" class="chart"></div>
         <div id="burn-legend" class="legend"></div>
         <p id="burn-note" class="sub"></p>
@@ -289,14 +289,14 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
       <section id="leftover" class="card" aria-labelledby="leftover-title">
         <h2 id="leftover-title">Quota left at reset</h2>
-        <p class="sub">What each Claude and Codex account had not used of its weekly limit when a cycle ended in this range, priced at what that cycle's own traffic paid per 1%. Unused quota does not carry over. A cycle ends early when a new one begins before the reset, as when a banked Codex reset is redeemed.</p>
+        <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. It does not carry over. Early means a new cycle began before the reset.</p>
         <p id="leftover-total" class="hero-label"></p>
         <div id="leftover-table" class="table-wrap"></div>
       </section>
 
       <section id="affinity" class="card" aria-labelledby="affinity-title">
         <h2 id="affinity-title">Account affinity</h2>
-        <p class="sub">CPA keeps each session and model on one account, since the prompt cache belongs to the account. When a call lands on another account, it writes its cache again. Sessions here are session and model pairs with two or more calls.</p>
+        <p class="sub">The prompt cache lives on the account, so a session that moves to another account writes its cache again. Counts session and model pairs with two or more calls.</p>
         <div id="affinity-table" class="table-wrap"></div>
       </section>
 
@@ -304,7 +304,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="daily-title">Usage over time</h2>
-            <p class="sub">Every record, stacked by provider.</p>
+            <p class="sub">Stacked by provider.</p>
           </div>
           <div class="seg" role="group" aria-label="Measure">
             <button type="button" data-daily="cost" aria-pressed="true">Cost</button>
@@ -320,7 +320,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="breakdown-title">Breakdown</h2>
-            <p class="sub">Select a model or client to filter the whole page by it.</p>
+            <p class="sub">Select a model or client to filter the page.</p>
           </div>
           <div class="seg" role="group" aria-label="Break down by">
             <button type="button" data-by="model" aria-pressed="true">Model</button>
@@ -336,7 +336,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
       <section id="quality" class="card" aria-labelledby="quality-title">
         <h2 id="quality-title">Cost quality</h2>
-        <p class="sub">Where each token's price came from. Unpriced tokens add nothing to the estimate.</p>
+        <p class="sub">Where each token's price came from. Unpriced tokens count as $0.</p>
         <div id="q-bar"></div>
         <div id="q-models"></div>
         <p id="q-pricing" class="notice"></p>
@@ -350,6 +350,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 /* limits.js */
 /* compare.js */
 /* colors.js */
+/* tooltip.js */
 </script>
 <script>
 'use strict';
@@ -547,7 +548,8 @@ function colorFor(space, key) {
 
 const tooltip = document.getElementById('tooltip');
 
-function showTooltip(event, title, rows) {
+// showTooltip follows the pointer, or opens beside column when one is given.
+function showTooltip(event, title, rows, column) {
   tooltip.replaceChildren(el('div', { class: 'title', text: title }));
   for (const row of rows) {
     tooltip.append(el('div', { class: 'row' },
@@ -557,14 +559,17 @@ function showTooltip(event, title, rows) {
   tooltip.hidden = false;
   const box = tooltip.getBoundingClientRect();
   let x, y;
-  if (event.clientX !== undefined && event.type.startsWith('pointer')) {
+  if (column) {
+    const pointerY = event.type.startsWith('pointer') ? event.clientY : column.top + column.height / 2;
+    ({ x, y } = besideColumn(column, box, { width: window.innerWidth, height: window.innerHeight }, pointerY));
+  } else if (event.clientX !== undefined && event.type.startsWith('pointer')) {
     x = event.clientX + 14; y = event.clientY + 14;
   } else {
     const r = event.target.getBoundingClientRect();
     x = r.right + 8; y = r.top;
   }
-  if (x + box.width > window.innerWidth - 8) x = Math.max(8, x - box.width - 28);
-  if (y + box.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - box.height - 8);
+  if (!column && x + box.width > window.innerWidth - 8) x = Math.max(8, x - box.width - 28);
+  if (!column && y + box.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - box.height - 8);
   tooltip.style.left = x + 'px';
   tooltip.style.top = y + 'px';
 }
@@ -635,7 +640,7 @@ function hitColumns(g, xs, onShow) {
     const show = (e) => {
       const info = onShow(i);
       hit.setAttribute('fill', 'var(--wash)');
-      showTooltip(e, info.title, info.rows);
+      showTooltip(e, info.title, info.rows, hit.getBoundingClientRect());
     };
     const hide = () => { hit.setAttribute('fill', 'transparent'); hideTooltip(); };
     hit.addEventListener('pointermove', show);
@@ -850,9 +855,11 @@ function renderDrift() {
     .sort((a, b) => b.n - a.n);
   const shown = ranked.slice(0, SERIES_SLOTS);
   document.getElementById('drift-note').textContent = ranked.length > shown.length
-    ? `${ranked.length - shown.length} smaller groups are hidden. Filter by provider, model or client to see them.` : '';
+    ? `${ranked.length - shown.length} smaller groups are hidden. Filter the page to see them.` : '';
   const markersList = document.getElementById('drift-markers');
   markersList.replaceChildren(...drift.markers.map((mk) => el('li', { text: `${fmtDay(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}` })));
+  document.getElementById('drift-changes').hidden = !drift.markers.length;
+  document.getElementById('drift-changes-summary').textContent = `Changes (${drift.markers.length})`;
   if (!drift.points.length) {
     container.replaceChildren(el('div', { class: 'empty', text: 'No generating requests in this range' }));
     document.getElementById('drift-legend').replaceChildren();
@@ -935,13 +942,13 @@ function renderBurn() {
   const points = data.burn.points;
   const note = document.getElementById('burn-note');
   if (!points.length) {
-    container.replaceChildren(el('div', { class: 'empty', text: 'No account used 1% of its weekly limit on any day in this range. Limit usage is recorded from plugin 0.1.11 on.' }));
+    container.replaceChildren(el('div', { class: 'empty', text: 'No account used 1% of its weekly limit on any day in this range.' }));
     document.getElementById('burn-legend').replaceChildren();
     document.getElementById('burn-table').replaceChildren();
     note.textContent = '';
     return;
   }
-  note.textContent = points.some((p) => p.unpriced_tokens > 0) ? 'Some tokens have no price, so the values that include them are understated.' : '';
+  note.textContent = points.some((p) => p.unpriced_tokens > 0) ? 'Some tokens have no price, so these values are low.' : '';
   const xs = buckets(DAY);
   const index = new Map(xs.map((t, i) => [t, i]));
   const accounts = [...new Set(points.map((p) => p.auth_index))];
@@ -980,14 +987,14 @@ function renderLeftover() {
   const container = document.getElementById('leftover-table');
   if (!cycles.length) {
     total.textContent = '';
-    container.replaceChildren(el('div', { class: 'empty', text: 'No weekly cycle has ended in this range yet. Each account shows up here after its weekly reset, with the part of its limit it left unused. Limit usage is recorded from plugin 0.1.11 on.' }));
+    container.replaceChildren(el('div', { class: 'empty', text: 'No weekly cycle ended in this range. An account appears here after its weekly reset.' }));
     return;
   }
   const priced = cycles.filter((c) => c.usd_per_pct > 0);
   const lost = priced.reduce((s, c) => s + c.left_usd, 0);
   const unpriced = cycles.length - priced.length;
   total.textContent = `${fmtUSD(lost)} of quota left unused at API prices, over ${cycles.length} cycle${cycles.length === 1 ? '' : 's'}` +
-    (unpriced ? `. ${unpriced} cycle${unpriced === 1 ? '' : 's'} moved less than 1% through CPA, so ${unpriced === 1 ? 'its' : 'their'} unused part has no price.` : '.');
+    (unpriced ? `. ${unpriced} had too little traffic to price.` : '.');
   container.replaceChildren(table(
     ['Cycle ended', 'Account', 'Provider', 'Used', 'Left', 'Per 1%', 'Left, at API prices', 'Last reading'],
     cycles.map((c) => [fmtStamp(c.ended_at) + (c.early ? ' (early)' : ''), burnAccountName(c.auth_index), c.provider, fmtShare(c.used_pct), fmtShare(c.left_pct),
@@ -999,7 +1006,7 @@ function renderAffinity() {
   const rows = data.affinity.providers;
   const container = document.getElementById('affinity-table');
   if (!rows.length) {
-    container.replaceChildren(el('div', { class: 'empty', text: 'No calls named both a session and an account in this range. The account is recorded from plugin 0.1.11 on.' }));
+    container.replaceChildren(el('div', { class: 'empty', text: 'No call in this range recorded both a session and an account.' }));
     return;
   }
   container.replaceChildren(table(
@@ -1059,7 +1066,7 @@ function renderQuality() {
   const models = document.getElementById('q-models');
   const lists = [];
   if (data.pricing.unpriced.length) {
-    lists.push(el('p', { class: 'notice', text: 'Unpriced models. Add them to price_overrides in the plugin config:' }),
+    lists.push(el('p', { class: 'notice', text: 'Unpriced models. Add them to price_overrides in the plugin config.' }),
       table(['Model', 'Tokens'], data.pricing.unpriced.map((m) => [m.model, fmtInt(m.tokens)])));
   }
   if (data.pricing.overridden.length) {
@@ -1276,7 +1283,7 @@ function drawTrends() {
 function weeklyTrend(pool, byAccount, readings, now) {
   const pointsOf = new Map(readings.map((a) => [a.auth_index, a.points]));
   if (!pool.members.some((m) => (pointsOf.get(m.account) || []).length)) {
-    return el('p', { class: 'sub', text: 'No recorded readings yet. The plugin records weekly limit usage from the traffic it proxies, from 0.1.11 on.' });
+    return el('p', { class: 'sub', text: 'No readings yet. They are recorded from the traffic CPA proxies.' });
   }
   const members = pool.members.map((m) => ({
     account: m.account, weight: m.weight, lengthMs: m.lengthMs, points: withLiveReading(pointsOf.get(m.account) || [], m, now),
@@ -1306,7 +1313,7 @@ function weeklyTrend(pool, byAccount, readings, now) {
   return el('div', {}, stats, chart,
     el('div', { class: 'legend' },
       el('span', {}, el('span', { class: 'key-line', style: 'background:var(--tone1)' }), 'Recorded'),
-      el('span', {}, el('span', { class: 'key-line dashed' }), `Projected at each account's rate over the last 24 h`)));
+      el('span', {}, el('span', { class: 'key-line dashed' }), `Projected at each account's last 24 h rate`)));
 }
 
 // trendChart draws pool usage over time: recorded up to now, projected after.
