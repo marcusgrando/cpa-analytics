@@ -61,3 +61,17 @@ func TestTracesIgnoreEmptyTrace(t *testing.T) {
 		t.Fatal("empty trace found")
 	}
 }
+
+// A WebSocket connection keeps one trace for every turn, so each lookup
+// restarts the TTL. A session with turns less than a TTL apart stays joined.
+func TestTracesTakeRestartsTTL(t *testing.T) {
+	now := time.Unix(1000, 0)
+	tr := NewTraces(10*time.Minute, 10, func() time.Time { return now })
+	tr.Put("ws", "codex_cli_rs/1.0.0")
+	for i := 0; i < 3; i++ {
+		now = now.Add(9 * time.Minute)
+		if _, ok := tr.Take("ws"); !ok {
+			t.Fatalf("turn %d after %v lost the trace", i, 9*time.Minute*time.Duration(i+1))
+		}
+	}
+}

@@ -126,6 +126,8 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
     <p id="key-error" class="error" role="alert"></p>
   </form>
 
+  <p id="load-error" class="error" role="alert"></p>
+
   <main id="app" hidden>
     <div class="filters" role="group" aria-label="Filters">
       <label>Period
@@ -141,7 +143,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <label>Client <select id="f-client"><option value="">All clients</option></select></label>
       <label>API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
     </div>
-    <p id="load-error" class="error" role="alert"></p>
 
     <div class="grid">
       <section id="totals" class="card" aria-labelledby="totals-title">
@@ -222,6 +223,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             <button type="button" data-by="model" aria-pressed="true">Model</button>
             <button type="button" data-by="client" aria-pressed="false">Client</button>
             <button type="button" data-by="day" aria-pressed="false">Day</button>
+            <button type="button" data-by="api_key" aria-pressed="false">API key</button>
           </div>
         </div>
         <div id="breakdown-table" class="table-wrap"></div>
@@ -690,10 +692,17 @@ function renderBreakdown() {
       const name = key.split('/')[0];
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by client ' + name, onclick: () => setFilter('client', name) });
     }
+    if (b.by === 'api_key') {
+      if (!key) return 'no key';
+      return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by this API key', onclick: () => {
+        document.getElementById('f-apikey').value = key;
+        setFilter('apiKey', key);
+      } });
+    }
     return key;
   };
   container.replaceChildren(table(
-    [b.by === 'day' ? 'Day' : b.by === 'client' ? 'Client' : 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
+    [{ day: 'Day', client: 'Client', api_key: 'API key hash' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
     b.rows.map((r) => [keyCell(r.key), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
       fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
       fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
@@ -786,20 +795,22 @@ async function guarded(work) {
 function refresh() {
   return guarded(async (current) => {
     const p = filterParams();
-    const [summary, daily, drift, breakdown, pricing, health] = await Promise.all([
+    // Health renders even when the data routes fail, since that is when it explains why.
+    const health = api('health').then((h) => { if (current()) renderHealth(h); });
+    health.catch(() => {});
+    const [summary, daily, drift, breakdown, pricing] = await Promise.all([
       api('summary', p),
       api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
       api('drift', { ...p, group: state.driftGroup }),
       api('breakdown', { ...p, by: state.by }),
       api('pricing', p),
-      api('health'),
     ]);
+    await health;
     if (!current()) return;
     data = { summary, daily, drift, breakdown, pricing };
     document.getElementById('key-form').hidden = true;
     document.getElementById('app').hidden = false;
     document.getElementById('change-key').hidden = false;
-    renderHealth(health);
     renderAll();
     await loadOptions();
   });
@@ -839,7 +850,7 @@ for (const name of ['provider', 'model', 'client']) {
 }
 document.getElementById('f-apikey').addEventListener('change', (e) => {
   const v = e.target.value.trim().toLowerCase();
-  e.target.setCustomValidity(/^[0-9a-f]{0,12}$/.test(v) ? '' : 'Use the 12 hex characters shown in the breakdown or logs.');
+  e.target.setCustomValidity(/^([0-9a-f]{12})?$/.test(v) ? '' : 'Use the 12 hex characters from the API key breakdown.');
   if (!e.target.reportValidity()) return;
   state.apiKey = v;
   refresh();

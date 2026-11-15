@@ -36,3 +36,10 @@ func TestIndexKeepsKeyInSessionStorage(t *testing.T) {
 		t.Error("page must never write the key to localStorage")
 	}
 }
+
+// The API key filter takes a hash, so the page must offer the breakdown that lists them.
+func TestIndexOffersAPIKeyBreakdown(t *testing.T) {
+	if !strings.Contains(string(Index()), `data-by="api_key"`) {
+		t.Error("page has no API key breakdown")
+	}
+}

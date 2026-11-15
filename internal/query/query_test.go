@@ -383,3 +383,58 @@ func TestQueriesFailOnClosedDB(t *testing.T) {
 		t.Errorf("drift err = %v, want a storage error", err)
 	}
 }
+
+// A request whose attempts all failed carries no tokens. Counting it would
+// drag the medians toward zero during an outage that is neither a client nor
+// a model change.
+func TestDriftSkipsFailedRequests(t *testing.T) {
+	s := seedDB(t)
+	failed := []store.Row{
+		{RequestID: "f1", TraceID: "tf1", RequestedAt: day1.Add(12 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5",
+			Generate: true, Failed: true, ClientName: "codex", ClientVersion: "0.129.0"},
+		{RequestID: "f2", TraceID: "tf2", RequestedAt: day1.Add(13 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5",
+			Generate: true, Failed: true, ClientName: "codex", ClientVersion: "0.129.0"},
+	}
+	if err := s.InsertBatch(failed); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pt := range d.Points {
+		if time.UnixMilli(pt.T).UTC().Format("01-02") == "11-10" && (pt.Requests != 2 || pt.Median.UncachedInput != 1000) {
+			t.Errorf("day1 with failed requests = %+v, want the two successful requests only", pt)
+		}
+	}
+	b, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range b.Rows {
+		if r.Key == "codex/0.129.0" && (r.Records != 6 || r.Requests != 2) {
+			t.Errorf("breakdown row = %+v, want 6 records and 2 successful requests", r)
+		}
+	}
+}
+
+// The API key filter takes a hash, so the breakdown must list the hashes.
+func TestBreakdownByAPIKey(t *testing.T) {
+	s := seedDB(t)
+	extra := store.Row{RequestID: "k1", TraceID: "tk1", RequestedAt: day2.Add(time.Hour).UnixMilli(), Provider: "codex",
+		Model: "gpt-5", Generate: true, APIKeyHash: "def456def456", UncachedInput: 10}
+	if err := s.InsertBatch([]store.Row{extra}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "api_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]int64{}
+	for _, r := range b.Rows {
+		keys[r.Key] = r.Records
+	}
+	if len(keys) != 2 || keys["abc123"] != 9 || keys["def456def456"] != 1 {
+		t.Errorf("api key rows = %+v", b.Rows)
+	}
+}

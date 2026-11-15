@@ -45,9 +45,11 @@ func ParseConfig(raw []byte) (Config, error) {
 		if strings.TrimSpace(model) == "" {
 			return Config{}, fmt.Errorf("price_overrides has an empty model name")
 		}
-		if o.Input < 0 || o.Output < 0 || o.CacheRead < 0 || o.CacheWrite < 0 {
+		if o.Input < 0 || o.Output < 0 || negative(o.CacheRead) || negative(o.CacheWrite) {
 			return Config{}, fmt.Errorf("price_overrides.%s has a negative price", model)
 		}
 	}
 	return cfg, nil
 }
+
+func negative(price *float64) bool { return price != nil && *price < 0 }

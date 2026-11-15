@@ -182,8 +182,8 @@ type BreakdownResult struct {
 	Rows []BreakdownRow `json:"rows"`
 }
 
-// Breakdown returns one row per model, client version or day. Days are
-// sorted by date, the others by cost.
+// Breakdown returns one row per model, client version, day or API key hash.
+// Days are sorted by date, the others by cost.
 func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (BreakdownResult, error) {
 	var keyExpr string
 	switch by {
@@ -193,8 +193,10 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 		keyExpr = clientExpr
 	case "day":
 		keyExpr = f.bucketSQL(dayMillis)
+	case "api_key":
+		keyExpr = "api_key_hash"
 	default:
-		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client or day"}
+		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day or api_key"}
 	}
 	rows, err := aggregate(db, f, table, keyExpr)
 	if err != nil {

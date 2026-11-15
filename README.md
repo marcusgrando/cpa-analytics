@@ -55,14 +55,13 @@ plugins:
     cpa-analytics:
       enabled: true
       db_path: "/CLIProxyAPI/data/cpa-analytics.db"
-      retention_days: 180        # 0 keeps everything. Pruning runs at start and then daily.
+      retention_days: 180        # 0 keeps everything. Pruning runs at start, on reconfigure and then daily.
       pricing_url: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
       price_overrides:           # USD per one million tokens
         my-internal-model:
           input: 1.25
           output: 10
-          cache_read: 0.125
-          cache_write: 0
+          cache_read: 0.125        # left out: priced like input. 0: free.
 ```
 
 Invalid values (negative retention or prices, a non-http(s) `pricing_url`) make registration fail with an error naming the field.
@@ -77,7 +76,7 @@ http://<cpa-host>:<port>/v0/resource/plugins/cpa-analytics/dashboard
 
 The page itself holds no data. It reads every number from the management routes below with your management key. Inside the management center it reuses the key the center stored, when you enabled "remember password". Otherwise it asks for the key and keeps it in `sessionStorage` for that tab only.
 
-The drift chart is the main view. It plots median or p90 input and output tokens per inbound request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider.
+The drift chart is the main view. It plots median or p90 input and output tokens per successful inbound request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider.
 
 ## Management routes
 
@@ -88,14 +87,14 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | `/v0/management/cpa-analytics/summary` | |
 | `/v0/management/cpa-analytics/timeseries` | `bucket=day\|hour`, `group=provider\|model\|client` |
 | `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version` |
-| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day` |
+| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key` |
 | `/v0/management/cpa-analytics/pricing` | |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 
 Shared filters:
 
 - `from` and `to`: unix milliseconds. The default is the 7 days before now, and the range may not exceed 400 days.
-- `provider`, `model` (the reported model), `client` (client name), and `api_key` (key hash).
+- `provider`, `model` (the reported model), `client` (client name), and `api_key` (the 12-character key hash listed by `breakdown?by=api_key`).
 - `tz`: the viewer's offset in minutes east of UTC, from -840 to 840. Day and hour buckets follow it.
 
 Errors come back as `{"error":{"code":"...","message":"..."}}`. `invalid_parameter` (400) names the parameter and retrying will not help. `storage_unavailable` (503) means the database could not be opened or queried, and a retry may succeed.

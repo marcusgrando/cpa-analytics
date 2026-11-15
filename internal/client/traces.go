@@ -48,8 +48,9 @@ func (t *Traces) Put(traceID, ua string) {
 	}
 }
 
-// Take returns the User-Agent for a trace. The entry stays, because one
-// inbound request can produce several usage records (retries, split billing).
+// Take returns the User-Agent for a trace and restarts its TTL. The entry
+// stays, because one inbound request can produce several usage records
+// (retries, split billing, every turn of a WebSocket connection).
 func (t *Traces) Take(traceID string) (string, bool) {
 	if traceID == "" {
 		t.misses.Add(1)
@@ -64,7 +65,10 @@ func (t *Traces) Take(traceID string) (string, bool) {
 		return "", false
 	}
 	t.hits.Add(1)
-	return el.Value.(*traceEntry).ua, true
+	entry := el.Value.(*traceEntry)
+	entry.at = t.now()
+	t.order.MoveToBack(el)
+	return entry.ua, true
 }
 
 // Stats returns how many lookups found or missed a trace.

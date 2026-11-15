@@ -262,3 +262,28 @@ func TestDashboardResourceIsServed(t *testing.T) {
 		t.Errorf("CSP = %q", resp.Headers.Get("Content-Security-Policy"))
 	}
 }
+
+// Lowering retention_days on a running plugin prunes now, not at the next
+// daily tick.
+func TestReconfigureAppliesRetentionNow(t *testing.T) {
+	p, path := startPlugin(t)
+	insertRows(t, p, usageRow("old", time.Now().Add(-49*time.Hour)))
+	env := decodeEnvelope(t, p.Handle(pluginabi.MethodPluginReconfigure, lifecycle(t, pluginabi.SchemaVersion, "db_path: "+path+"\nretention_days: 1\n")))
+	if !env.OK {
+		t.Fatalf("reconfigure: %+v", env.Error)
+	}
+	var n int
+	for i := 0; i < 100; i++ {
+		p.mu.Lock()
+		err := p.store.DB().QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&n)
+		p.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("rows = %d two seconds after lowering retention", n)
+}

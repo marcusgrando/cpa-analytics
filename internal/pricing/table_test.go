@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"gopkg.in/yaml.v3"
 	"math"
 	"os"
 	"testing"
@@ -73,7 +74,7 @@ func TestLookupUnknownAndUnpriceable(t *testing.T) {
 
 func TestOverridesWin(t *testing.T) {
 	tbl := WithOverrides(sampleTable(t), map[string]PriceOverride{
-		"claude-opus-4-8": {Input: 1, Output: 2, CacheRead: 0.1, CacheWrite: 1.25},
+		"claude-opus-4-8": {Input: 1, Output: 2, CacheRead: ptr(0.1), CacheWrite: ptr(1.25)},
 		"my-local-model":  {Input: 0.5, Output: 1},
 	})
 	r, src, ok := tbl.Lookup("claude-opus-4-8", "")
@@ -100,3 +101,17 @@ func TestParseRejectsNonObject(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// A cache price the operator wrote as 0 means free, not "use the input price".
+func TestOverrideKeepsExplicitZeroCachePrice(t *testing.T) {
+	var overrides map[string]PriceOverride
+	if err := yaml.Unmarshal([]byte("free-cache:\n  input: 2\n  output: 4\n  cache_read: 0\n  cache_write: 0\n"), &overrides); err != nil {
+		t.Fatal(err)
+	}
+	r, _, ok := WithOverrides(&Table{}, overrides).Lookup("free-cache", "")
+	if !ok || r.CacheRead != 0 || r.CacheWrite != 0 || !near(r.Input, 2e-06) {
+		t.Fatalf("explicit zero cache prices = %+v, want 0", r)
+	}
+}
+
+func ptr(v float64) *float64 { return &v }

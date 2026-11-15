@@ -2,11 +2,14 @@ package plugin
 
 import "time"
 
-// startPrune runs the retention job now and then every pruneEvery, until Close.
+// startPrune runs the retention job now and then every pruneEvery, until
+// Close. On a reconfigure the loop is already running, so it only prunes now
+// with the new retention.
 func (p *Plugin) startPrune() {
 	p.mu.Lock()
 	if p.pruneStop != nil {
 		p.mu.Unlock()
+		go p.pruneOnce()
 		return
 	}
 	stop := make(chan struct{})

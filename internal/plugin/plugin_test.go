@@ -107,8 +107,10 @@ func TestParseConfigRejectsNegativeRetention(t *testing.T) {
 }
 
 func TestParseConfigRejectsNegativePriceOverride(t *testing.T) {
-	if _, err := ParseConfig([]byte("price_overrides:\n  my-model:\n    input: -1\n")); err == nil {
-		t.Fatal("expected error for negative override price")
+	for _, field := range []string{"input", "cache_write"} {
+		if _, err := ParseConfig([]byte("price_overrides:\n  my-model:\n    " + field + ": -1\n")); err == nil {
+			t.Fatalf("expected error for negative %s override price", field)
+		}
 	}
 }
 

@@ -168,16 +168,21 @@ func number(v any) (float64, bool) {
 func WithOverrides(t *Table, overrides map[string]PriceOverride) *Table {
 	out := &Table{rates: t.rates, overrides: make(map[string]Rates, len(overrides))}
 	for model, o := range overrides {
-		r := Rates{Input: o.Input / 1e6, Output: o.Output / 1e6, CacheRead: o.CacheRead / 1e6, CacheWrite: o.CacheWrite / 1e6}
-		if o.CacheRead == 0 {
-			r.CacheRead = r.Input
+		out.overrides[normalize(model)] = Rates{
+			Input:      o.Input / 1e6,
+			Output:     o.Output / 1e6,
+			CacheRead:  orInput(o.CacheRead, o.Input) / 1e6,
+			CacheWrite: orInput(o.CacheWrite, o.Input) / 1e6,
 		}
-		if o.CacheWrite == 0 {
-			r.CacheWrite = r.Input
-		}
-		out.overrides[normalize(model)] = r
 	}
 	return out
+}
+
+func orInput(cache *float64, input float64) float64 {
+	if cache == nil {
+		return input
+	}
+	return *cache
 }
 
 // Len returns the number of priced model names.

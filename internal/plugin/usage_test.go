@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,5 +183,20 @@ func TestInterceptAfterIsPassThrough(t *testing.T) {
 	env := call(t, p, pluginabi.MethodRequestInterceptAfter, pluginapi.RequestInterceptRequest{RequestID: "x"})
 	if !env.OK || string(env.Result) != "{}" {
 		t.Fatalf("got %+v %s", env.Error, env.Result)
+	}
+}
+
+// Real client User-Agents are well under a hundred bytes. An oversized one is
+// not kept in memory or in the database.
+func TestOversizedUserAgentIsNotKept(t *testing.T) {
+	p, path := startPlugin(t)
+	ua := "codex_cli_rs/0.130.0 " + strings.Repeat("x", maxUserAgentBytes)
+	call(t, p, pluginabi.MethodRequestInterceptBefore, pluginapi.RequestInterceptRequest{
+		RequestID: "x", TraceID: "big1", Headers: http.Header{"User-Agent": {ua}},
+	})
+	call(t, p, pluginabi.MethodUsageHandle, codexRecord("r1", "big1"))
+	r := rowsAfterClose(t, p, path)["r1"]
+	if r.UserAgent != "" || r.ClientName != "" {
+		t.Fatalf("row kept the oversized agent: client %q, %d bytes", r.ClientName, len(r.UserAgent))
 	}
 }

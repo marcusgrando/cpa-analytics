@@ -93,12 +93,20 @@ func (p *Plugin) handleUsage(raw []byte) ([]byte, error) {
 	return nil, nil
 }
 
+// maxUserAgentBytes bounds what one trace entry and one row keep. Coding
+// agents send well under a hundred bytes.
+const maxUserAgentBytes = 1024
+
 func (p *Plugin) interceptBefore(raw []byte) ([]byte, error) {
 	var req pluginapi.RequestInterceptRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fmt.Errorf("decode intercept request: %w", err)
 	}
-	p.traces.Put(req.TraceID, req.Headers.Get("User-Agent"))
+	ua := req.Headers.Get("User-Agent")
+	if len(ua) > maxUserAgentBytes {
+		ua = ""
+	}
+	p.traces.Put(req.TraceID, ua)
 	return nil, nil
 }
 
