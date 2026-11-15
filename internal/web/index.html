@@ -474,14 +474,15 @@ function niceStep(max, count) {
 }
 
 // frame draws the y grid and x labels and returns the plot geometry.
-function frame(container, xs, maxY, fmtY, fmtX) {
+// minStep keeps count axes on whole numbers.
+function frame(container, xs, maxY, fmtY, fmtX, minStep = 0) {
   const width = Math.max(280, container.clientWidth);
   const height = 240;
   const m = { top: 22, right: 8, bottom: 24, left: 52 };
   const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img' });
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
-  const step = maxY > 0 ? niceStep(maxY, 4) : 1;
+  const step = maxY > 0 ? Math.max(minStep, niceStep(maxY, 4)) : 1;
   const top = Math.max(step, Math.ceil(maxY / step) * step);
   const y = (v) => m.top + plotH - (v / top) * plotH;
   for (let v = 0; v <= top + step / 2; v += step) {
@@ -627,7 +628,7 @@ function renderDaily() {
   const stackAt = (t) => keys.map((k) => ({ key: k, p: at.get(t + '|' + k) })).filter((s) => s.p);
   const maxY = Math.max(0, ...xs.map((t) => stackAt(t).reduce((s, e) => s + value(e.p), 0)));
   if (!series.points.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); document.getElementById('daily-legend').replaceChildren(); return; }
-  const g = frame(container, xs, maxY, fmtY, fmtX);
+  const g = frame(container, xs, maxY, fmtY, fmtX, state.dailyMode === 'cost' ? 0 : 1);
   g.svg.setAttribute('aria-label', 'Usage per ' + series.bucket + ' stacked by provider');
   const barW = Math.min(24, Math.max(2, g.band * 0.6));
   xs.forEach((t, i) => {
@@ -695,7 +696,7 @@ function renderDrift() {
     return;
   }
   const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.map(driftValue)));
-  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay);
+  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate ? 0 : 1);
   g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by day');
   const index = new Map(xs.map((t, i) => [t, i]));
   // Change markers: one hairline per day, values listed above it.

@@ -106,3 +106,14 @@ func TestIndexFollowsManagementCenterTheme(t *testing.T) {
 		}
 	}
 }
+
+// Token counts are whole numbers. With a median of 1.5 tokens a fractional
+// step drew the labels 0, 1, 1, 2, 2, so count axes step by at least one.
+func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate ? 0 : 1)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
