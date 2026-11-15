@@ -107,7 +107,7 @@ Every exported ABI entry point recovers from panics and returns an error envelop
 
 - Source: LiteLLM `model_prices_and_context_window.json`, fetched through `host.http.do` at startup and every 24 hours. The last good copy is stored in SQLite and used when a fetch fails. With no copy at all, every model shows as unpriced. Cost never blocks usage.
 - Model matching follows T3 Code (`apps/server/src/usage/usagePricing.ts`): normalize the name, strip date and variant suffixes, prefer first-party provider entries over resellers. Matching uses `response_model` when present, else `model`.
-- Rates per token type: input, cache read, cache write, output. Reasoning is priced as output. Service tier `priority` uses LiteLLM `_priority` rates when present.
+- Rates per token type: input, cache read, cache write, output. Reasoning is priced as output. Service tiers `priority` and `flex` use LiteLLM's `_priority` and `_flex` rates when the model has them, and the standard rates otherwise.
 - Overrides: config field `price_overrides`, an object of model name to per-1M-token rates, for models LiteLLM lacks.
 - Cost is computed at query time from stored tokens, so price corrections apply to history. The dashboard labels it "API estimate".
 - A "cost quality" panel shows the share of tokens priced by LiteLLM, by override, and unpriced, as in T3 Code.
@@ -120,10 +120,10 @@ Filters: period (24h, 7d, 30d, 90d), provider, model, client, API key hash.
 
 Views:
 
-1. Totals: API-estimate cost, requests, sessions, processed tokens, cache hit rate (cache read / total input), output including reasoning. Per-provider cost share.
+1. Totals: API-estimate cost, requests, sessions, processed tokens, cache hit rate (cache read / total input), cache savings (cache reads priced as uncached input, minus their actual price), output including reasoning. Cost share by provider, by token type (input, cache read, cache write, output) and by service tier. The tier split shows the premium paid over standard rates for priority calls and the discount for flex calls, since turning on a fast mode raises cost without changing any token count.
 2. Daily cost and tokens, stacked by provider (toggle cost or tokens).
-3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output and reasoning, plus daily cache hit rate. Grouped by reported model or by client version. Vertical markers on the days a new `client_version` or a new `response_model` first appears.
-4. Breakdown table by model, by client and version, or by day: requests, tokens by type, cost, share, median input and output per request.
+3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output and reasoning, plus daily cache hit rate. Grouped by reported model, by client version or by reasoning effort, since a client that raises its default effort spends more output with no model change. Vertical markers on the days a new `client_version`, `response_model` or `reasoning_effort` first appears. A request that names no effort is grouped as `unset` and never gets a marker.
+4. Breakdown table by model, by client and version, by day, by API key hash or by reasoning effort: requests, tokens by type, cost, share, median input and output per request.
 5. Model detail: cost per 1M tokens, cache hit rate, token-type mix, and the drift chart for that model.
 6. Cost quality and plugin health.
 
@@ -131,10 +131,10 @@ Views:
 
 All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and the filters above. Invalid parameters return `400` with a JSON error naming the parameter. Database faults return `503` with a distinct error code.
 
-- `summary`: totals and per-provider share.
+- `summary`: totals, and cost by provider, token type and service tier.
 - `timeseries?bucket=day|hour&group=provider|model|client`: tokens and cost per bucket.
-- `drift?group=response_model|client_version`: medians and p90 per bucket, plus change markers.
-- `breakdown?by=model|client|day`
+- `drift?group=response_model|client_version|reasoning_effort`: medians and p90 per bucket, plus change markers.
+- `breakdown?by=model|client|day|api_key|reasoning_effort`
 - `health`
 - `pricing`: table age, unmatched models, overrides in use.
 

@@ -16,13 +16,28 @@ type Totals struct {
 	Tokens
 	CostUSD float64 `json:"cost_usd"`
 	// Records counts rows. Requests counts successful upstream calls (see callExpr).
-	Records         int64       `json:"records"`
-	Requests        int64       `json:"requests"`
-	Sessions        int64       `json:"sessions"`
-	Failed          int64       `json:"failed"`
-	ProcessedTokens int64       `json:"processed_tokens"`
-	CacheHitRate    float64     `json:"cache_hit_rate"`
-	CostQuality     CostQuality `json:"cost_quality"`
+	Records         int64            `json:"records"`
+	Requests        int64            `json:"requests"`
+	Sessions        int64            `json:"sessions"`
+	Failed          int64            `json:"failed"`
+	ProcessedTokens int64            `json:"processed_tokens"`
+	CacheHitRate    float64          `json:"cache_hit_rate"`
+	CostQuality     CostQuality      `json:"cost_quality"`
+	CostByType      pricing.TypeCost `json:"cost_by_type"`
+	// CacheSavingsUSD is what the cache reads would have cost as uncached input.
+	CacheSavingsUSD float64    `json:"cache_savings_usd"`
+	CostByTier      []TierCost `json:"cost_by_tier"`
+}
+
+// TierCost is the cost of one service tier, as the upstream reported it or
+// CPA sent it. An empty tier was never reported. StandardCostUSD prices the
+// same tokens at the standard tier, so the difference is the priority premium
+// or the flex discount.
+type TierCost struct {
+	Tier            string  `json:"tier"`
+	CostUSD         float64 `json:"cost_usd"`
+	StandardCostUSD float64 `json:"standard_cost_usd"`
+	Tokens          int64   `json:"tokens"`
 }
 
 // ProviderShare is one provider's part of the totals.
@@ -48,11 +63,22 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 	}
 	var res SummaryResult
 	byProvider := map[string]*ProviderShare{}
+	byTier := map[string]*TierCost{}
 	for _, r := range rows {
 		res.Totals.Tokens.add(r.tokens)
 		res.Totals.CostUSD += r.cost
 		res.Totals.Records += r.records
 		res.Totals.CostQuality.add(r.quality)
+		res.Totals.CostByType.Add(r.byType)
+		res.Totals.CacheSavingsUSD += r.cacheSavings
+		tc := byTier[r.tier]
+		if tc == nil {
+			tc = &TierCost{Tier: r.tier}
+			byTier[r.tier] = tc
+		}
+		tc.CostUSD += r.cost
+		tc.StandardCostUSD += r.standardCost
+		tc.Tokens += r.tokens.total()
 		ps := byProvider[r.keys[0]]
 		if ps == nil {
 			ps = &ProviderShare{Provider: r.keys[0]}
@@ -64,6 +90,20 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 	}
 	res.Totals.ProcessedTokens = res.Totals.Tokens.total()
 	res.Totals.CacheHitRate = cacheHitRate(res.Totals.Tokens)
+	res.Totals.CostByTier = make([]TierCost, 0, len(byTier))
+	for _, tc := range byTier {
+		res.Totals.CostByTier = append(res.Totals.CostByTier, *tc)
+	}
+	sort.Slice(res.Totals.CostByTier, func(i, j int) bool {
+		a, b := res.Totals.CostByTier[i], res.Totals.CostByTier[j]
+		if a.CostUSD != b.CostUSD {
+			return a.CostUSD > b.CostUSD
+		}
+		if a.Tokens != b.Tokens {
+			return a.Tokens > b.Tokens
+		}
+		return a.Tier < b.Tier
+	})
 	res.Providers = make([]ProviderShare, 0, len(byProvider))
 	for _, ps := range byProvider {
 		ps.CostShare = ratio(ps.CostUSD, res.Totals.CostUSD)
@@ -159,7 +199,7 @@ func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string
 	return s, nil
 }
 
-// BreakdownRow is one model, client version or day.
+// BreakdownRow is one model, client version, day, API key hash or reasoning effort.
 type BreakdownRow struct {
 	Key      string `json:"key"`
 	Records  int64  `json:"records"`
@@ -182,7 +222,8 @@ type BreakdownResult struct {
 	Rows []BreakdownRow `json:"rows"`
 }
 
-// Breakdown returns one row per model, client version, day or API key hash.
+// Breakdown returns one row per model, client version, day, API key hash or
+// reasoning effort.
 // Days are sorted by date, the others by cost.
 func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (BreakdownResult, error) {
 	var keyExpr string
@@ -195,8 +236,10 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 		keyExpr = f.bucketSQL(dayMillis)
 	case "api_key":
 		keyExpr = "api_key_hash"
+	case "reasoning_effort":
+		keyExpr = effortExpr
 	default:
-		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day or api_key"}
+		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day, api_key or reasoning_effort"}
 	}
 	rows, err := aggregate(db, f, table, keyExpr)
 	if err != nil {

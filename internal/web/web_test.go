@@ -75,3 +75,23 @@ func TestIndexAutoRefreshesEverySixtySecondsByDefault(t *testing.T) {
 		t.Errorf("auto-refresh cannot be turned off: %s", m[1])
 	}
 }
+
+// Reasoning effort explains output growth with no model change, so the drift
+// chart and the breakdown both offer it.
+func TestIndexOffersReasoningEffort(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`<option value="reasoning_effort">`, `data-by="reasoning_effort"`, `reasoning_effort: 'reasoning effort'`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexSplitsCostByTypeAndTier(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`id="t-types"`, `id="t-tiers"`, `cost_by_type`, `cost_by_tier`, `cache_savings_usd`, `standard_cost_usd`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}

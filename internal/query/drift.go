@@ -27,7 +27,8 @@ type DriftPoint struct {
 	CacheHitRate float64 `json:"cache_hit_rate"`
 }
 
-// Marker flags the day a client version or reported model first appears.
+// Marker flags the day a client version, reported model or reasoning effort
+// first appears.
 type Marker struct {
 	T     int64  `json:"t"`
 	Kind  string `json:"kind"`
@@ -41,21 +42,23 @@ type DriftResult struct {
 	Markers []Marker     `json:"markers"`
 }
 
-var driftGroups = map[string]string{"response_model": modelExpr, "client_version": clientExpr}
+var driftGroups = map[string]string{"response_model": modelExpr, "client_version": clientExpr, "reasoning_effort": effortExpr}
 
 // markerKinds are always reported, whatever the grouping. Rows that missed
 // the User-Agent join have no client and never produce a client marker.
 var markerKinds = []struct{ kind, expr, skip string }{
 	{"client_version", clientExpr, "client_name = ''"},
 	{"response_model", modelExpr, "(" + modelExpr + ") = ''"},
+	{"reasoning_effort", effortExpr, "reasoning_effort = ''"},
 }
 
 // Drift returns daily medians and p90 per request (see perRequest), grouped
-// by the reported model or the client version, plus change markers.
+// by the reported model, the client version or the reasoning effort, plus
+// change markers.
 func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
 	groupExpr, ok := driftGroups[group]
 	if !ok {
-		return DriftResult{}, &ParamError{Param: "group", Reason: "must be response_model or client_version"}
+		return DriftResult{}, &ParamError{Param: "group", Reason: "must be response_model, client_version or reasoning_effort"}
 	}
 	reqs, err := perRequest(db, f, groupExpr)
 	if err != nil {
@@ -115,8 +118,8 @@ func driftPoint(t int64, key string, reqTokens []Tokens) DriftPoint {
 	}
 }
 
-// markers returns the first local day each client version and reported model
-// appears in the range. Values already seen before From get no marker.
+// markers returns the first local day each client version, reported model
+// and reasoning effort appears in the range. Values already seen before From get no marker.
 func markers(db *sql.DB, f Filter) ([]Marker, error) {
 	where, args := f.where(false)
 	var out []Marker

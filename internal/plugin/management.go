@@ -50,7 +50,7 @@ type route struct {
 
 func (p *Plugin) routes() map[string]route {
 	return map[string]route{
-		"summary": {"Totals, cost and per-provider share", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
+		"summary": {"Totals, cost by provider, token type and service tier", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.Summary(db, f, t)
 		}},
 		"timeseries": {"Tokens and cost per day or hour", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
@@ -59,7 +59,7 @@ func (p *Plugin) routes() map[string]route {
 		"drift": {"Per-request token drift with change markers", func(db *sql.DB, f query.Filter, _ *pricing.Table, q url.Values) (any, error) {
 			return query.Drift(db, f, paramOr(q, "group", "response_model"))
 		}},
-		"breakdown": {"Usage by model, client, day or API key hash", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+		"breakdown": {"Usage by model, client, day, API key hash or reasoning effort", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Breakdown(db, f, t, paramOr(q, "by", "model"))
 		}},
 		"pricing": {"Price table status, unpriced and overridden models", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {

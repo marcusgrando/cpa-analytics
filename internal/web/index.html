@@ -108,7 +108,12 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .key-form p { margin: 0; color: var(--ink-2); }
 body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-@media (min-width: 900px) { .grid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-top: 16px; }
+.split-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+@media (min-width: 900px) {
+  .grid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
 </style>
 </head>
 <body>
@@ -160,6 +165,16 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div id="t-tiles" class="tiles"></div>
         <div class="hero-label">Cost share by provider</div>
         <div id="t-providers"></div>
+        <div class="split">
+          <div>
+            <div class="hero-label">Cost by token type</div>
+            <div id="t-types"></div>
+          </div>
+          <div>
+            <div class="split-head"><span class="hero-label">Cost by service tier</span><span id="t-tier-note" class="hero-label"></span></div>
+            <div id="t-tiers"></div>
+          </div>
+        </div>
       </section>
 
       <section id="model-detail" class="card" hidden aria-labelledby="md-title">
@@ -173,13 +188,14 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="drift-title">Tokens per request</h2>
-            <p class="sub">Per request (one HTTP request or WebSocket turn), daily. Vertical lines mark the first day a client version or reported model appears.</p>
+            <p class="sub">Per request (one HTTP request or WebSocket turn), daily. Vertical lines mark the first day a client version, reported model or reasoning effort appears.</p>
           </div>
           <div class="controls">
             <label>Group by
               <select id="drift-group">
                 <option value="response_model">Reported model</option>
                 <option value="client_version">Client version</option>
+                <option value="reasoning_effort">Reasoning effort</option>
               </select>
             </label>
             <label>Measure
@@ -232,6 +248,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             <button type="button" data-by="client" aria-pressed="false">Client</button>
             <button type="button" data-by="day" aria-pressed="false">Day</button>
             <button type="button" data-by="api_key" aria-pressed="false">API key</button>
+            <button type="button" data-by="reasoning_effort" aria-pressed="false">Effort</button>
           </div>
         </div>
         <div id="breakdown-table" class="table-wrap"></div>
@@ -531,11 +548,28 @@ function renderTotals() {
     tile('Sessions', fmtCompact(t.sessions)),
     tile('Processed tokens', fmtCompact(t.processed_tokens)),
     tile('Cache hit rate', fmtPct(t.cache_hit_rate)),
+    tile('Cache savings', fmtUSD(t.cache_savings_usd)),
     tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning)),
     tile('Failed records', fmtCompact(t.failed)),
   );
   segmentedBar(document.getElementById('t-providers'),
     data.summary.providers.map((p) => ({ label: p.provider || 'unknown', value: p.cost_usd, color: colorFor('provider', p.provider) })), fmtUSD);
+  const types = t.cost_by_type;
+  segmentedBar(document.getElementById('t-types'), [
+    { label: 'Input', value: types.input, color: 'var(--s1)' },
+    { label: 'Cache read', value: types.cache_read, color: 'var(--s2)' },
+    { label: 'Cache write', value: types.cache_write, color: 'var(--s3)' },
+    { label: 'Output', value: types.output, color: 'var(--s4)' },
+  ], fmtUSD);
+  segmentedBar(document.getElementById('t-tiers'),
+    t.cost_by_tier.map((c) => ({ label: c.tier || 'not reported', value: c.cost_usd, color: colorFor('tier', c.tier) })), fmtUSD);
+  // Priority costs more than standard and flex less. Show both differences.
+  const premium = t.cost_by_tier.reduce((s, c) => s + Math.max(0, c.cost_usd - c.standard_cost_usd), 0);
+  const discount = t.cost_by_tier.reduce((s, c) => s + Math.max(0, c.standard_cost_usd - c.cost_usd), 0);
+  document.getElementById('t-tier-note').textContent = [
+    premium > 0 ? 'Premium over standard ' + fmtUSD(premium) : '',
+    discount > 0 ? 'Saved below standard ' + fmtUSD(discount) : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function renderModelDetail() {
@@ -607,6 +641,7 @@ function renderDaily() {
   ));
 }
 
+const MARKER_KINDS = { client_version: 'client version', response_model: 'reported model', reasoning_effort: 'reasoning effort' };
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
 
 function driftValue(p) {
@@ -632,7 +667,7 @@ function renderDrift() {
   document.getElementById('drift-note').textContent = ranked.length > shown.length
     ? `${ranked.length - shown.length} smaller groups are hidden. Filter by provider, model or client to see them.` : '';
   const markersList = document.getElementById('drift-markers');
-  markersList.replaceChildren(...drift.markers.map((mk) => el('li', { text: `${fmtDay(mk.t)}: new ${mk.kind === 'client_version' ? 'client version' : 'reported model'} ${mk.value}` })));
+  markersList.replaceChildren(...drift.markers.map((mk) => el('li', { text: `${fmtDay(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}` })));
   if (!drift.points.length) {
     container.replaceChildren(el('div', { class: 'empty', text: 'No generating requests in this range' }));
     document.getElementById('drift-legend').replaceChildren();
@@ -709,7 +744,7 @@ function renderBreakdown() {
     return key;
   };
   container.replaceChildren(table(
-    [{ day: 'Day', client: 'Client', api_key: 'API key hash' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
+    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
     b.rows.map((r) => [keyCell(r.key), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
       fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
       fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),

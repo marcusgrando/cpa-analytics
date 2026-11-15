@@ -114,11 +114,18 @@ func (p *pricer) price(model, tier string, t Tokens) (float64, CostQuality) {
 type costRow struct {
 	keys    []string
 	model   string
+	tier    string
 	records int64
 	tokens  Tokens
 	cost    float64
 	quality CostQuality
 	price   lookup
+	// byType splits cost. standardCost is what the same tokens cost at the
+	// model's standard tier. cacheSavings is what the cache reads would have
+	// cost as uncached input. All three are zero for unpriced rows.
+	byType       pricing.TypeCost
+	standardCost float64
+	cacheSavings float64
 }
 
 const tokenSums = "SUM(uncached_input), SUM(cache_read), SUM(cache_write), SUM(output_non_reasoning), SUM(output_reasoning), SUM(unclassified)"
@@ -151,18 +158,26 @@ func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) (
 	var out []costRow
 	for rows.Next() {
 		r := costRow{keys: make([]string, len(keyExprs))}
-		var tier string
 		targets := make([]any, 0, len(keyExprs)+9)
 		for i := range r.keys {
 			targets = append(targets, &r.keys[i])
 		}
-		targets = append(targets, &r.model, &tier, &r.records)
+		targets = append(targets, &r.model, &r.tier, &r.records)
 		targets = append(targets, r.tokens.scanTargets()...)
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("aggregate scan: %w", err)
 		}
-		r.price = p.lookup(r.model, tier)
-		r.cost, r.quality = p.price(r.model, tier, r.tokens)
+		r.price = p.lookup(r.model, r.tier)
+		r.cost, r.quality = p.price(r.model, r.tier, r.tokens)
+		if r.price.ok {
+			b := r.tokens.breakdown()
+			r.byType = pricing.CostByType(r.price.rates, b)
+			r.standardCost = r.cost
+			if std := p.lookup(r.model, ""); std.ok {
+				r.standardCost = pricing.Cost(std.rates, b)
+			}
+			r.cacheSavings = float64(r.tokens.CacheRead) * (r.price.rates.Input - r.price.rates.CacheRead)
+		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {

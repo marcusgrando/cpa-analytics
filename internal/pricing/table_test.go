@@ -115,3 +115,24 @@ func TestOverrideKeepsExplicitZeroCachePrice(t *testing.T) {
 }
 
 func ptr(v float64) *float64 { return &v }
+
+// OpenAI's flex tier is billed at about half the standard price.
+func TestLookupFlexTier(t *testing.T) {
+	r, _, ok := sampleTable(t).Lookup("gpt-5.5", "flex")
+	if !ok || !near(r.Input, 6.25e-07) || !near(r.Output, 5e-06) || !near(r.CacheRead, 6.25e-08) {
+		t.Fatalf("flex = %+v %v", r, ok)
+	}
+}
+
+func TestCostByTypeAddsUpToCost(t *testing.T) {
+	r := Rates{Input: 5e-06, Output: 2.5e-05, CacheRead: 5e-07, CacheWrite: 6.25e-06}
+	b := accounting.Breakdown{Uncached: 100, CacheRead: 900, CacheWrite: 50, OutputNonReasoning: 250, Reasoning: 50, Unclassified: 7}
+	got := CostByType(r, b)
+	want := TypeCost{Input: 100 * 5e-06, CacheRead: 900 * 5e-07, CacheWrite: 50 * 6.25e-06, Output: 300 * 2.5e-05}
+	if !near(got.Input, want.Input) || !near(got.CacheRead, want.CacheRead) || !near(got.CacheWrite, want.CacheWrite) || !near(got.Output, want.Output) {
+		t.Fatalf("CostByType = %+v, want %+v", got, want)
+	}
+	if !near(got.Total(), Cost(r, b)) {
+		t.Errorf("parts sum to %v, Cost is %v", got.Total(), Cost(r, b))
+	}
+}

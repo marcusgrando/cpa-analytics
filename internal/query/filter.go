@@ -23,6 +23,9 @@ const (
 	modelExpr  = "CASE WHEN response_model <> '' THEN response_model ELSE model END"
 	tierExpr   = "CASE WHEN response_service_tier <> '' THEN response_service_tier ELSE effective_service_tier END"
 	clientExpr = "CASE WHEN client_name = '' THEN 'unknown' WHEN client_version = '' THEN client_name ELSE client_name || '/' || client_version END"
+	// effortExpr is the reasoning effort CPA sent upstream. "unset" means the
+	// request named none and the model's default applied.
+	effortExpr = "CASE WHEN reasoning_effort = '' THEN 'unset' ELSE reasoning_effort END"
 	// callExpr identifies one upstream call: CPA's usage reporter stamps all
 	// records of a call, split billing included, with the same trace and start
 	// time. A WebSocket connection shares one trace across turns, but each

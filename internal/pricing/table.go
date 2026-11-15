@@ -29,9 +29,14 @@ const (
 	SourceOverride Source = "override"
 )
 
+// pricedTiers are the OpenAI service tiers LiteLLM prices apart from the
+// standard one, by the suffix of their price keys.
+var pricedTiers = []string{"priority", "flex"}
+
 type modelRate struct {
 	standard Rates
-	priority *Rates
+	// tiers holds the prices of pricedTiers the model has.
+	tiers map[string]Rates
 }
 
 // Table is an immutable price table.
@@ -78,8 +83,13 @@ func ParseLiteLLM(raw []byte) (*Table, error) {
 			continue
 		}
 		mr := modelRate{standard: standard}
-		if priority, ok := readRates(entry, "_priority", &standard); ok {
-			mr.priority = &priority
+		for _, tier := range pricedTiers {
+			if r, ok := readRates(entry, "_"+tier, &standard); ok {
+				if mr.tiers == nil {
+					mr.tiers = map[string]Rates{}
+				}
+				mr.tiers[tier] = r
+			}
 		}
 		rates[key] = mr
 	}
@@ -124,10 +134,12 @@ func sameRate(a, b modelRate) bool {
 	if a.standard != b.standard {
 		return false
 	}
-	if a.priority == nil || b.priority == nil {
-		return true
+	for tier, ra := range a.tiers {
+		if rb, ok := b.tiers[tier]; ok && ra != rb {
+			return false
+		}
 	}
-	return *a.priority == *b.priority
+	return true
 }
 
 // readRates reads prices with an optional key suffix. Missing cache prices
@@ -189,7 +201,8 @@ func orInput(cache *float64, input float64) float64 {
 func (t *Table) Len() int { return len(t.rates) }
 
 // Lookup finds the rates for a model name as CPA or the upstream reports it.
-// tier "priority" uses LiteLLM's priority prices when the model has them.
+// The priority and flex tiers use LiteLLM's prices for them when the model
+// has them, and the standard prices otherwise.
 func (t *Table) Lookup(model, tier string) (Rates, Source, bool) {
 	key := stripVariant(normalize(model))
 	bare := bareName(key)
@@ -206,22 +219,48 @@ func (t *Table) Lookup(model, tier string) (Rates, Source, bool) {
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(tier), "priority") && mr.priority != nil {
-			return *mr.priority, SourceLiteLLM, true
+		if r, ok := mr.tiers[strings.ToLower(strings.TrimSpace(tier))]; ok {
+			return r, SourceLiteLLM, true
 		}
 		return mr.standard, SourceLiteLLM, true
 	}
 	return Rates{}, "", false
 }
 
-// Cost prices a breakdown. Reasoning is billed as output. Unclassified tokens
-// cannot be priced and are left out; callers report them as unpriced.
-func Cost(r Rates, b accounting.Breakdown) float64 {
-	return float64(b.Uncached)*r.Input +
-		float64(b.CacheRead)*r.CacheRead +
-		float64(b.CacheWrite)*r.CacheWrite +
-		float64(b.OutputNonReasoning+b.Reasoning)*r.Output
+// TypeCost is a cost split by what the tokens were billed as.
+type TypeCost struct {
+	Input      float64 `json:"input"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+	// Output includes reasoning, which is billed as output.
+	Output float64 `json:"output"`
 }
+
+// Total is the whole cost.
+func (c TypeCost) Total() float64 { return c.Input + c.CacheRead + c.CacheWrite + c.Output }
+
+// Add sums o into c.
+func (c *TypeCost) Add(o TypeCost) {
+	c.Input += o.Input
+	c.CacheRead += o.CacheRead
+	c.CacheWrite += o.CacheWrite
+	c.Output += o.Output
+}
+
+// CostByType prices a breakdown per token type. Reasoning is billed as
+// output. Unclassified tokens cannot be priced and are left out; callers
+// report them as unpriced.
+func CostByType(r Rates, b accounting.Breakdown) TypeCost {
+	return TypeCost{
+		Input:      float64(b.Uncached) * r.Input,
+		CacheRead:  float64(b.CacheRead) * r.CacheRead,
+		CacheWrite: float64(b.CacheWrite) * r.CacheWrite,
+		Output:     float64(b.OutputNonReasoning+b.Reasoning) * r.Output,
+	}
+}
+
+// Cost prices a breakdown. See CostByType.
+func Cost(r Rates, b accounting.Breakdown) float64 { return CostByType(r, b).Total() }
 
 func normalize(model string) string { return strings.ToLower(strings.TrimSpace(model)) }
 

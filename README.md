@@ -80,7 +80,7 @@ The page itself holds no data. It reads every number from the management routes 
 
 The page reloads its data every 60 seconds while the tab is visible. **Auto refresh** in the filter row turns it off for that tab.
 
-The drift chart is the main view. It plots median or p90 input and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider.
+The drift chart is the main view. It plots median or p90 input and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider. Grouping by reasoning effort catches a client that raised its default effort: output and reasoning go up with no model change.
 
 A request is one successful upstream call: one per HTTP request, and one per turn on a Responses WebSocket connection. Failed attempts count in totals and cost but not in the per-request medians.
 
@@ -92,8 +92,8 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 |---|---|
 | `/v0/management/cpa-analytics/summary` | |
 | `/v0/management/cpa-analytics/timeseries` | `bucket=day\|hour`, `group=provider\|model\|client` |
-| `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version` |
-| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key` |
+| `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version\|reasoning_effort` |
+| `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key\|reasoning_effort` |
 | `/v0/management/cpa-analytics/pricing` | |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 
@@ -110,6 +110,7 @@ Errors come back as `{"error":{"code":"...","message":"..."}}`. `invalid_paramet
 Cost is an estimate at public API rates. It is not your bill: subscription plans and negotiated prices are not reflected.
 
 - Prices come from the LiteLLM price table, downloaded through CPA's HTTP client at start and every 24 hours, and cached in the database for offline starts. `price_overrides` win over the table.
+- Calls on OpenAI's priority and flex tiers use LiteLLM's prices for those tiers. The totals card splits cost by service tier and shows the premium paid over standard rates, which is what turning on a fast mode costs.
 - Cost is computed when you query, so a price fix applies to the whole history.
 - Tokens with no price are reported as unpriced, never counted as free. The cost quality bar shows how many tokens were priced from LiteLLM, from overrides, or not at all, and the pricing route lists the unpriced models.
 
