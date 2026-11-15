@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
+	"github.com/marcusgrando/cpa-analytics/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )

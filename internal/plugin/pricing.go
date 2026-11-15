@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )

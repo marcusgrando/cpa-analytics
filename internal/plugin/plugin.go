@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/client"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
+	"github.com/marcusgrando/cpa-analytics/internal/client"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/store"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -248,8 +248,8 @@ func metadata() pluginapi.Metadata {
 	return pluginapi.Metadata{
 		Name:             pluginName,
 		Version:          pluginVersion,
-		Author:           "Azion",
-		GitHubRepository: "https://github.com/marcus-grando-azion/cpa-analytics",
+		Author:           "Marcus Grando",
+		GitHubRepository: "https://github.com/marcusgrando/cpa-analytics",
 		ConfigFields: []pluginapi.ConfigField{
 			{Name: "db_path", Type: pluginapi.ConfigFieldTypeString, Default: defaultDBPath, Description: "SQLite file for usage rows. Put it on a mounted volume."},
 			{Name: "retention_days", Type: pluginapi.ConfigFieldTypeInteger, Default: 0, Description: "Delete rows older than this many days. 0 keeps everything."},

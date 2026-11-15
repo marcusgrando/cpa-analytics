@@ -65,7 +65,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/plugin"
+	"github.com/marcusgrando/cpa-analytics/internal/plugin"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 

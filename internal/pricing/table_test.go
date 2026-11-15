@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/accounting"
+	"github.com/marcusgrando/cpa-analytics/internal/accounting"
 )
 
 func sampleTable(t *testing.T) *Table {

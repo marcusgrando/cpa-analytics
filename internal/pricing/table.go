@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/accounting"
+	"github.com/marcusgrando/cpa-analytics/internal/accounting"
 )
 
 // Rates are USD per token.

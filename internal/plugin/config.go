@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
 	"gopkg.in/yaml.v3"
 )
 

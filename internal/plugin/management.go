@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/query"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/web"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/query"
+	"github.com/marcusgrando/cpa-analytics/internal/web"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 

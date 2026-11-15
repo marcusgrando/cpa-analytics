@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/store"
 )
 
 var (

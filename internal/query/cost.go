@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/accounting"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
+	"github.com/marcusgrando/cpa-analytics/internal/accounting"
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
 )
 
 // Tokens holds the normalized, non-overlapping token buckets.

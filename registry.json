@@ -5,9 +5,10 @@
       "id": "cpa-analytics",
       "name": "CPA Analytics",
       "description": "Token usage, cost estimate and per-request drift by model and client version.",
-      "author": "Azion",
+      "author": "Marcus Grando",
       "version": "0.1.0",
-      "repository": "https://github.com/marcus-grando-azion/cpa-analytics",
+      "repository": "https://github.com/marcusgrando/cpa-analytics",
+      "license": "MIT",
       "tags": ["analytics", "usage", "cost"],
       "install": {
         "type": "github-release"

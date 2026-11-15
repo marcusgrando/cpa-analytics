@@ -1,4 +1,4 @@
-module github.com/marcus-grando-azion/cpa-analytics
+module github.com/marcusgrando/cpa-analytics
 
 go 1.26.10
 

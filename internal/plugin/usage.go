@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcus-grando-azion/cpa-analytics/internal/accounting"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/client"
-	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
+	"github.com/marcusgrando/cpa-analytics/internal/accounting"
+	"github.com/marcusgrando/cpa-analytics/internal/client"
+	"github.com/marcusgrando/cpa-analytics/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 

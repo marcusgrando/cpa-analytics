@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Target host CPA `v8.0.71`, plugin ABI 1, registration `schema_version` = `pluginabi.SchemaVersion` (10). Refuse to register when the host sends `schema_version < 7` (header-only interceptor needs 7).
-- Module path `github.com/marcus-grando-azion/cpa-analytics`. Plugin file `cpa-analytics.so`, so the plugin ID is `cpa-analytics`.
+- Module path `github.com/marcusgrando/cpa-analytics`. Plugin file `cpa-analytics.so`, so the plugin ID is `cpa-analytics`.
 - Wire format is JSON of `pluginapi` structs as the host marshals them. Decode into the `pluginapi` types; never hand-write field names.
 - Never store request or response bodies, failure bodies or raw API keys. `api_key_hash` = first 12 hex chars of SHA-256 of `APIKey`, empty when `APIKey` is empty.
 - Every exported ABI entry point recovers panics and returns an error envelope.

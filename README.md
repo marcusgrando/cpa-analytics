@@ -2,7 +2,7 @@
 
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that records token usage per request and shows it in a dashboard inside the CPA management center. It answers one question first: when input or output tokens per request go up, was it your client upgrade or the model and provider?
 
-It runs in-process as a CPA C ABI plugin and needs no CPA changes. It is built and tested against CPA v8.0.71.
+It runs in-process as a CPA C ABI plugin and needs no CPA changes. It is built and tested against CPA v8.0.71, and released for Linux x86_64 and macOS arm64.
 
 ## What it records
 
@@ -33,17 +33,19 @@ volumes:
 
 ### 2. Install the library
 
-From the plugin store: add this repository's `registry.json` to `plugins.store-sources`, then install `cpa-analytics` from the management center.
+From the plugin store: add this repository's `registry.json` to `plugins.store-sources`, then install `cpa-analytics` from the management center. The store checks the latest GitHub release of this repository and offers each new version as an update.
 
 ```yaml
 plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/marcus-grando-azion/cpa-analytics/main/registry.json"
+    - "https://raw.githubusercontent.com/marcusgrando/cpa-analytics/main/registry.json"
 ```
 
-By hand: download `cpa-analytics_<version>_linux_amd64.zip` from a release, check it against `checksums.txt`, and unzip `cpa-analytics.so` into `plugins.dir`.
+By hand: download `cpa-analytics_<version>_linux_amd64.zip` or `cpa-analytics_<version>_darwin_arm64.zip` from a [release](https://github.com/marcusgrando/cpa-analytics/releases), check it against `checksums.txt`, and unzip the library (`cpa-analytics.so` or `cpa-analytics.dylib`) into `plugins.dir`.
+
+On macOS, outside Docker, set `db_path` (step 3) to a writable path such as `~/.cli-proxy-api/cpa-analytics.db`. The default path only exists in the CPA container.
 
 ### 3. Configure it
 
@@ -113,13 +115,23 @@ Cost is an estimate at public API rates. It is not your bill: subscription plans
 
 ```sh
 make test      # go vet and go test -race
-make build     # linux/amd64 .so built in golang:1.26-bookworm, output in ~/.cache/cpa-analytics/dist
-make package   # release zip and checksums.txt for the plugin store
+make lib       # library for this machine, in ~/.cache/cpa-analytics/dist
+make build     # linux/amd64 .so built in golang:1.26-bookworm with Docker
+make package   # linux/amd64 release zip and checksums.txt
 make e2e       # stock CPA v8.0.71 + stub upstream + the plugin, one real request
 ```
 
-`make build GOARCH=arm64` builds for arm64. `GO_IMAGE` overrides the toolchain image. The image must stay on Debian bookworm so the library needs no newer glibc than the CPA image ships.
+The library needs cgo, so each platform builds on its own OS. `GO_IMAGE` overrides the toolchain image for `make build`. It must stay on Debian bookworm so the library needs no newer glibc than the CPA image ships.
 
 The e2e test clones CPA into `~/.cache/cpa-analytics/CLIProxyAPI` on first run and needs ports 18318 and 18319 free. `PLUGIN_SO=<path> make e2e` tests a prebuilt library instead of a host build.
 
-A release tag is `v<version>` and carries `cpa-analytics_<version>_linux_<arch>.zip` and `checksums.txt`, the layout the CPA plugin store installs from.
+## Releasing
+
+1. Bump `pluginVersion` in `internal/plugin/plugin.go` and `version` in `registry.json` in the same commit. `TestRegistryMatchesPluginMetadata` fails if they differ.
+2. Push a tag `v<version>` on that commit.
+
+The release workflow checks that the tag matches `pluginVersion`, runs the tests, builds `cpa-analytics_<version>_linux_amd64.zip` and `cpa-analytics_<version>_darwin_arm64.zip`, and publishes them with `checksums.txt`. CPA instances that installed from the store see the update within an hour.
+
+## License
+
+MIT
