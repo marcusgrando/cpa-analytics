@@ -53,6 +53,9 @@ type Plugin struct {
 	storageErr string
 	refresher  *pricing.Refresher
 	pruneStop  chan struct{}
+	// pruning counts running prune jobs. Close waits for them before it
+	// closes the store, so no query outlives the plugin.
+	pruning sync.WaitGroup
 
 	// droppedNoStore counts records received while the database could not be opened.
 	droppedNoStore atomic.Uint64
@@ -116,6 +119,7 @@ func (p *Plugin) Close() {
 	if prune != nil {
 		close(prune)
 	}
+	p.pruning.Wait()
 	r.Stop()
 	w.Close()
 	if s != nil {

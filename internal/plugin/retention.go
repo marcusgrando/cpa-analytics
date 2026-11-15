@@ -7,15 +7,19 @@ import "time"
 // with the new retention.
 func (p *Plugin) startPrune() {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pruning.Add(1)
 	if p.pruneStop != nil {
-		p.mu.Unlock()
-		go p.pruneOnce()
+		go func() {
+			defer p.pruning.Done()
+			p.pruneOnce()
+		}()
 		return
 	}
 	stop := make(chan struct{})
 	p.pruneStop = stop
-	p.mu.Unlock()
 	go func() {
+		defer p.pruning.Done()
 		p.pruneOnce()
 		ticker := time.NewTicker(pruneEvery)
 		defer ticker.Stop()

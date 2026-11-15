@@ -290,3 +290,21 @@ func TestReconfigureAppliesRetentionNow(t *testing.T) {
 	}
 	t.Fatalf("rows = %d two seconds after lowering retention", n)
 }
+
+// Close waits for the retention job. A prune still running after Close would
+// reopen the database files once the host believes the plugin is gone; here
+// that shows up as files appearing while TempDir removes the directory.
+func TestCloseWaitsForRetentionJob(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		dir := t.TempDir()
+		p := New(nil)
+		env := decodeEnvelope(t, p.Handle(pluginabi.MethodPluginRegister, lifecycle(t, pluginabi.SchemaVersion, "db_path: "+filepath.Join(dir, "a.db")+"\nretention_days: 1\n")))
+		if !env.OK {
+			t.Fatalf("register: %+v", env.Error)
+		}
+		p.Close()
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatalf("iteration %d: database files changed after Close: %v", i, err)
+		}
+	}
+}
