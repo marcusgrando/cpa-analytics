@@ -1,5 +1,6 @@
 """Stub OpenAI-compatible upstream and LiteLLM price table for the e2e smoke test."""
 
+import itertools
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,13 +29,20 @@ PRICES = {
     }
 }
 
+# Each completion reports two more points of a weekly limit, as Codex does in
+# its response headers, so two requests give the plugin one priced pair.
+CALLS = itertools.count()
+WEEKLY_RESET_AT = 4_000_000_000
+
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, body):
+    def _send(self, body, headers=None):
         raw = json.dumps(body).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -46,7 +54,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self._send(COMPLETION)
+        self._send(COMPLETION, {
+            "X-Codex-Secondary-Used-Percent": str(10 + 2 * next(CALLS)),
+            "X-Codex-Secondary-Window-Minutes": "10080",
+            "X-Codex-Secondary-Reset-At": str(WEEKLY_RESET_AT),
+        })
 
     def log_message(self, fmt, *args):
         sys.stderr.write("stub: " + fmt % args + "\n")

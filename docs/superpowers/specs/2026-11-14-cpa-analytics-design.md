@@ -27,7 +27,6 @@ A step in input or output per request with no client version change points at th
 - Alerts, notifications or automatic anomaly detection. The dashboard shows the data and the markers. The owner reads it.
 - Billing reconciliation. Cost is "what these tokens would cost at API list price", not what was paid. Most traffic uses subscription OAuth credentials.
 - Multi-instance aggregation across several CPA nodes.
-- History of subscription limits. The Limits view shows the current state only.
 
 ## Anti-goals
 
@@ -85,6 +84,8 @@ One table of raw facts. Aggregates are computed at query time. At the expected v
 | `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `total_tokens` | raw `UsageDetail` counters, kept as received |
 | `uncached_input`, `cache_read`, `cache_write`, `output_non_reasoning`, `output_reasoning`, `accounting_quality` | normalized buckets (see Token normalization) |
 | `user_agent`, `client_name`, `client_version` | joined from the interceptor map. Empty when the join misses. |
+| `auth_index` | record. Matches `auth_index` in CPA's credential list. |
+| `limit_session_pct`, `limit_session_reset`, `limit_weekly_pct`, `limit_weekly_reset` | subscription limit snapshot from the upstream response headers (see Weekly limit value). Percent of the limit and reset in unix ms. NULL when the response did not report the window. |
 
 `client_name` and `client_version` are parsed from `User-Agent` with a small table of known clients (Codex CLI, Claude Code, T3 Code, opencode). Unknown agents keep the raw string with `client_name = "other"`. The raw `user_agent` column lets the parser change later and re-derive old rows.
 
@@ -123,12 +124,22 @@ Filters: period (24h, 7d, 30d, 90d), provider, model, client, API key hash.
 
 Views:
 
-1. Totals: API-estimate cost, requests, sessions, cost per request, processed tokens (with the average per active day, or per active hour in the 24-hour view), cache hit rate (cache read / total input), cache savings (cache reads priced as uncached input, minus their actual price), output including reasoning. Cost share by provider, with each provider's tokens and sessions. A session that used two providers counts once in each. Cost and tokens by token type (input, cache read, cache write, output), and cost by service tier. The tier split shows the premium paid over standard rates for priority calls and the discount for flex calls, since turning on a fast mode raises cost without changing any token count.
+1. Totals: API-estimate cost, requests, sessions, cost per request, processed tokens (with the average per active day, or per active hour in the 24-hour view), cache hit rate (cache read / total input), cache savings (cache reads priced as uncached input, minus their actual price), output including reasoning. Cost share by provider, with each provider's tokens and sessions. A session that used two providers counts once in each. Cost and tokens by token type (input, cache read, cache write, output), and cost by service tier. The tier split shows the premium paid over standard rates for priority calls and the discount for flex calls, since turning on a fast mode raises cost without changing any token count. Cost, requests, sessions, cost per request, processed tokens and output show their change against the previous period of the same length, and cache hit rate its change in percentage points. The change is left out when recording began inside that previous period (`data_since` in `summary`), since its partial totals would read as growth.
 2. Daily cost and tokens, stacked by provider (toggle cost or tokens).
-3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output, reasoning, latency and time to first token, plus daily cache hit rate. CPA reports time to first token only for streamed calls, so its percentiles leave out calls without one, and a day with none has no point. Grouped by reported model, by client version or by reasoning effort, since a client that raises its default effort spends more output with no model change. Vertical markers on the days a new `client_version`, `response_model` or `reasoning_effort` first appears. A request that names no effort is grouped as `unset` and never gets a marker.
+3. Per-request drift, the main view. "Per request" means per successful upstream call: generating, non-failed rows summed by `trace_id` plus `requested_at` (see "Unit of a request" below). Totals and cost still count every row, since every attempt that reports tokens consumed them. The view shows daily medians (and p90) per request of uncached input, cache read, cache write, output, reasoning, latency and time to first token, plus daily cache hit rate. CPA reports time to first token only for streamed calls, so its percentiles leave out calls without one, and a day with none has no point. Grouped by reported model, by client version or by reasoning effort, since a client that raises its default effort spends more output with no model change. Vertical markers on the days a new `client_version`, `response_model` or `reasoning_effort` first appears. A request that names no effort is grouped as `unset` and never gets a marker. The default measure is input including cache, which moves when the context grows whether or not the cache absorbs it. The first recorded day gets no markers, since every value is new on it.
 4. Breakdown table by model (one row per provider and model, since the same model can be reached through two providers at different prices), by client and version, by day, by API key hash or by reasoning effort: requests, tokens by type, cost, cost per request, share, median input and output per request.
 5. Model detail: cost per 1M tokens, cache hit rate, token-type mix, and the drift chart for that model.
 6. Cost quality and plugin health.
+7. Weekly limit value: API-priced cost per 1% of each Claude and Codex account's weekly limit, per day. For the same kind of work, a lower value means the provider tightened the limit. See below.
+
+### Weekly limit value
+
+Decided 2026-11-15. Claude and Codex report the account's limit usage on every response, in headers CPA passes to the plugin in `UsageRecord.ResponseHeaders` (`publishRecord` in `internal/runtime/executor/helps/usage_helpers.go`, set for every request, Codex WebSocket quota events merged in). The plugin stores a snapshot per row, so limit history needs no extra call and no token.
+
+- Claude: `Anthropic-Ratelimit-Unified-5h-Utilization` and `-7d-Utilization` are fractions of the limit, `-Reset` epoch seconds. Scoped windows such as `7d_opus` are not read.
+- Codex: `X-Codex-Primary-*` and `X-Codex-Secondary-*` with `Used-Percent` (0 to 100), `Window-Minutes`, and `Reset-At` (epoch seconds) or `Reset-After-Seconds` (counted from the response). A window of a day or less is the session, 7 to 30 days the week. Code review and other windows are not read.
+- A value that cannot be read is stored as NULL, never clamped or guessed. A readable percent with an unreadable reset keeps the percent.
+- `limit-burn` walks each account's rows in time order. Between two consecutive weekly snapshots of the same cycle (resets within an hour of each other and the percent not lower), the cost of the rows after the first snapshot up to the second is what moved the percent. A pair that crosses a reset or goes down is dropped. Each pair counts on the day of its second snapshot. Days on which an account moved less than 1 point, or cost nothing, are left out. The weekly percent belongs to the whole account, so the route takes only the range and provider and rejects model, client and API key filters.
 
 ### Limits view
 
@@ -151,12 +162,13 @@ Decided 2026-11-15. A second view, picked by a Usage | Limits switch in the filt
 
 All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and the filters above. Invalid parameters return `400` with a JSON error naming the parameter. Database faults return `503` with a distinct error code.
 
-- `summary`: totals, and cost by provider, token type and service tier.
+- `summary`: totals, cost by provider, token type and service tier, and `data_since`, the first recorded row of any filter.
 - `timeseries?bucket=day|hour&group=provider|model|client`: tokens and cost per bucket.
 - `drift?group=response_model|client_version|reasoning_effort`: medians and p90 per bucket, plus change markers.
 - `breakdown?by=model|client|day|api_key|reasoning_effort`
 - `health`
 - `pricing`: table age, unmatched models, overrides in use.
+- `limit-burn`: per day and account, the weekly limit points used, their cost and the cost per point.
 
 ### Configuration
 
@@ -170,7 +182,7 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 
 - Functional tests drive the plugin through its exported ABI entry point with recorded `usage.handle` and `request.intercept_before` payloads, then query the management routes and assert JSON results against hand-computed expectations.
 - Normalization and pricing get table tests with fixtures for each protocol family (OpenAI chat, OpenAI responses/Codex, Claude, Gemini).
-- An end-to-end smoke test builds CPA `v8.0.71` from source, loads the plugin, sends one request through a stub upstream, and checks that a row with the right `client_version` lands in SQLite. This is also the proof for the two unverified constraints above.
+- An end-to-end smoke test builds CPA `v8.0.71` from source, loads the plugin, sends two requests through a stub upstream, and checks that a row with the right `client_version` lands in SQLite and that the stub's Codex limit headers reach `limit-burn`. This is also the proof for the two unverified constraints above.
 
 ## Decided by the owner
 
@@ -181,6 +193,8 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - No changes to CPA. The plugin works with stock CPA releases so CPA upgrades stay routine. An upstream PR adding `TokenBreakdown` and `UserAgent` to the plugin usage record was considered and rejected for that reason. Consequences: the plugin keeps its own port of the accounting rules and reads `User-Agent` through the request interceptor.
 - Target host: CPA `v8.0.71`, plugin ABI schema 10.
 - Limits view (2026-11-15): pooled subscription limits per account, like T3 Code's Limits page. The browser reads them through CPA's `api-call`, so tokens stay in CPA. Rejected: a plugin backend reading tokens with `host.auth.get` and calling out with `host.http.do`. First version covers Claude and Codex only. Claude accounts are weighted by plan, at the cost of one profile call per account per page load.
+- Limit history (2026-11-15): the plugin keeps the limit snapshot each response reports in its headers, and the dashboard prices each point of the weekly limit to show when a provider changes it. Rejected: response interceptors, which receive bodies with no opt-out, run per stream chunk and sit in the delivery path. Not chosen: snapshots taken by the dashboard page from the Limits view, which would record only while the page is open.
+- Previous-period comparison on the totals and total input as the default drift measure (2026-11-15). Alerts and an automatic "what changed" summary were deferred.
 
 ## Unit of a request
 

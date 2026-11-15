@@ -67,6 +67,15 @@ type Row struct {
 	UserAgent     string
 	ClientName    string
 	ClientVersion string
+
+	// AuthIndex identifies the credential as CPA's management API lists it.
+	AuthIndex string
+	// Limit usage the response reported, in percent, and the reset in Unix
+	// milliseconds. Invalid when the response did not report it.
+	LimitSessionPct   sql.NullFloat64
+	LimitSessionReset sql.NullInt64
+	LimitWeeklyPct    sql.NullFloat64
+	LimitWeeklyReset  sql.NullInt64
 }
 
 // Store wraps the SQLite database.
@@ -154,8 +163,9 @@ const insertSQL = `INSERT OR IGNORE INTO requests (
 	stream, generate, failed, status_code, latency_ms, ttft_ms,
 	input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
 	uncached_input, cache_read, cache_write, output_non_reasoning, output_reasoning, unclassified, accounting_quality,
-	user_agent, client_name, client_version
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	user_agent, client_name, client_version,
+	auth_index, limit_session_pct, limit_session_reset, limit_weekly_pct, limit_weekly_reset
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // InsertBatch writes rows in one transaction. A row whose request_id already
 // exists is skipped, so replayed records are harmless.
@@ -183,6 +193,7 @@ func (s *Store) InsertBatch(rows []Row) (err error) {
 			r.InputTokens, r.OutputTokens, r.ReasoningTokens, r.CachedTokens, r.CacheReadTokens, r.CacheCreationTokens, r.TotalTokens,
 			r.UncachedInput, r.CacheRead, r.CacheWrite, r.OutputNonReasoning, r.OutputReasoning, r.Unclassified, r.AccountingQuality,
 			r.UserAgent, r.ClientName, r.ClientVersion,
+			r.AuthIndex, r.LimitSessionPct, r.LimitSessionReset, r.LimitWeeklyPct, r.LimitWeeklyReset,
 		); err != nil {
 			return fmt.Errorf("insert request %s: %w", r.RequestID, err)
 		}

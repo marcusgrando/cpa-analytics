@@ -12,6 +12,7 @@ One row per upstream call, stored in SQLite:
 - Tokens split into uncached input, cache read, cache write, output, reasoning, and unclassified. The split uses the same rules CPA applies internally.
 - The client name and version, parsed from the inbound `User-Agent`: `codex`, `claude-code`, `t3code` and `opencode` are recognized. Anything else is `other`.
 - A hash of the client API key, never the key itself.
+- For Claude and Codex subscription accounts, the 5-hour and weekly limit usage the provider reported in the response headers, and which credential made the call.
 
 Request and response bodies are never read or stored.
 
@@ -80,9 +81,13 @@ The page itself holds no data. It reads every number from the management routes 
 
 The page reloads its data every 60 seconds while the tab is visible. **Auto refresh** in the filter row turns it off for that tab.
 
-The drift chart is the main view. It plots median or p90 input and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider. Grouping by reasoning effort catches a client that raised its default effort: output and reasoning go up with no model change.
+The totals show how each figure changed against the previous period of the same length, once the plugin has recorded through that whole period.
+
+The drift chart is the main view. It plots median or p90 input (including cache by default) and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider. Grouping by reasoning effort catches a client that raised its default effort: output and reasoning go up with no model change.
 
 The same chart plots median or p90 latency and time to first token per request. Time to first token covers streamed calls only, since CPA reports none for the others.
+
+**Value of the weekly limit** plots, per day and account, the API-priced cost of each 1% of the account's weekly limit. For the same kind of work, a drop means the provider tightened the limit. Days on which an account used less than 1% of its week are left out. Snapshots start with plugin 0.1.11, so the chart fills from the day you install it.
 
 A request is one successful upstream call: one per HTTP request, and one per turn on a Responses WebSocket connection. Failed attempts count in totals and cost but not in the per-request medians.
 
@@ -101,6 +106,7 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version\|reasoning_effort` |
 | `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key\|reasoning_effort` |
 | `/v0/management/cpa-analytics/pricing` | |
+| `/v0/management/cpa-analytics/limit-burn` | only `from`, `to`, `tz` and `provider`. A weekly limit covers the whole account, so `model`, `client` and `api_key` are rejected. |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 
 Shared filters:

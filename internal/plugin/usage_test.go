@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -219,5 +220,52 @@ func TestOversizedUserAgentIsNotKept(t *testing.T) {
 	r := rowsAfterClose(t, p, path)["r1"]
 	if r.UserAgent != "" || r.ClientName != "" {
 		t.Fatalf("row kept the oversized agent: client %q, %d bytes", r.ClientName, len(r.UserAgent))
+	}
+}
+
+// Each response reports its account's limit usage in headers. The row keeps
+// the snapshot and the credential, so limit history can be read later.
+func TestUsageKeepsLimitSnapshotFromResponseHeaders(t *testing.T) {
+	p, path := startPlugin(t)
+	claude := pluginapi.UsageRecord{
+		RequestID: "c1", TraceID: "t1", Provider: "claude", ExecutorType: "ClaudeExecutor", AuthIndex: "a1b2c3",
+		Model: "claude-opus-5-5", Generate: true, RequestedAt: time.Unix(1_800_000_000, 0),
+		ResponseHeaders: http.Header{
+			"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.25"},
+			"Anthropic-Ratelimit-Unified-5h-Reset":       {"1800010000"},
+			"Anthropic-Ratelimit-Unified-7d-Utilization": {"0.4"},
+			"Anthropic-Ratelimit-Unified-7d-Reset":       {"1800300000"},
+		},
+	}
+	call(t, p, pluginabi.MethodUsageHandle, claude)
+	call(t, p, pluginabi.MethodUsageHandle, codexRecord("x1", "t2"))
+	p.Close()
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	type limits struct {
+		authIndex                 string
+		sessionPct, weeklyPct     sql.NullFloat64
+		sessionReset, weeklyReset sql.NullInt64
+	}
+	read := func(id string) limits {
+		var l limits
+		if err := s.DB().QueryRow(`SELECT auth_index, limit_session_pct, limit_session_reset, limit_weekly_pct, limit_weekly_reset
+			FROM requests WHERE request_id = ?`, id).Scan(&l.authIndex, &l.sessionPct, &l.sessionReset, &l.weeklyPct, &l.weeklyReset); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	got := read("c1")
+	want := limits{"a1b2c3", sql.NullFloat64{Float64: 25, Valid: true}, sql.NullFloat64{Float64: 40, Valid: true},
+		sql.NullInt64{Int64: 1_800_010_000_000, Valid: true}, sql.NullInt64{Int64: 1_800_300_000_000, Valid: true}}
+	if got != want {
+		t.Errorf("claude limits = %+v, want %+v", got, want)
+	}
+	// No limit headers: the columns stay NULL, never zero.
+	if got := read("x1"); got.sessionPct.Valid || got.weeklyPct.Valid || got.sessionReset.Valid || got.weeklyReset.Valid {
+		t.Errorf("record without headers stored limits %+v", got)
 	}
 }

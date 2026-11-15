@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/marcusgrando/cpa-analytics/internal/accounting"
 	"github.com/marcusgrando/cpa-analytics/internal/client"
+	"github.com/marcusgrando/cpa-analytics/internal/ratelimit"
 	"github.com/marcusgrando/cpa-analytics/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -17,12 +19,13 @@ import (
 // inbound User-Agent joined by trace ID, empty when unknown.
 func RowFromRecord(rec pluginapi.UsageRecord, ua string) store.Row {
 	b := accounting.Normalize(rec.Provider, rec.ExecutorType, rec.Detail)
+	limits := ratelimit.FromHeaders(rec.ResponseHeaders, rec.RequestedAt.Add(rec.Latency))
 	name, version := client.Parse(ua)
 	status := 0
 	if rec.Failed {
 		status = rec.Failure.StatusCode
 	}
-	return store.Row{
+	row := store.Row{
 		RequestID:            rec.RequestID,
 		TraceID:              rec.TraceID,
 		RequestedAt:          rec.RequestedAt.UnixMilli(),
@@ -65,7 +68,17 @@ func RowFromRecord(rec pluginapi.UsageRecord, ua string) store.Row {
 		UserAgent:            ua,
 		ClientName:           name,
 		ClientVersion:        version,
+		AuthIndex:            rec.AuthIndex,
 	}
+	if w := limits.Session; w != nil {
+		row.LimitSessionPct = sql.NullFloat64{Float64: w.UsedPct, Valid: true}
+		row.LimitSessionReset = sql.NullInt64{Int64: w.ResetAt, Valid: w.ResetAt > 0}
+	}
+	if w := limits.Weekly; w != nil {
+		row.LimitWeeklyPct = sql.NullFloat64{Float64: w.UsedPct, Valid: true}
+		row.LimitWeeklyReset = sql.NullInt64{Int64: w.ResetAt, Valid: w.ResetAt > 0}
+	}
+	return row
 }
 
 func hashAPIKey(key string) string {

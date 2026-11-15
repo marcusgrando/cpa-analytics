@@ -69,6 +69,9 @@ func (p *Plugin) routes() map[string]route {
 			}
 			return pricingReport{Status: p.pricingStatus(), ModelsReport: models}, nil
 		}},
+		"limit-burn": {"API-priced cost per point of each account's weekly subscription limit, per day", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
+			return query.LimitBurn(db, f, t)
+		}},
 		"health": {"Plugin storage, writer, join and pricing health", nil},
 	}
 }

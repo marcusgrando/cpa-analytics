@@ -9,6 +9,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 - **The client version comes from a TraceID join.** `request.intercept_before` sees the inbound `User-Agent`, and `usage.handle` sees the tokens. Both carry the same TraceID, and `internal/client` keeps a bounded TTL map between them. A miss is stored as an empty client and shown as `unknown`.
 - **Cost is computed at query time** from raw token columns. Never store a cost column.
 - **Limits are read through CPA's `api-call`, from the browser.** The Limits view lists credentials with `GET /v8/management/credentials` and reads each provider's usage endpoint with `POST /v8/management/requests/api-call`, so OAuth tokens stay in CPA and each credential's proxy applies. The plugin backend never handles provider tokens: reading them with `host.auth.get` and calling out with `host.http.do` was considered and rejected by the owner. The first version covers Claude and Codex. Claude accounts are weighted by plan from `/api/oauth/profile`.
+- **Limit history comes from response headers.** Claude and Codex report the account's limit usage on every response, and CPA passes the upstream response headers in `UsageRecord.ResponseHeaders`. `internal/ratelimit` reads them and each row keeps the snapshot. Response interceptors were rejected: they receive bodies with no opt-out, run per stream chunk and sit in the delivery path. Snapshots taken by the page were not chosen because they record only while the page is open.
 - **A request is one upstream call**: rows sharing `trace_id` and `requested_at`. A WebSocket connection shares one trace across turns, so never group per-request statistics by trace alone. The reasoning is in the spec under "Unit of a request".
 
 ## Guardrails
@@ -26,8 +27,9 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 1. Diff `sdk/cliproxy/usage/accounting.go` and `parseClaudeUsageNode` in `internal/runtime/executor/helps/usage_helpers.go` between the old tag and the new one, and port any rule change into `internal/accounting/accounting.go`. Update the tag named in its package comment.
 2. Bump `github.com/router-for-me/CLIProxyAPI/v8` in `go.mod` and run `go mod tidy`.
 3. Run `go test ./internal/accounting/`. `TestMatchesCPA` compares the port with CPA's own function on random inputs and fails on any divergence.
-4. Update `CPA_TAG` in `test/e2e/run.sh` and run `make e2e`. It proves the TraceID join and the inbound headers against the real host.
+4. Update `CPA_TAG` in `test/e2e/run.sh` and run `make e2e`. It proves the TraceID join, the inbound headers and the upstream limit headers against the real host.
 5. Check the plugin ABI methods and the `pluginapi` request and response types for changes.
+6. Diff the limit headers CPA reads in `sdk/cliproxy/auth/selector.go` (Claude) and `internal/runtime/executor/helps/codex_quota.go` (Codex), and update `internal/ratelimit` to match. `make e2e` checks that response headers still reach `usage.handle`.
 
 ## Testing
 

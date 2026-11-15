@@ -269,6 +269,15 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <details><summary>Table</summary><div id="drift-table" class="table-wrap"></div></details>
       </section>
 
+      <section id="burn" class="card" aria-labelledby="burn-title">
+        <h2 id="burn-title">Value of the weekly limit</h2>
+        <p class="sub">API-priced cost per 1% of each account's weekly limit, per day, from the limit usage Claude and Codex report on every response. For the same kind of work, a lower value means the provider tightened the limit. Days on which an account's weekly usage moved less than 1% are left out. Each account counts all its traffic, whatever the model, client or API key filter.</p>
+        <div id="burn-chart" class="chart"></div>
+        <div id="burn-legend" class="legend"></div>
+        <p id="burn-note" class="sub"></p>
+        <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
+      </section>
+
       <section id="daily" class="card" aria-labelledby="daily-title">
         <div class="card-head">
           <div>
@@ -876,6 +885,55 @@ function renderDrift() {
   ));
 }
 
+// Accounts are named from CPA's credential list. Without it, by auth index.
+function burnAccountName(authIndex) {
+  const account = (data.credentials || []).find((a) => a.auth_index === authIndex);
+  return account ? accountName(account) : authIndex;
+}
+
+function renderBurn() {
+  const container = document.getElementById('burn-chart');
+  const points = data.burn.points;
+  const note = document.getElementById('burn-note');
+  if (!points.length) {
+    container.replaceChildren(el('div', { class: 'empty', text: 'No account used 1% of its weekly limit on any day in this range. Limit usage is recorded from plugin 0.1.11 on.' }));
+    document.getElementById('burn-legend').replaceChildren();
+    document.getElementById('burn-table').replaceChildren();
+    note.textContent = '';
+    return;
+  }
+  note.textContent = points.some((p) => p.unpriced_tokens > 0) ? 'Some tokens have no price, so the values that include them are understated.' : '';
+  const xs = buckets(DAY);
+  const index = new Map(xs.map((t, i) => [t, i]));
+  const accounts = [...new Set(points.map((p) => p.auth_index))];
+  const color = (a) => colorFor('account', a);
+  const g = frame(container, xs, Math.max(...points.map((p) => p.usd_per_pct)), fmtUSD, fmtDay);
+  g.svg.setAttribute('aria-label', 'Cost per 1% of the weekly limit by day and account');
+  for (const a of accounts) {
+    const pts = points.filter((p) => p.auth_index === a && index.has(p.t));
+    if (pts.length > 1) {
+      const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(p.usd_per_pct)).join(' ');
+      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color(a) }));
+    }
+    for (const p of pts) {
+      g.svg.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(p.usd_per_pct), r: 4, 'stroke-width': 2, style: `fill:${color(a)};stroke:var(--surface)` }));
+    }
+  }
+  hitColumns(g, xs, (i) => {
+    const title = fmtDay(xs[i]) + ' · per 1% of the weekly limit';
+    const rows = points.filter((p) => p.t === xs[i]).map((p) => ({
+      color: color(p.auth_index), value: fmtUSD(p.usd_per_pct),
+      label: `${burnAccountName(p.auth_index)} (${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)})`,
+    }));
+    return { title, label: title, rows };
+  });
+  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ color: color(a), label: burnAccountName(a) })), 'line');
+  document.getElementById('burn-table').replaceChildren(table(
+    ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
+    points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct)]),
+  ));
+}
+
 function renderBreakdown() {
   const b = data.breakdown;
   const container = document.getElementById('breakdown-table');
@@ -1114,6 +1172,7 @@ function renderAll() {
   renderTotals();
   renderModelDetail();
   renderDrift();
+  renderBurn();
   renderDaily();
   renderBreakdown();
   renderQuality();
@@ -1166,17 +1225,23 @@ async function loadUsage(current) {
   health.catch(() => {});
   // The previous period is fetched alongside and kept only if recording covered it.
   const prevRange = previousPeriod(p);
-  const [summary, prev, daily, drift, breakdown, pricing] = await Promise.all([
+  // Credentials only name the accounts, so the chart still draws without them.
+  const credentials = management('/v8/management/credentials').then((c) => c.files || [], () => []);
+  const [summary, prev, daily, drift, burn, breakdown, pricing] = await Promise.all([
     api('summary', p),
     api('summary', { ...p, ...prevRange }),
     api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
     api('drift', { ...p, group: state.driftGroup }),
+    api('limit-burn', { ...rangeParams(), provider: state.provider }),
     api('breakdown', { ...p, by: state.by }),
     api('pricing', p),
   ]);
   await health;
   if (!current()) return;
-  data = { summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, breakdown, pricing };
+  data = {
+    summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, burn, breakdown, pricing,
+    credentials: await credentials,
+  };
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
   renderAll();
@@ -1290,7 +1355,7 @@ document.querySelectorAll('[data-by]').forEach((b) => b.addEventListener('click'
 let resizeTimer = 0;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (data.summary) { renderDrift(); renderDaily(); } }, 100);
+  resizeTimer = setTimeout(() => { if (data.summary) { renderDrift(); renderBurn(); renderDaily(); } }, 100);
 }).observe(document.querySelector('.wrap'));
 
 restoreAutoRefresh();

@@ -209,6 +209,22 @@ func TestIndexDriftDefaultsToTotalInput(t *testing.T) {
 	}
 }
 
+// The weekly limit value reads the whole account, so the page sends only the
+// range and provider, and names accounts from CPA's credential list.
+func TestIndexChartsWeeklyLimitValue(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`id="burn"`,
+		`api('limit-burn', { ...rangeParams(), provider: state.provider })`,
+		`p.usd_per_pct`,
+		`management('/v8/management/credentials')`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
 // limits.js and compare.js are tested by bun on their own and inlined into the page.
 func TestIndexInlinesScripts(t *testing.T) {
 	page := string(Index())

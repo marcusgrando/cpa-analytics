@@ -86,33 +86,37 @@ for _ in $(seq 1 60); do
 done
 mgmt health >/dev/null || fail "plugin management routes never came up"
 
-echo "sending a request as codex_cli_rs/0.130.0"
-status=$(curl -sS -o "$WORK/response.json" -w '%{http_code}' "http://127.0.0.1:$CPA_PORT/v1/chat/completions" \
-  -H "Authorization: Bearer $CLIENT_KEY" -H "Content-Type: application/json" \
-  -H "User-Agent: codex_cli_rs/0.130.0 (Linux; x86_64) e2e" \
-  -d '{"model":"stub-model","messages":[{"role":"user","content":"hi"}]}')
-[ "$status" = 200 ] || fail "proxied request returned $status: $(head -c 400 "$WORK/response.json")"
+# Two requests: the stub reports two more weekly limit points on the second.
+echo "sending two requests as codex_cli_rs/0.130.0"
+for _ in 1 2; do
+  status=$(curl -sS -o "$WORK/response.json" -w '%{http_code}' "http://127.0.0.1:$CPA_PORT/v1/chat/completions" \
+    -H "Authorization: Bearer $CLIENT_KEY" -H "Content-Type: application/json" \
+    -H "User-Agent: codex_cli_rs/0.130.0 (Linux; x86_64) e2e" \
+    -d '{"model":"stub-model","messages":[{"role":"user","content":"hi"}]}')
+  [ "$status" = 200 ] || fail "proxied request returned $status: $(head -c 400 "$WORK/response.json")"
+done
 
 records=0
 for _ in $(seq 1 60); do
   records=$(mgmt summary | python3 -c 'import json,sys; print(json.load(sys.stdin)["totals"]["records"])')
-  [ "$records" -ge 1 ] && break
+  [ "$records" -ge 2 ] && break
   sleep 0.5
 done
-[ "$records" -ge 1 ] || fail "no usage record reached the plugin"
+[ "$records" -ge 2 ] || fail "the usage records did not reach the plugin"
 
 check() {
   python3 -c "import json,sys; d=json.load(sys.stdin); ok=$2; print(('ok   ' if ok else 'BAD ') + '$1'); ok or print(json.dumps(d)[:1500]); sys.exit(0 if ok else 1)" || fail "$1"
 }
 mgmt "breakdown?by=client" | check "client is codex/0.130.0 (TraceID join)" '[r["key"] for r in d["rows"]] == ["codex/0.130.0"]'
 mgmt "breakdown?by=model" | check "reported model recorded" '[r["key"] for r in d["rows"]] == ["stub-model-2026-11-01"]'
-mgmt summary | check "tokens normalized" 'd["totals"]["uncached_input"] == 200 and d["totals"]["cache_read"] == 1000 and d["totals"]["reasoning"] == 100'
+mgmt summary | check "tokens normalized" 'd["totals"]["uncached_input"] == 400 and d["totals"]["cache_read"] == 2000 and d["totals"]["reasoning"] == 200'
 for _ in $(seq 1 20); do
   mgmt pricing | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["status"]["models"] else 1)' && break
   sleep 0.5
 done
 mgmt pricing | check "price table fetched through host.http.do" 'd["status"]["models"] >= 1'
 mgmt summary | check "cost priced from the table" 'd["totals"]["cost_usd"] > 0 and d["totals"]["cost_quality"]["unpriced_tokens"] == 0'
+mgmt limit-burn | check "weekly limit read from response headers" 'len(d["points"]) == 1 and d["points"][0]["weekly_pct"] == 2 and d["points"][0]["auth_index"] != ""'
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/summary")
 [ "$code" = 401 ] && echo "ok   management routes require the key" || fail "summary without key returned $code"
 curl -fsS "http://127.0.0.1:$CPA_PORT/v0/resource/plugins/cpa-analytics/dashboard" | grep -q 'id="drift"' \
