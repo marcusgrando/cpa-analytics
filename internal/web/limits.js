@@ -195,21 +195,38 @@ function weightsOf(members) {
   return members.map((m) => (weighted ? m.weight : 1));
 }
 
-// poolHistory pools accounts ({account, weight, points}) at each time. An
-// account joins the pool at its first reading, so used is null until one exists.
+// poolHistory pools accounts ({account, weight, lengthMs, points}) at each
+// time, from the first reading of any account on. Before an account's own
+// first reading CPA sent it no traffic, so it holds that first value, though
+// never back past the start of that reading's cycle.
 function poolHistory(accounts, times) {
   const weights = weightsOf(accounts);
+  const firsts = accounts.map((a) => a.points[0] || null);
+  const since = Math.min(...firsts.filter(Boolean).map((p) => p.t));
+  const valueAt = (a, first, t) => {
+    const v = readingAt(a.points, t);
+    if (v !== null || !first || t < since) return v;
+    const cycleStart = first.weekly_reset > 0 && a.lengthMs > 0 ? first.weekly_reset - a.lengthMs : -Infinity;
+    return t >= cycleStart ? first.weekly_pct : null;
+  };
   return times.map((t) => {
     let sum = 0;
     let total = 0;
     accounts.forEach((a, i) => {
-      const v = readingAt(a.points, t);
+      const v = valueAt(a, firsts[i], t);
       if (v === null) return;
       sum += weights[i] * v;
       total += weights[i];
     });
     return { t, used: total > 0 ? sum / total : null };
   });
+}
+
+// withLiveReading ends an account's recorded readings with the one the view
+// read live ({used, resetsAt}), so the recorded line meets the bar at now.
+function withLiveReading(points, live, now) {
+  if (live.used === null || live.used === undefined) return points;
+  return [...points, { t: now, weekly_pct: live.used, weekly_reset: live.resetsAt || 0 }];
 }
 
 const sameCycle = (a, b) => Math.abs(a.weekly_reset - b.weekly_reset) <= RESET_JITTER;
@@ -285,6 +302,6 @@ async function mapLimit(items, limit, fn) {
 if (typeof module !== 'undefined') {
   module.exports = {
     claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
-    readingAt, poolHistory, burnRate, projectPool,
+    readingAt, poolHistory, burnRate, projectPool, withLiveReading,
   };
 }

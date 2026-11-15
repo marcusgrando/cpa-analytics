@@ -1,6 +1,6 @@
 // Run with: bun test internal/web
 import { describe, expect, test } from 'bun:test';
-import { readingAt, poolHistory, burnRate, projectPool } from './limits.js';
+import { readingAt, poolHistory, burnRate, projectPool, withLiveReading } from './limits.js';
 
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -27,20 +27,45 @@ describe('readings', () => {
 
 describe('pool history', () => {
   const accounts = [
-    { account: 'a', weight: 20, points: [pt(now - 4 * HOUR, 50)] },
-    { account: 'b', weight: 5, points: [pt(now - 2 * HOUR, 10)] },
+    { account: 'a', weight: 20, lengthMs: 7 * DAY, points: [pt(now - 4 * HOUR, 50)] },
+    { account: 'b', weight: 5, lengthMs: 7 * DAY, points: [pt(now - 2 * HOUR, 10)] },
   ];
-  test('pools the accounts known at each time by plan weight', () => {
+  test('pools the accounts by plan weight from the first recorded reading on', () => {
     const got = poolHistory(accounts, [now - 5 * HOUR, now - 3 * HOUR, now]);
     expect(got).toEqual([
       { t: now - 5 * HOUR, used: null },
-      { t: now - 3 * HOUR, used: 50 },
+      { t: now - 3 * HOUR, used: (20 * 50 + 5 * 10) / 25 },
       { t: now, used: (20 * 50 + 5 * 10) / 25 },
     ]);
+  });
+  test('an account CPA sent nothing to keeps its first known value back to the start of recording', () => {
+    // b has no recorded reading, only the live one at now: it was spent all along.
+    const spent = { account: 'b', weight: 5, lengthMs: 7 * DAY, points: [pt(now, 100)] };
+    const got = poolHistory([accounts[0], spent], [now - 3 * HOUR]);
+    expect(got[0].used).toBe((20 * 50 + 5 * 100) / 25);
+  });
+  test('the first known value is not carried back past the start of its cycle', () => {
+    // b's first reading belongs to a cycle that began 2 hours ago.
+    const renewed = { account: 'b', weight: 5, lengthMs: 7 * DAY, points: [pt(now - HOUR, 3, now - 2 * HOUR + 7 * DAY)] };
+    const got = poolHistory([accounts[0], renewed], [now - 3 * HOUR, now]);
+    expect(got.map((p) => p.used)).toEqual([50, (20 * 50 + 5 * 3) / 25]);
   });
   test('falls back to equal weights when a plan is unknown, like the live pool', () => {
     const got = poolHistory([accounts[0], { ...accounts[1], weight: null }], [now]);
     expect(got[0].used).toBe(30);
+  });
+});
+
+describe('live reading', () => {
+  test('ends the recorded readings with what the view read live', () => {
+    const recorded = [pt(now - HOUR, 60)];
+    expect(withLiveReading(recorded, { used: 68, resetsAt: reset }, now)).toEqual([pt(now - HOUR, 60), pt(now, 68)]);
+  });
+  test('stands alone for an account with no recorded reading, and a missing reset never expires', () => {
+    expect(withLiveReading([], { used: 100, resetsAt: null }, now)).toEqual([pt(now, 100, 0)]);
+  });
+  test('is left out when the view could not read the account', () => {
+    expect(withLiveReading([pt(now - HOUR, 60)], { used: null, resetsAt: null }, now)).toEqual([pt(now - HOUR, 60)]);
   });
 });
 

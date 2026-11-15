@@ -306,3 +306,17 @@ func TestIndexOffersAccountBreakdown(t *testing.T) {
 		t.Error("breakdown has no account option")
 	}
 }
+
+// One login can hold a Claude and a Codex account, so a name alone is
+// ambiguous wherever accounts of both providers are listed together.
+func TestIndexNamesAccountsWithTheirProvider(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`if (b.by === 'account') return key ? accountWithProvider(key) : 'not recorded';`,
+		`label: accountWithProvider(a)`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}

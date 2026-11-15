@@ -908,6 +908,13 @@ function burnAccountName(authIndex) {
   return account ? accountName(account) : authIndex;
 }
 
+// accountWithProvider names the provider too, since one login can hold both a
+// Claude and a Codex account.
+function accountWithProvider(authIndex) {
+  const account = (data.credentials || []).find((a) => a.auth_index === authIndex);
+  return account ? `${accountName(account)} (${account.provider})` : authIndex;
+}
+
 function renderBurn() {
   const container = document.getElementById('burn-chart');
   const points = data.burn.points;
@@ -940,11 +947,11 @@ function renderBurn() {
     const title = fmtDay(xs[i]) + ' · per 1% of the weekly limit';
     const rows = points.filter((p) => p.t === xs[i]).map((p) => ({
       color: color(p.auth_index), value: fmtUSD(p.usd_per_pct),
-      label: `${burnAccountName(p.auth_index)} (${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)})`,
+      label: `${accountWithProvider(p.auth_index)}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
     }));
     return { title, label: title, rows };
   });
-  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ color: color(a), label: burnAccountName(a) })), 'line');
+  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ color: color(a), label: accountWithProvider(a) })), 'line');
   document.getElementById('burn-table').replaceChildren(table(
     ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
     points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct)]),
@@ -957,7 +964,7 @@ function renderLeftover() {
   const container = document.getElementById('leftover-table');
   if (!cycles.length) {
     total.textContent = '';
-    container.replaceChildren(el('div', { class: 'empty', text: 'No weekly cycle ended in this range. Limit usage is recorded from plugin 0.1.11 on.' }));
+    container.replaceChildren(el('div', { class: 'empty', text: 'No weekly cycle has ended in this range yet. Each account shows up here after its weekly reset, with the part of its limit it left unused. Limit usage is recorded from plugin 0.1.11 on.' }));
     return;
   }
   const priced = cycles.filter((c) => c.usd_per_pct > 0);
@@ -1007,7 +1014,7 @@ function renderBreakdown() {
       const name = key.split('/')[0];
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by client ' + name, onclick: () => setFilter('client', name) });
     }
-    if (b.by === 'account') return key ? burnAccountName(key) : 'not recorded';
+    if (b.by === 'account') return key ? accountWithProvider(key) : 'not recorded';
     if (b.by === 'api_key') {
       if (!key) return 'no key';
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by this API key', onclick: () => {
@@ -1252,10 +1259,12 @@ function drawTrends() {
 // with the same weights, and projects the pool from each account's burn rate.
 function weeklyTrend(pool, byAccount, readings, now) {
   const pointsOf = new Map(readings.map((a) => [a.auth_index, a.points]));
-  const members = pool.members.map((m) => ({ account: m.account, weight: m.weight, points: pointsOf.get(m.account) || [] }));
-  if (!members.some((m) => m.points.length)) {
+  if (!pool.members.some((m) => (pointsOf.get(m.account) || []).length)) {
     return el('p', { class: 'sub', text: 'No recorded readings yet. The plugin records weekly limit usage from the traffic it proxies, from 0.1.11 on.' });
   }
+  const members = pool.members.map((m) => ({
+    account: m.account, weight: m.weight, lengthMs: m.lengthMs, points: withLiveReading(pointsOf.get(m.account) || [], m, now),
+  }));
   const times = [];
   for (let t = now - TREND_PAST; t <= now; t += TREND_STEP) times.push(t);
   const recorded = poolHistory(members, times);
