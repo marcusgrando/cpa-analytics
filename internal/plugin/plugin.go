@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcus-grando-azion/cpa-analytics/internal/client"
+	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
 	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
@@ -49,6 +50,7 @@ type Plugin struct {
 	store      *store.Store
 	writer     *store.Writer
 	storageErr string
+	refresher  *pricing.Refresher
 
 	// droppedNoStore counts records received while the database could not be opened.
 	droppedNoStore atomic.Uint64
@@ -102,9 +104,10 @@ func (p *Plugin) Handle(method string, req []byte) (out []byte) {
 // Close flushes queued rows and closes the database. Safe to call more than once.
 func (p *Plugin) Close() {
 	p.mu.Lock()
-	w, s := p.writer, p.store
-	p.writer, p.store = nil, nil
+	w, s, r := p.writer, p.store, p.refresher
+	p.writer, p.store, p.refresher = nil, nil, nil
 	p.mu.Unlock()
+	r.Stop()
 	w.Close()
 	if s != nil {
 		s.Close()
@@ -202,8 +205,16 @@ func (p *Plugin) register(raw []byte) ([]byte, error) {
 	}
 	p.openStorage(cfg.DBPath)
 	p.mu.Lock()
+	restartPricing := p.refresher == nil || p.cfg.PricingURL != cfg.PricingURL
 	p.cfg = cfg
+	var kv pricing.KV
+	if p.store != nil {
+		kv = p.store
+	}
 	p.mu.Unlock()
+	if restartPricing {
+		p.startPricing(cfg.PricingURL, kv)
+	}
 	return json.Marshal(registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata:      metadata(),
