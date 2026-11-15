@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/marcus-grando-azion/cpa-analytics/internal/client"
+	"github.com/marcus-grando-azion/cpa-analytics/internal/store"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -17,6 +22,12 @@ const (
 	// minHostSchema is the first host schema that honors
 	// request_interceptor_omit_body_before, so request bodies never reach the plugin.
 	minHostSchema uint32 = 7
+
+	traceTTL      = 10 * time.Minute
+	traceCapacity = 50_000
+	queueCapacity = 10_000
+	flushEvery    = time.Second
+	batchSize     = 500
 )
 
 // Host calls back into CLIProxyAPI (host.http.do, host.log).
@@ -31,17 +42,37 @@ type Plugin struct {
 	host     Host
 	handlers map[string]handlerFunc
 
-	mu  sync.Mutex
-	cfg Config
+	traces *client.Traces
+
+	mu         sync.Mutex
+	cfg        Config
+	store      *store.Store
+	writer     *store.Writer
+	storageErr string
+
+	// droppedNoStore counts records received while the database could not be opened.
+	droppedNoStore atomic.Uint64
+}
+
+// Health is what the plugin reports about itself.
+type Health struct {
+	DBPath       string            `json:"db_path"`
+	StorageError string            `json:"storage_error,omitempty"`
+	Writer       store.WriterStats `json:"writer"`
+	TraceHits    uint64            `json:"trace_hits"`
+	TraceMisses  uint64            `json:"trace_misses"`
 }
 
 // New builds a plugin. host may be nil in tests that do not need callbacks.
 func New(host Host) *Plugin {
-	p := &Plugin{host: host}
+	p := &Plugin{host: host, traces: client.NewTraces(traceTTL, traceCapacity, time.Now)}
 	p.handlers = map[string]handlerFunc{
-		pluginabi.MethodPluginRegister:    p.register,
-		pluginabi.MethodPluginReconfigure: p.register,
-		pluginabi.MethodPluginShutdown:    p.shutdown,
+		pluginabi.MethodPluginRegister:         p.register,
+		pluginabi.MethodPluginReconfigure:      p.register,
+		pluginabi.MethodPluginShutdown:         p.shutdown,
+		pluginabi.MethodUsageHandle:            p.handleUsage,
+		pluginabi.MethodRequestInterceptBefore: p.interceptBefore,
+		pluginabi.MethodRequestInterceptAfter:  passThrough,
 	}
 	return p
 }
@@ -68,8 +99,73 @@ func (p *Plugin) Handle(method string, req []byte) (out []byte) {
 	return okEnvelope(result)
 }
 
-// Close releases resources. Safe to call more than once.
-func (p *Plugin) Close() {}
+// Close flushes queued rows and closes the database. Safe to call more than once.
+func (p *Plugin) Close() {
+	p.mu.Lock()
+	w, s := p.writer, p.store
+	p.writer, p.store = nil, nil
+	p.mu.Unlock()
+	w.Close()
+	if s != nil {
+		s.Close()
+	}
+}
+
+// Health returns storage, writer and join statistics.
+func (p *Plugin) Health() Health {
+	p.mu.Lock()
+	h := Health{DBPath: p.cfg.DBPath, StorageError: p.storageErr, Writer: p.writer.Stats()}
+	p.mu.Unlock()
+	h.Writer.Dropped += p.droppedNoStore.Load()
+	h.TraceHits, h.TraceMisses = p.traces.Stats()
+	return h
+}
+
+func (p *Plugin) currentWriter() *store.Writer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.writer
+}
+
+// openStorage (re)opens the database when the path changed or a previous
+// open failed. A failure is recorded for health and never fails registration.
+func (p *Plugin) openStorage(path string) {
+	p.mu.Lock()
+	if p.store != nil && p.cfg.DBPath == path {
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+	p.Close()
+	s, err := store.Open(path)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		p.storageErr = err.Error()
+		p.logf("error", "cpa-analytics: storage unavailable: %v", err)
+		return
+	}
+	p.storageErr = ""
+	p.store = s
+	p.writer = store.NewWriter(s, queueCapacity, flushEvery, batchSize, func(format string, args ...any) {
+		p.logf("warn", format, args...)
+	})
+}
+
+// logf sends a log line through host.log. It never fails the caller.
+func (p *Plugin) logf(level, format string, args ...any) {
+	if p.host == nil {
+		return
+	}
+	raw, err := json.Marshal(map[string]any{"level": level, "message": fmt.Sprintf(format, args...)})
+	if err != nil {
+		return
+	}
+	go func() {
+		defer func() { _ = recover() }()
+		_, _ = p.host.Call(pluginabi.MethodHostLog, raw)
+	}()
+}
 
 type lifecycleRequest struct {
 	ConfigYAML    []byte `json:"config_yaml"`
@@ -104,6 +200,7 @@ func (p *Plugin) register(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, &codedError{code: "invalid_config", msg: err.Error()}
 	}
+	p.openStorage(cfg.DBPath)
 	p.mu.Lock()
 	p.cfg = cfg
 	p.mu.Unlock()
