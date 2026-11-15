@@ -110,6 +110,15 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .key-form p { margin: 0; color: var(--ink-2); }
 body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+#limits-body { margin-top: 16px; }
+.limits-provider + .limits-provider { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--grid); }
+.pool { margin-top: 14px; }
+.pool-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
+.pool-head strong { color: var(--ink); font-size: 13px; }
+.pool-bar { position: relative; height: 14px; margin: 6px 0 4px; border-radius: 4px; background: var(--wash); }
+.pool-bar .fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.pool-bar .pace-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink); }
+.pace { display: inline-flex; align-items: center; gap: 5px; }
 .split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-top: 16px; }
 .split-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 @media (min-width: 900px) {
@@ -137,7 +146,11 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
   <main id="app" hidden>
     <div class="filters" role="group" aria-label="Filters">
-      <label>Period
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" data-view="usage" aria-pressed="true">Usage</button>
+        <button type="button" data-view="limits" aria-pressed="false">Limits</button>
+      </div>
+      <label class="usage-only">Period
         <select id="f-period">
           <option value="1">Last 24 hours</option>
           <option value="7" selected>Last 7 days</option>
@@ -145,21 +158,28 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <option value="90">Last 90 days</option>
         </select>
       </label>
-      <label>Provider <select id="f-provider"><option value="">All providers</option></select></label>
-      <label>Model <select id="f-model"><option value="">All models</option></select></label>
-      <label>Client <select id="f-client"><option value="">All clients</option></select></label>
-      <label>API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
-      <label>Auto refresh
+      <label class="usage-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
+      <label class="usage-only">Model <select id="f-model"><option value="">All models</option></select></label>
+      <label class="usage-only">Client <select id="f-client"><option value="">All clients</option></select></label>
+      <label class="usage-only">API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
+      <label class="usage-only">Auto refresh
         <select id="auto-refresh">
           <option value="60" selected>Every 60 s</option>
           <option value="0">Off</option>
         </select>
       </label>
+      <button id="check-limits" class="limits-only" type="button" hidden>Check now</button>
       <button id="change-key" type="button">Change key</button>
       <span id="updated" class="updated" aria-live="off"></span>
     </div>
 
-    <div class="grid">
+    <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
+      <h2 id="limits-title">Subscription limits</h2>
+      <p class="sub">Each bar pools one window across the accounts in CPA, weighted by plan when every plan is known. Colors are accounts. The dark tick is where usage would be if it were spread evenly over the window.</p>
+      <div id="limits-body"></div>
+    </section>
+
+    <div class="grid usage-only">
       <section id="totals" class="card" aria-labelledby="totals-title">
         <h2 id="totals-title" class="sr-only">Totals</h2>
         <div class="hero-label">Cost, API estimate</div>
@@ -275,6 +295,9 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 
 <script>
+/* limits.js */
+</script>
+<script>
 'use strict';
 
 const API = '/v0/management/cpa-analytics/';
@@ -286,7 +309,7 @@ const SERIES_SLOTS = 8;
 
 const state = {
   period: 7, provider: '', model: '', client: '', apiKey: '',
-  dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'uncached_input', driftStat: 'median', by: 'model',
+  view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'uncached_input', driftStat: 'median', by: 'model',
 };
 let data = {};
 let managementKey = '';
@@ -363,7 +386,18 @@ async function api(route, params) {
   for (const [name, value] of Object.entries(params || {})) {
     if (value !== '' && value !== undefined && value !== null) url.searchParams.set(name, value);
   }
-  const res = await fetch(url, { headers: { Authorization: 'Bearer ' + managementKey }, cache: 'no-store' });
+  return request(url);
+}
+
+// management calls CPA's own management API with the same key.
+function management(path, payload) {
+  const url = new URL(path, location.origin);
+  if (payload === undefined) return request(url);
+  return request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+}
+
+async function request(url, init = {}) {
+  const res = await fetch(url, { ...init, headers: { ...init.headers, Authorization: 'Bearer ' + managementKey }, cache: 'no-store' });
   let body = null;
   try { body = await res.json(); } catch (_) { /* non-JSON error page */ }
   const message = body && body.error ? (typeof body.error === 'string' ? body.error : body.error.message) : '';
@@ -859,6 +893,155 @@ function renderHealth(h) {
   document.getElementById('health').replaceChildren(...items);
 }
 
+/* ---------- limits ---------- */
+
+const LIMITS_REFRESH_SECONDS = 300;
+const LIMIT_PROVIDERS = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }];
+const CLAUDE_HEADERS = { 'anthropic-beta': 'oauth-2025-04-20' };
+const CLAUDE_PLANS = { 20: 'Max 20x', 5: 'Max 5x', 1: 'Pro' };
+// A plan rarely changes, so each Claude profile is read once per page load.
+const claudeProfiles = new Map();
+let limitsData = null;
+
+// upstreamCall asks CPA to call a provider with the credential's token. The
+// token never reaches the browser, and CPA applies the credential's proxy.
+async function upstreamCall(account, url, headers) {
+  const r = await management('/v8/management/requests/api-call', {
+    auth_index: account.auth_index, method: 'GET', url, header: { Authorization: 'Bearer $TOKEN$', ...headers },
+  });
+  const problem = accountProblem(r.status_code, account.requires_sign_in === true);
+  if (problem) throw new Error(problem);
+  try { return JSON.parse(r.body); } catch (_) { throw new Error('The provider did not answer with JSON.'); }
+}
+
+async function readClaude(account) {
+  const usage = await upstreamCall(account, 'https://api.anthropic.com/api/oauth/usage', CLAUDE_HEADERS);
+  let profile = claudeProfiles.get(account.auth_index);
+  if (!profile) {
+    // Without a profile the pool falls back to equal weights.
+    profile = await upstreamCall(account, 'https://api.anthropic.com/api/oauth/profile', CLAUDE_HEADERS).catch(() => null);
+    if (profile) claudeProfiles.set(account.auth_index, profile);
+  }
+  const weight = claudeWeight(profile);
+  return { windows: parseClaudeUsage(usage), weight, plan: CLAUDE_PLANS[weight] || '' };
+}
+
+async function readCodex(account) {
+  const workspace = account.id_token && account.id_token.chatgpt_account_id;
+  const usage = await upstreamCall(account, 'https://chatgpt.com/backend-api/wham/usage', workspace ? { 'ChatGPT-Account-Id': workspace } : {});
+  const { plan, windows } = parseCodexUsage(usage);
+  return { windows, weight: codexWeight(plan), plan };
+}
+
+const LIMIT_READERS = { claude: readClaude, codex: readCodex };
+const providerOf = (account) => String(account.provider || '').toLowerCase();
+
+async function loadLimits(current) {
+  const creds = await management('/v8/management/credentials');
+  const files = (creds.files || []).filter((f) => LIMIT_READERS[providerOf(f)]);
+  const active = files.filter((f) => !f.disabled);
+  const results = await mapLimit(active, 4, async (account) => {
+    // A newer load replaced this one, so spare the rate-limited endpoints.
+    if (!current()) return null;
+    try {
+      return { account, ...(await LIMIT_READERS[providerOf(account)](account)) };
+    } catch (err) {
+      if (err instanceof AuthError) throw err;
+      return { account, error: err.message };
+    }
+  });
+  if (!current()) return;
+  limitsData = { checkedAt: Date.now(), results, disabled: files.length - active.length };
+  document.getElementById('key-form').hidden = true;
+  document.getElementById('app').hidden = false;
+  renderLimits();
+  document.getElementById('updated').textContent = 'Checked ' + new Date(limitsData.checkedAt).toLocaleTimeString() + ', every 5 min';
+}
+
+const accountName = (a) => a.label || a.email || a.name || a.auth_index;
+const fmtWhen = (t) => new Date(t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const fmtShare = (v) => Math.round(v) + '%';
+const PACE = {
+  ahead: { color: 'var(--warning)', label: 'Ahead of pace' },
+  on: { color: 'var(--good)', label: 'On pace' },
+  under: { color: 'var(--good)', label: 'Under pace' },
+};
+
+function poolBar(pool, byAccount, now) {
+  const bar = el('div', { class: 'pool-bar', role: 'img',
+    'aria-label': `${fmtShare(pool.used)} used, ${fmtShare(pool.expected)} of the window elapsed. ` +
+      pool.segments.map((s) => `${accountName(byAccount.get(s.account).account)} ${fmtShare(s.share)}`).join(', ') });
+  let left = 0;
+  pool.members.forEach((m, i) => {
+    const share = pool.segments[i].share;
+    if (share <= 0) return;
+    const r = byAccount.get(m.account);
+    const rows = [
+      m.blocked ? { value: 'Blocked', label: 'until the weekly limit resets' } : { value: fmtShare(m.used), label: 'of this account used' },
+      { value: fmtShare(share), label: 'of the pool' },
+      { value: r.plan || 'plan unknown', label: '' },
+      m.resetsAt && m.resetsAt > now ? { value: 'resets in ' + fmtDuration(m.resetsAt - now), label: fmtWhen(m.resetsAt) } : null,
+    ].filter(Boolean);
+    // 2px of surface between neighbouring fills.
+    const fill = el('div', { class: 'fill', tabindex: 0,
+      style: `left:${left}%;width:calc(${Math.min(share, 100 - left)}% - ${left + share < 99.5 ? 2 : 0}px);background:${colorFor('account', m.account)}` });
+    for (const ev of ['pointermove', 'focus']) fill.addEventListener(ev, (e) => showTooltip(e, accountName(r.account), rows));
+    fill.addEventListener('pointerleave', hideTooltip);
+    fill.addEventListener('blur', hideTooltip);
+    bar.append(fill);
+    left += share;
+  });
+  if (pool.expected > 0) bar.append(el('div', { class: 'pace-mark', style: `left:calc(${Math.min(pool.expected, 100)}% - 1px)` }));
+  return bar;
+}
+
+function renderPool(pool, byAccount, now) {
+  const pace = PACE[pool.pace];
+  const next = pool.restores[0];
+  return el('div', { class: 'pool' },
+    el('div', { class: 'pool-head' },
+      el('strong', { text: pool.label }),
+      el('span', { text: fmtShare(pool.used) + ' used' }),
+      pace ? el('span', { class: 'pace', title: `${fmtShare(pool.expected)} of the window has elapsed` },
+        el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
+      next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
+    poolBar(pool, byAccount, now),
+    el('div', { class: 'legend' }, ...pool.members.map((m) => el('span', {},
+      el('span', { class: 'key-rect', style: 'background:' + colorFor('account', m.account) }),
+      `${accountName(byAccount.get(m.account).account)} ${m.blocked ? 'blocked by the weekly limit' : fmtShare(m.used)}`))));
+}
+
+function renderLimits() {
+  const body = document.getElementById('limits-body');
+  const now = limitsData.checkedAt;
+  const sections = [];
+  for (const provider of LIMIT_PROVIDERS) {
+    const results = limitsData.results.filter((r) => providerOf(r.account) === provider.id);
+    if (!results.length) continue;
+    const ok = results.filter((r) => !r.error);
+    const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
+    const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
+    const weighted = list.length > 0 && list[0].weighted;
+    const sub = `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
+    const windowIds = list.map((p) => p.id);
+    sections.push(el('div', { class: 'limits-provider' },
+      el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
+      ...list.map((p) => renderPool(p, byAccount, now)),
+      ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` })),
+      ok.length ? el('details', {}, el('summary', { text: 'Accounts' }), el('div', { class: 'table-wrap' }, table(
+        ['Account', 'Plan', ...list.map((p) => p.label)],
+        ok.map((r) => [accountName(r.account), r.plan || 'unknown', ...windowIds.map((id) => {
+          const w = accountWindows(r.windows, now).find((x) => x.id === id);
+          if (!w) return '-';
+          if (w.blocked) return 'blocked by the weekly limit';
+          return fmtShare(w.used) + (w.resetsAt && w.resetsAt > now ? ', resets in ' + fmtDuration(w.resetsAt - now) : '');
+        })]),
+      ))) : null));
+  }
+  if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
+  body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no Claude or Codex accounts.' })]));
+}
+
 function renderAll() {
   renderTotals();
   renderModelDetail();
@@ -905,27 +1088,29 @@ async function guarded(work, quiet) {
 
 function refresh(quiet) {
   clearTimeout(autoRefresh.timer);
-  return guarded(async (current) => {
-    const p = filterParams();
-    // Health renders even when the data routes fail, since that is when it explains why.
-    const health = api('health').then((h) => { if (current()) renderHealth(h); });
-    health.catch(() => {});
-    const [summary, daily, drift, breakdown, pricing] = await Promise.all([
-      api('summary', p),
-      api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
-      api('drift', { ...p, group: state.driftGroup }),
-      api('breakdown', { ...p, by: state.by }),
-      api('pricing', p),
-    ]);
-    await health;
-    if (!current()) return;
-    data = { summary, daily, drift, breakdown, pricing };
-    document.getElementById('key-form').hidden = true;
-    document.getElementById('app').hidden = false;
-    renderAll();
-    document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-    await loadOptions();
-  }, quiet).finally(scheduleAutoRefresh);
+  return guarded(state.view === 'limits' ? loadLimits : loadUsage, quiet).finally(scheduleAutoRefresh);
+}
+
+async function loadUsage(current) {
+  const p = filterParams();
+  // Health renders even when the data routes fail, since that is when it explains why.
+  const health = api('health').then((h) => { if (current()) renderHealth(h); });
+  health.catch(() => {});
+  const [summary, daily, drift, breakdown, pricing] = await Promise.all([
+    api('summary', p),
+    api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
+    api('drift', { ...p, group: state.driftGroup }),
+    api('breakdown', { ...p, by: state.by }),
+    api('pricing', p),
+  ]);
+  await health;
+  if (!current()) return;
+  data = { summary, daily, drift, breakdown, pricing };
+  document.getElementById('key-form').hidden = true;
+  document.getElementById('app').hidden = false;
+  renderAll();
+  document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  await loadOptions();
 }
 
 /* ---------- auto refresh ---------- */
@@ -942,7 +1127,8 @@ function autoRefreshSeconds() {
 function scheduleAutoRefresh() {
   clearTimeout(autoRefresh.timer);
   autoRefresh.due = false;
-  const seconds = autoRefreshSeconds();
+  // Provider usage endpoints are rate limited, so limits refresh slower.
+  const seconds = state.view === 'limits' ? LIMITS_REFRESH_SECONDS : autoRefreshSeconds();
   if (seconds <= 0 || document.getElementById('app').hidden) return;
   autoRefresh.timer = setTimeout(() => {
     if (document.hidden) autoRefresh.due = true;
@@ -973,6 +1159,17 @@ function setFilter(name, value, { refresh: reload = true } = {}) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+const VIEW_STORE = 'cpa-analytics.view';
+
+function showView(view) {
+  state.view = view;
+  try { sessionStorage.setItem(VIEW_STORE, view); } catch (_) { /* storage blocked: applies to this page only */ }
+  pressed('.filters', 'data-view', view);
+  for (const node of document.querySelectorAll('.usage-only')) node.hidden = view !== 'usage';
+  for (const node of document.querySelectorAll('.limits-only')) node.hidden = view !== 'limits';
+  document.getElementById('updated').textContent = '';
+}
+
 function pressed(group, attr, value) {
   for (const b of document.querySelectorAll(`${group} [${attr}]`)) b.setAttribute('aria-pressed', String(b.getAttribute(attr) === value));
 }
@@ -985,6 +1182,12 @@ document.getElementById('key-form').addEventListener('submit', (e) => {
   document.getElementById('key-input').value = '';
   refresh();
 });
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => {
+  if (state.view === b.dataset.view) return;
+  showView(b.dataset.view);
+  refresh();
+}));
+document.getElementById('check-limits').addEventListener('click', () => refresh());
 document.getElementById('change-key').addEventListener('click', () => { clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
 document.getElementById('auto-refresh').addEventListener('change', (e) => {
   try { sessionStorage.setItem(AUTO_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }
@@ -1027,6 +1230,7 @@ new ResizeObserver(() => {
 }).observe(document.querySelector('.wrap'));
 
 restoreAutoRefresh();
+try { if (sessionStorage.getItem(VIEW_STORE) === 'limits') showView('limits'); } catch (_) { /* storage blocked: start on usage */ }
 managementKey = storedKey() || managementCenterKey();
 if (managementKey) refresh(); else showKeyForm('');
 </script>

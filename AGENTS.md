@@ -8,13 +8,15 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 - **Token buckets are a port, not an import.** CPA computes the token breakdown internally but does not pass it to plugins, so `internal/accounting` ports `sdk/cliproxy/usage/accounting.go` from the pinned CPA tag. That file is only CPA's fallback. CPA's Claude executor attaches its own breakdown with thinking inside output, so the port matches that layout before the fallback rules (`claudeThinkingInsideOutput`). Without it every Claude call with thinking is stored as unclassified.
 - **The client version comes from a TraceID join.** `request.intercept_before` sees the inbound `User-Agent`, and `usage.handle` sees the tokens. Both carry the same TraceID, and `internal/client` keeps a bounded TTL map between them. A miss is stored as an empty client and shown as `unknown`.
 - **Cost is computed at query time** from raw token columns. Never store a cost column.
+- **Limits are read through CPA's `api-call`, from the browser.** The Limits view lists credentials with `GET /v8/management/credentials` and reads each provider's usage endpoint with `POST /v8/management/requests/api-call`, so OAuth tokens stay in CPA and each credential's proxy applies. The plugin backend never handles provider tokens: reading them with `host.auth.get` and calling out with `host.http.do` was considered and rejected by the owner. The first version covers Claude and Codex. Claude accounts are weighted by plan from `/api/oauth/profile`.
 - **A request is one upstream call**: rows sharing `trace_id` and `requested_at`. A WebSocket connection shares one trace across turns, so never group per-request statistics by trace alone. The reasoning is in the spec under "Unit of a request".
 
 ## Guardrails
 
 - The resource route (`/v0/resource/plugins/cpa-analytics/dashboard`) is unauthenticated in CPA. It serves only the static embedded page. Never put data, config or secrets in it.
 - The dashboard never writes the management key to `localStorage`. It reads the key the management center saved, only when the center runs on the same origin, and otherwise keeps a typed key in `sessionStorage`.
-- The page loads nothing from other origins. `internal/web/web_test.go` enforces this.
+- The page loads nothing from other origins. Provider usage URLs appear only as `upstreamCall` targets, which CPA fetches server-side. `internal/web/web_test.go` enforces this.
+- Limits only read. Never call a route that spends credits or quota, such as Codex `rate-limit-reset-credits/consume` or a chat request used as a probe. `TestIndexReadsLimitsThroughCPA` enforces this.
 - The management center floats its own toolbar (refresh, language, theme, logout) over the top-right corner of the page. Keep buttons and selects out of the header and put page controls in the filter row. `TestIndexKeepsHeaderFreeOfControls` enforces this.
 - Reject invalid query parameters with `invalid_parameter` naming the parameter. Never clamp or guess.
 - Never read or store request or response bodies.
@@ -29,6 +31,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 
 ## Testing
 
-- `make test` runs `go vet` and `go test -race ./...`. Run it before every commit.
+- `make test` runs `go vet`, `go test -race ./...` and `bun test internal/web`. Run it before every commit.
+- The Limits math lives in `internal/web/limits.js`, a plain script with no DOM so bun tests it directly. `web.go` inlines it into the page at the `/* limits.js */` placeholder.
 - `make e2e` builds stock CPA and the plugin, sends one proxied request, and checks the recorded row through the management routes.
 - Prefer functional tests that drive the plugin through its ABI methods with a real SQLite file (see `call` in `internal/plugin/usage_test.go`) over unit tests of internals.

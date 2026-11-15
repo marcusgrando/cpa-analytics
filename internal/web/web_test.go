@@ -17,8 +17,13 @@ func TestIndexHasEveryView(t *testing.T) {
 
 // The page must load nothing from the network except the plugin's own
 // management routes. The SVG namespace is an identifier, not a request.
+// The provider usage URLs are not fetched by the browser: the page sends them
+// to CPA's api-call, which makes the request server-side with the credential.
 func TestIndexMakesNoExternalRequests(t *testing.T) {
 	page := strings.ReplaceAll(string(Index()), `"http://www.w3.org/2000/svg"`, "")
+	for _, upstream := range []string{"https://api.anthropic.com/api/oauth/usage", "https://api.anthropic.com/api/oauth/profile", "https://chatgpt.com/backend-api/wham/usage"} {
+		page = strings.ReplaceAll(page, "upstreamCall(account, '"+upstream+"'", "")
+	}
 	if m := regexp.MustCompile(`(?i)https?://|//[a-z0-9-]+\.[a-z]`).FindString(page); m != "" {
 		t.Errorf("page references %q", m)
 	}
@@ -172,5 +177,40 @@ func TestIndexModelRowsCarryProvider(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
+	}
+}
+
+// limits.js is tested by bun on its own and inlined into the page.
+func TestIndexInlinesLimitsScript(t *testing.T) {
+	page := string(Index())
+	if strings.Contains(page, limitsPlaceholder) {
+		t.Error("limits.js placeholder was not replaced")
+	}
+	if !strings.Contains(page, "function poolWindow(members, now)") {
+		t.Error("page lacks the limits functions")
+	}
+}
+
+// Limits reads quota only through CPA's management routes and never calls
+// the routes that spend credits.
+func TestIndexReadsLimitsThroughCPA(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`id="limits"`, `data-view="limits"`, `/v8/management/credentials`, `/v8/management/requests/api-call`, `'Bearer $TOKEN$'`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+	for _, banned := range []string{"reset-credits", "/consume", "chat/completions"} {
+		if strings.Contains(page, banned) {
+			t.Errorf("page references %s", banned)
+		}
+	}
+}
+
+func TestIndexKeepsViewSwitchOutOfHeader(t *testing.T) {
+	page := string(Index())
+	header := page[strings.Index(page, `<header class="top">`):strings.Index(page, `</header>`)]
+	if strings.Contains(header, "data-view") {
+		t.Error("the view switch belongs in the filter row")
 	}
 }

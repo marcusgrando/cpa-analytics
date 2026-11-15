@@ -17,6 +17,7 @@ version:
 test:
 	go vet ./...
 	go test -race ./...
+	bun test internal/web
 
 # lib builds the plugin for the host platform: cpa-analytics.so on Linux,
 # cpa-analytics.dylib on macOS, which is what CPA looks for.

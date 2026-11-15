@@ -27,6 +27,7 @@ A step in input or output per request with no client version change points at th
 - Alerts, notifications or automatic anomaly detection. The dashboard shows the data and the markers. The owner reads it.
 - Billing reconciliation. Cost is "what these tokens would cost at API list price", not what was paid. Most traffic uses subscription OAuth credentials.
 - Multi-instance aggregation across several CPA nodes.
+- History of subscription limits. The Limits view shows the current state only.
 
 ## Anti-goals
 
@@ -129,6 +130,21 @@ Views:
 5. Model detail: cost per 1M tokens, cache hit rate, token-type mix, and the drift chart for that model.
 6. Cost quality and plugin health.
 
+### Limits view
+
+Decided 2026-11-15. A second view, picked by a Usage | Limits switch in the filter row, shows the subscription limits of the Claude and Codex accounts in CPA, pooled across accounts. It reads live and stores nothing.
+
+- Accounts come from `GET /v8/management/credentials`, provider `claude` or `codex`, disabled ones left out. Each account's usage is read with `POST /v8/management/requests/api-call` and `Authorization: Bearer $TOKEN$`, so CPA substitutes the token and applies the credential's proxy. At most 4 calls run at once. The view reads when it opens and every 5 minutes.
+- Claude: `GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20`. Windows come from `limits[]`: `session` (5 hours), `weekly_all`, and `weekly_scoped` per model. Without `limits[]` the page falls back to `five_hour` and `seven_day`. An account with no session limit has no session in progress and joins the 5-hour pool at 0%. The plan comes from `GET /api/oauth/profile`, `organization.rate_limit_tier` (`max_20x` weighs 20, `max_5x` 5) or `account.has_claude_pro` (1), read once per page load.
+- Codex: `GET https://chatgpt.com/backend-api/wham/usage`, with `ChatGPT-Account-Id` from the credential's `id_token` when present. `rate_limit.primary_window` and `secondary_window` are named by `limit_window_seconds`: 30 days or more is monthly, 7 days or more weekly, shorter is a session. `plan_type` weighs `plus` 1, `prolite` 5, `pro` 20.
+- Pool per window: used = sum(w * u) / sum(w), with plan weights only when every account in the pool has a known plan, otherwise equal weights. Each account is a bar segment of w * u / sum(w).
+- Pace: elapsed share e = clamp((L - (reset - now)) / L, 0, 1), 0 for a window with no reset. Expected = 100 * weighted mean of e. Usage more than 5 points above expected is ahead of pace, more than 5 below is under pace. Blocked windows (below) are left out of the pace, since they consume nothing.
+- Restores: each account gives back round(refill * w / sum(w)) percent of the pool at its reset, soonest first. A reset already in the past gives back nothing.
+- A spent weekly limit blocks the account's session window, which counts as 100% used. It comes back whole at the weekly reset when the session resets first or has no reset, whole at its own reset when it is spent and resets after the week, and otherwise gives back its unused part at the weekly reset.
+- Errors are per account and do not stop the others. CPA's `api-call` renews tokens only for antigravity, xai and meta, so a Claude or Codex 401 or 403 reads "Token expired. CPA renews it on the next proxied request", or asks for a sign-in when the credential has `requires_sign_in`.
+- Never called: routes that spend credits or quota, such as Codex `rate-limit-reset-credits/consume`.
+- The math is in `internal/web/limits.js`, a DOM-free script tested with bun and inlined into the page by `web.go`, so the page stays one static file.
+
 ### Management API
 
 All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and the filters above. Invalid parameters return `400` with a JSON error naming the parameter. Database faults return `503` with a distinct error code.
@@ -162,6 +178,7 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - API-rate cost estimate in the first version.
 - No changes to CPA. The plugin works with stock CPA releases so CPA upgrades stay routine. An upstream PR adding `TokenBreakdown` and `UserAgent` to the plugin usage record was considered and rejected for that reason. Consequences: the plugin keeps its own port of the accounting rules and reads `User-Agent` through the request interceptor.
 - Target host: CPA `v8.0.71`, plugin ABI schema 10.
+- Limits view (2026-11-15): pooled subscription limits per account, like T3 Code's Limits page. The browser reads them through CPA's `api-call`, so tokens stay in CPA. Rejected: a plugin backend reading tokens with `host.auth.get` and calling out with `host.http.do`. First version covers Claude and Codex only. Claude accounts are weighted by plan, at the cost of one profile call per account per page load.
 
 ## Unit of a request
 
