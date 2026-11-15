@@ -47,12 +47,20 @@ h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .health { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12px; flex: 1; }
 .health .item { display: inline-flex; align-items: center; gap: 5px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+/* Controls keep the body size even inside the 12px filter labels. */
 button, select, input {
-  font: inherit; color: var(--ink); background: var(--surface);
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--surface);
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; min-height: 32px;
 }
+/* The native arrow sits against the border, so selects draw their own. */
+select {
+  appearance: none; padding-right: 28px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px; background-repeat: no-repeat;
+}
 button { cursor: pointer; }
-button:hover, select:hover { background: var(--wash); }
+button:hover, select:hover { background-color: var(--wash); }
 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 :focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
 .filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 12px; }
@@ -112,13 +120,23 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 #limits-body { margin-top: 16px; }
 .limits-provider + .limits-provider { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--grid); }
-.pool { margin-top: 14px; }
+.pool { margin-top: 16px; }
 .pool-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
 .pool-head strong { color: var(--ink); font-size: 13px; }
-.pool-bar { position: relative; height: 14px; margin: 6px 0 4px; border-radius: 4px; background: var(--wash); }
-.pool-bar .fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
-.pool-bar .pace-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink); }
-.pace { display: inline-flex; align-items: center; gap: 5px; }
+.meter { position: relative; height: 8px; border-radius: 4px; background: var(--wash); }
+.meter.big { height: 14px; margin: 6px 0 10px; }
+.meter .fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; }
+.meter .pace-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink); }
+.status { display: inline-flex; align-items: center; gap: 5px; }
+.acct { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) minmax(0, 24rem); align-items: center; gap: 4px 12px; font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.acct-name { display: flex; flex-direction: column; min-width: 0; }
+.acct-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-name span:first-child { color: var(--ink); }
+.acct-plan { color: var(--muted); }
+.acct-value strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .acct { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
+}
 .split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-top: 16px; }
 .split-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 @media (min-width: 900px) {
@@ -175,7 +193,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
     <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
       <h2 id="limits-title">Subscription limits</h2>
-      <p class="sub">Each bar pools one window across the accounts in CPA, weighted by plan when every plan is known. Colors are accounts. The dark tick is where usage would be if it were spread evenly over the window.</p>
+      <p class="sub">For each window, the top bar pools the accounts in CPA, weighted by plan when every plan is known. Each account below is shown against its own limit. The dark tick marks where usage would be if it were spread evenly over the window.</p>
       <div id="limits-body"></div>
     </section>
 
@@ -535,11 +553,31 @@ function frame(container, xs, maxY, fmtY, fmtX, minStep = 0) {
   const band = plotW / Math.max(1, xs.length);
   const x = (i) => m.left + band * i + band / 2;
   const every = Math.max(1, Math.ceil(xs.length / Math.floor(plotW / 64)));
-  xs.forEach((t, i) => {
-    if (i % every === 0) svg.append(svgEl('text', { x: x(i), y: height - 6, 'text-anchor': 'middle', text: fmtX(t) }));
-  });
+  // Attached first so labels can be measured.
   container.replaceChildren(svg);
+  const fits = labelSpacer();
+  xs.forEach((t, i) => {
+    if (i % every !== 0) return;
+    const label = svgEl('text', { y: height - 6, 'text-anchor': 'middle', text: fmtX(t) });
+    svg.append(label);
+    // Kept inside the plot so the first label clears the y axis labels.
+    const half = label.getComputedTextLength() / 2;
+    const cx = Math.min(Math.max(x(i), m.left + half), width - m.right - half);
+    label.setAttribute('x', cx);
+    if (!fits(cx - half, cx + half)) label.remove();
+  });
   return { svg, x, y, band, m, width, height, plotH };
+}
+
+// labelSpacer returns a check that accepts a label only when it clears the
+// previous accepted one. Labels must be offered left to right.
+function labelSpacer(gap = 8) {
+  let right = -Infinity;
+  return (left, labelRight) => {
+    if (left < right + gap) return false;
+    right = labelRight;
+    return true;
+  };
 }
 
 // hitColumns adds one hover and focus target per x position.
@@ -777,12 +815,19 @@ function renderDrift() {
     if (!markerDays.has(mk.t)) markerDays.set(mk.t, []);
     markerDays.get(mk.t).push(mk.value);
   }
-  for (const [t, values] of markerDays) {
+  // Every day keeps its hairline. A label that would cover the previous one is
+  // dropped, since the list under the chart names every change.
+  const fits = labelSpacer();
+  for (const [t, values] of [...markerDays].sort((a, b) => a[0] - b[0])) {
     const x = g.x(index.get(t));
     g.svg.append(svgEl('line', { x1: x, x2: x, y1: g.m.top - 4, y2: g.m.top + g.plotH, stroke: 'var(--muted)', 'stroke-width': 1 }));
-    const label = values.length > 1 ? values[0] + ' +' + (values.length - 1) : values[0];
-    const anchor = x > g.width - 80 ? 'end' : 'start';
-    g.svg.append(svgEl('text', { x: x + (anchor === 'end' ? -4 : 4), y: g.m.top - 8, 'text-anchor': anchor, class: 'marker-label', text: label }));
+    const text = values.length > 1 ? values[0] + ' +' + (values.length - 1) : values[0];
+    const label = svgEl('text', { y: g.m.top - 8, class: 'marker-label', text });
+    g.svg.append(label);
+    const w = label.getComputedTextLength();
+    const left = x + 4 + w > g.width - g.m.right ? x - 4 - w : x + 4;
+    label.setAttribute('x', left);
+    if (!fits(left, left + w)) label.remove();
   }
   for (const s of shown) {
     const color = colorFor('drift:' + state.driftGroup, s.key);
@@ -899,6 +944,7 @@ const LIMITS_REFRESH_SECONDS = 300;
 const LIMIT_PROVIDERS = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }];
 const CLAUDE_HEADERS = { 'anthropic-beta': 'oauth-2025-04-20' };
 const CLAUDE_PLANS = { 20: 'Max 20x', 5: 'Max 5x', 1: 'Pro' };
+const CODEX_PLANS = { plus: 'Plus', prolite: 'Pro Lite', pro: 'Pro' };
 // A plan rarely changes, so each Claude profile is read once per page load.
 const claudeProfiles = new Map();
 let limitsData = null;
@@ -930,7 +976,7 @@ async function readCodex(account) {
   const workspace = account.id_token && account.id_token.chatgpt_account_id;
   const usage = await upstreamCall(account, 'https://chatgpt.com/backend-api/wham/usage', workspace ? { 'ChatGPT-Account-Id': workspace } : {});
   const { plan, windows } = parseCodexUsage(usage);
-  return { windows, weight: codexWeight(plan), plan };
+  return { windows, weight: codexWeight(plan), plan: CODEX_PLANS[plan] || plan };
 }
 
 const LIMIT_READERS = { claude: readClaude, codex: readCodex };
@@ -979,32 +1025,38 @@ const PACE = {
   under: { color: 'var(--good)', label: 'Under pace' },
 };
 
-function poolBar(pool, byAccount, now) {
-  const bar = el('div', { class: 'pool-bar', role: 'img',
-    'aria-label': `${fmtShare(pool.used)} used, ${fmtShare(pool.expected)} of the window elapsed. ` +
-      pool.segments.map((s) => `${accountName(byAccount.get(s.account).account)} ${fmtShare(s.share)}`).join(', ') });
-  let left = 0;
-  pool.members.forEach((m, i) => {
-    const share = pool.segments[i].share;
-    if (share <= 0) return;
-    const r = byAccount.get(m.account);
-    const rows = [
-      m.blocked ? { value: 'Blocked', label: 'until the weekly limit resets' } : { value: fmtShare(m.used), label: 'of this account used' },
-      { value: fmtShare(share), label: 'of the pool' },
-      { value: r.plan || 'plan unknown', label: '' },
-      m.resetsAt && m.resetsAt > now ? { value: 'resets in ' + fmtDuration(m.resetsAt - now), label: fmtWhen(m.resetsAt) } : null,
-    ].filter(Boolean);
-    // 2px of surface between neighbouring fills.
-    const fill = el('div', { class: 'fill', tabindex: 0,
-      style: `left:${left}%;width:calc(${Math.min(share, 100 - left)}% - ${left + share < 99.5 ? 2 : 0}px);background:${colorFor('account', m.account)}` });
-    for (const ev of ['pointermove', 'focus']) fill.addEventListener(ev, (e) => showTooltip(e, accountName(r.account), rows));
-    fill.addEventListener('pointerleave', hideTooltip);
-    fill.addEventListener('blur', hideTooltip);
-    bar.append(fill);
-    left += share;
-  });
-  if (pool.expected > 0) bar.append(el('div', { class: 'pace-mark', style: `left:calc(${Math.min(pool.expected, 100)}% - 1px)` }));
+// meter draws one horizontal bar: used share, an optional even-pace tick.
+function meter(used, pace, { label, color, big }) {
+  const bar = el('div', { class: 'meter' + (big ? ' big' : ''), role: 'img', 'aria-label': label },
+    el('div', { class: 'fill', style: `width:${Math.min(100, Math.max(0, used))}%;background:${color}` }));
+  if (pace > 0) bar.append(el('div', { class: 'pace-mark', style: `left:calc(${Math.min(pace, 100)}% - 1px)` }));
   return bar;
+}
+
+const LIMIT_REACHED = 100;
+
+// accountRow shows one account against its own limit, so a spent account
+// reads as full without hovering.
+function accountRow(m, share, r, now) {
+  const resets = (t) => (t && t > now ? `resets in ${fmtDuration(t - now)} (${fmtWhen(t)})` : '');
+  let color = 'var(--s1)';
+  let status;
+  if (m.blocked) {
+    color = 'var(--other)';
+    status = el('span', {}, 'Blocked by the weekly limit' + (m.restore ? `, back in ${fmtDuration(m.restore.at - now)}` : ''));
+  } else if (m.used >= LIMIT_REACHED) {
+    color = 'var(--critical)';
+    status = el('span', {}, el('span', { class: 'dot', style: 'background:var(--critical);margin-right:5px' }),
+      el('strong', { text: fmtShare(m.used) }), ' Limit reached' + (resets(m.resetsAt) ? ', ' + resets(m.resetsAt) : ''));
+  } else {
+    status = el('span', {}, el('strong', { text: fmtShare(m.used) }), ' ' + (resets(m.resetsAt) || (m.used === 0 ? 'not started' : '')));
+  }
+  const name = accountName(r.account);
+  const plan = [r.plan || 'plan unknown', fmtShare(share.capacity) + ' of the pool'].join(', ');
+  return el('div', { class: 'acct' },
+    el('div', { class: 'acct-name', title: name }, el('span', { text: name }), el('span', { class: 'acct-plan', text: plan })),
+    meter(m.used, m.blocked ? 0 : share.elapsed, { label: `${name}: ${m.blocked ? 'blocked by the weekly limit' : fmtShare(m.used) + ' used'}`, color }),
+    el('div', { class: 'acct-value' }, status));
 }
 
 function renderPool(pool, byAccount, now) {
@@ -1013,14 +1065,13 @@ function renderPool(pool, byAccount, now) {
   return el('div', { class: 'pool' },
     el('div', { class: 'pool-head' },
       el('strong', { text: pool.label }),
-      el('span', { text: fmtShare(pool.used) + ' used' }),
-      pace ? el('span', { class: 'pace', title: `${fmtShare(pool.expected)} of the window has elapsed` },
+      el('span', { text: fmtShare(pool.used) + ' of the pool used' }),
+      pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
         el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
-    poolBar(pool, byAccount, now),
-    el('div', { class: 'legend' }, ...pool.members.map((m) => el('span', {},
-      el('span', { class: 'key-rect', style: 'background:' + colorFor('account', m.account) }),
-      `${accountName(byAccount.get(m.account).account)} ${m.blocked ? 'blocked by the weekly limit' : fmtShare(m.used)}`))));
+    meter(pool.used, pool.expected, { big: true, color: 'var(--s1)',
+      label: `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
+    ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
 function renderLimits() {
@@ -1035,21 +1086,11 @@ function renderLimits() {
     const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
     const weighted = list.length > 0 && list[0].weighted;
     const sub = `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
-    const windowIds = list.map((p) => p.id);
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
       ...list.map((p) => renderPool(p, byAccount, now)),
-      ok.some((r) => r.spend) ? el('p', { class: 'sub', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
-      ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` })),
-      ok.length ? el('details', {}, el('summary', { text: 'Accounts' }), el('div', { class: 'table-wrap' }, table(
-        ['Account', 'Plan', ...list.map((p) => p.label)],
-        ok.map((r) => [accountName(r.account), r.plan || 'unknown', ...windowIds.map((id) => {
-          const w = accountWindows(r.windows, now).find((x) => x.id === id);
-          if (!w) return '-';
-          if (w.blocked) return 'blocked by the weekly limit';
-          return fmtShare(w.used) + (w.resetsAt && w.resetsAt > now ? ', resets in ' + fmtDuration(w.resetsAt - now) : '');
-        })]),
-      ))) : null));
+      ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
+      ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` }))));
   }
   if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
   body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no Claude or Codex accounts.' })]));
@@ -1156,13 +1197,6 @@ function restoreAutoRefresh() {
   if ([...select.options].some((o) => o.value === saved)) select.value = saved;
 }
 
-function reload(route, params, apply) {
-  return guarded(async (current) => {
-    const result = await api(route, { ...filterParams(), ...params });
-    if (current()) apply(result);
-  });
-}
-
 function setFilter(name, value, { refresh: reload = true } = {}) {
   state[name] = value;
   const select = document.getElementById('f-' + name);
@@ -1229,11 +1263,11 @@ document.querySelectorAll('[data-stat]').forEach((b) => b.addEventListener('clic
 document.getElementById('drift-metric').addEventListener('change', (e) => { state.driftMetric = e.target.value; renderDrift(); });
 document.getElementById('drift-group').addEventListener('change', (e) => {
   state.driftGroup = e.target.value;
-  reload('drift', { group: state.driftGroup }, (drift) => { data.drift = drift; renderDrift(); });
+  refresh();
 });
 document.querySelectorAll('[data-by]').forEach((b) => b.addEventListener('click', () => {
   state.by = b.dataset.by; pressed('#breakdown', 'data-by', state.by);
-  reload('breakdown', { by: state.by }, (breakdown) => { data.breakdown = breakdown; renderBreakdown(); });
+  refresh();
 }));
 
 let resizeTimer = 0;

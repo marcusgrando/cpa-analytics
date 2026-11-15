@@ -124,7 +124,8 @@ function poolWindow(members, now) {
     used,
     expected,
     pace: !active.length ? null : gap > PACE_TOLERANCE ? 'ahead' : gap < -PACE_TOLERANCE ? 'under' : 'on',
-    segments: members.map((m) => ({ account: m.account, share: (weightOf(m) * m.used) / total })),
+    // capacity is the account's share of the pool, elapsed how far its window has run, both in percent.
+    accounts: members.map((m) => ({ account: m.account, capacity: (100 * weightOf(m)) / total, elapsed: 100 * elapsed(m) })),
     restores: members.filter((m) => m.restore)
       .map((m) => ({ account: m.account, at: m.restore.at, percent: Math.round((m.restore.refill * weightOf(m)) / total) }))
       .sort((a, b) => a.at - b.at),

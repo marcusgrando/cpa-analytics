@@ -155,14 +155,20 @@ describe('pool', () => {
     const pool = poolWindow([member('a', 20, 58, now + 2 * DAY), member('b', 5, 100, now + DAY)], now);
     expect(pool.weighted).toBe(true);
     expect(pool.used).toBeCloseTo(66.4, 6);
-    expect(pool.segments).toEqual([{ account: 'a', share: 46.4 }, { account: 'b', share: 20 }]);
+    expect(pool.accounts.map((x) => [x.account, x.capacity])).toEqual([['a', 80], ['b', 20]]);
+  });
+
+  test('each account reports how much of its own window has elapsed', () => {
+    const pool = poolWindow([member('a', 20, 58, now + 2 * DAY), member('b', 5, 100, null)], now);
+    expect(pool.accounts[0].elapsed).toBeCloseTo(500 / 7, 6);
+    expect(pool.accounts[1].elapsed).toBe(0);
   });
 
   test('one account without a known plan makes every weight equal', () => {
     const pool = poolWindow([member('a', 20, 60, now + DAY), member('b', null, 20, now + DAY)], now);
     expect(pool.weighted).toBe(false);
     expect(pool.used).toBe(40);
-    expect(pool.segments).toEqual([{ account: 'a', share: 30 }, { account: 'b', share: 10 }]);
+    expect(pool.accounts.map((x) => x.capacity)).toEqual([50, 50]);
   });
 
   test('pace compares usage with the time elapsed in each window', () => {
