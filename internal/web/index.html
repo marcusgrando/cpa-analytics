@@ -283,6 +283,26 @@ const state = {
 let data = {};
 let managementKey = '';
 
+/* ---------- theme ---------- */
+
+// Inside the management center the page follows the center's theme toggle.
+// The center sets data-theme on its <html> to "dark" or "white" and removes
+// it for light. Standalone, or under another origin, the page follows the
+// system preference.
+function followCenterTheme() {
+  let centerRoot;
+  try {
+    if (window.parent === window) return;
+    centerRoot = window.parent.document.documentElement;
+  } catch (_) {
+    return;
+  }
+  const apply = () => document.documentElement.setAttribute('data-theme', centerRoot.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+  apply();
+  new MutationObserver(apply).observe(centerRoot, { attributes: true, attributeFilter: ['data-theme'] });
+}
+followCenterTheme();
+
 /* ---------- management key ---------- */
 
 // The CPA management center stores its key in localStorage when "remember"

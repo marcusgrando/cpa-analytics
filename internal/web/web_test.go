@@ -95,3 +95,14 @@ func TestIndexSplitsCostByTypeAndTier(t *testing.T) {
 		}
 	}
 }
+
+// Inside the management center the theme comes from the center's own toggle,
+// which sets data-theme on its <html>, not from the system preference.
+func TestIndexFollowsManagementCenterTheme(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`window.parent.document.documentElement`, `attributeFilter: ['data-theme']`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
