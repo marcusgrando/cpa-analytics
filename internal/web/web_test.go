@@ -322,8 +322,8 @@ func TestIndexNamesAccountsWithTheirProvider(t *testing.T) {
 	}
 }
 
-// Brand steps validated with the dataviz palette checker: light on #fcfcfb,
-// dark on #1a1a19, all pairs among the three brands plus the spare color.
+// Brand steps validated with the dataviz palette checker: light on #ffffff,
+// dark on #181a1e, all pairs among the three brands plus the spare color.
 func TestIndexDefinesProviderColorsForBothThemes(t *testing.T) {
 	page := string(Index())
 	light := "--provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;"
@@ -336,5 +336,54 @@ func TestIndexDefinesProviderColorsForBothThemes(t *testing.T) {
 	}
 	if !strings.Contains(page, "if (space === 'provider') return providerColor(key);") {
 		t.Error("provider marks do not use the provider palette")
+	}
+}
+
+// Hue marks identity (provider, drift series) and status only. Token types,
+// tiers, price sources and limit meters use one neutral ramp, stepped per
+// theme and validated as an ordinal ramp against each surface.
+func TestIndexKeepsHueForIdentityAndStatus(t *testing.T) {
+	page := string(Index())
+	light := "--tone1: #1e2633; --tone2: #3f495b; --tone3: #626d81; --tone4: #8590a3; --tone5: #a9b2c1;"
+	dark := "--tone1: #eceef2; --tone2: #c4cad4; --tone3: #9ba3b1; --tone4: #77808f; --tone5: #5a6372;"
+	if strings.Count(page, light) != 1 {
+		t.Error("light theme lacks the neutral ramp")
+	}
+	if strings.Count(page, dark) != 2 {
+		t.Error("dark theme lacks the neutral ramp in the media query and the data-theme scope")
+	}
+	for _, slot := range []string{"var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)"} {
+		if strings.Contains(page, slot) {
+			t.Errorf("%s is assigned by hand; categorical slots belong to colorFor only", slot)
+		}
+	}
+	if !strings.Contains(page, "const NEUTRAL_SPACES = new Set(['tier']);") {
+		t.Error("service tiers do not use the neutral ramp")
+	}
+}
+
+// Text never sits on a colored fill: the share moves to the legend, so every
+// label keeps the ink contrast whatever the fill.
+func TestIndexKeepsLabelsOffFills(t *testing.T) {
+	page := string(Index())
+	if strings.Contains(page, "dark-label") || strings.Contains(page, "block.textContent = fmtPct(share)") {
+		t.Error("segmented bars still print text on the fill")
+	}
+	if !strings.Contains(page, "`${p.label} ${fmtValue(p.value)} (${fmtPct(p.value / total)})") {
+		t.Error("legend lacks the share of each segment")
+	}
+}
+
+// Secondary text clears 4.5:1 on the page and the card in both themes.
+func TestIndexMutedTextClearsContrast(t *testing.T) {
+	page := string(Index())
+	if strings.Count(page, "--muted: #646b77;") != 1 || strings.Count(page, "--muted: #8d94a0;") != 2 {
+		t.Error("muted text tokens changed without a contrast check")
+	}
+}
+
+func TestIndexJoinsMetaWithoutMiddleDots(t *testing.T) {
+	if strings.Contains(string(Index()), "·") {
+		t.Error("page joins text with middle dots")
 	}
 }

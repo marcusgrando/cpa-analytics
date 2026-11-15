@@ -20,6 +20,25 @@ function providerPalette() {
   };
 }
 
+// Several accounts of one provider share its color, so each further account,
+// in auth index order, takes the next dash. Past the last dash an account
+// falls to the overflow gray: a repeated dash would make two accounts look
+// like one.
+const ACCOUNT_DASHES = ['', '6 4', '2 3', '10 3 2 3'];
+
+// accountStyles maps each account to its line color and dash pattern.
+function accountStyles(accounts, colorOf) {
+  const styles = new Map();
+  const perProvider = new Map();
+  const sorted = [...accounts].sort((a, b) => (a.account < b.account ? -1 : a.account > b.account ? 1 : 0));
+  for (const { account, provider } of sorted) {
+    const n = perProvider.get(provider) || 0;
+    perProvider.set(provider, n + 1);
+    styles.set(account, n < ACCOUNT_DASHES.length ? { color: colorOf(provider), dash: ACCOUNT_DASHES[n] } : { color: 'var(--other)', dash: '' });
+  }
+  return styles;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { providerPalette };
+  module.exports = { accountStyles, providerPalette };
 }

@@ -1,6 +1,6 @@
 // Run with: bun test internal/web
-import { expect, test } from 'bun:test';
-import { providerPalette } from './colors.js';
+import { describe, expect, test } from 'bun:test';
+import { accountStyles, providerPalette } from './colors.js';
 
 test('Claude, Codex and Gemini always wear their brand colors', () => {
   const color = providerPalette();
@@ -22,4 +22,24 @@ test('a provider keeps its color on every call', () => {
   color('kimi');
   color('xai');
   expect(color('kimi')).toBe('var(--provider-next)');
+});
+
+describe('account styles', () => {
+  test('an account wears its provider color, and each further account of that provider a new dash', () => {
+    const styles = accountStyles([
+      { account: 'b', provider: 'claude' },
+      { account: 'x', provider: 'codex' },
+      { account: 'a', provider: 'claude' },
+    ], providerPalette());
+    expect(styles.get('a')).toEqual({ color: 'var(--provider-claude)', dash: '' });
+    expect(styles.get('b')).toEqual({ color: 'var(--provider-claude)', dash: '6 4' });
+    expect(styles.get('x')).toEqual({ color: 'var(--provider-codex)', dash: '' });
+  });
+
+  test('accounts past the last dash share the overflow gray instead of repeating a dash', () => {
+    const accounts = ['a', 'b', 'c', 'd', 'e'].map((account) => ({ account, provider: 'claude' }));
+    const styles = accountStyles(accounts, providerPalette());
+    expect(styles.get('d').dash).toBe('10 3 2 3');
+    expect(styles.get('e')).toEqual({ color: 'var(--other)', dash: '' });
+  });
 });

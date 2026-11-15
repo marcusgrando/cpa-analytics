@@ -7,35 +7,38 @@
 <style>
 :root {
   color-scheme: light;
-  --page: #f9f9f7; --surface: #fcfcfb;
-  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --page: #f4f5f7; --surface: #ffffff;
+  --ink: #1b1f26; --ink-2: #454c58; --muted: #646b77;
+  --grid: #e6e8ec; --axis: #c9cdd4; --border: rgba(27,31,38,0.12); --wash: rgba(27,31,38,0.05);
+  --tone1: #1e2633; --tone2: #3f495b; --tone3: #626d81; --tone4: #8590a3; --tone5: #a9b2c1;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
-  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #c3c2b7;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #d5d9e0;
   --provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;
   --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19;
-    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+    --page: #111316; --surface: #181a1e;
+    --ink: #eceef2; --ink-2: #b9bec8; --muted: #8d94a0;
+    --grid: #2a2e35; --axis: #3d434d; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+    --tone1: #eceef2; --tone2: #c4cad4; --tone3: #9ba3b1; --tone4: #77808f; --tone5: #5a6372;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
-    --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #52514e;
-  --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-    --good-text: #0ca30c;
+    --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
+    --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
+    --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19;
-  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+  --page: #111316; --surface: #181a1e;
+  --ink: #eceef2; --ink-2: #b9bec8; --muted: #8d94a0;
+  --grid: #2a2e35; --axis: #3d434d; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+  --tone1: #eceef2; --tone2: #c4cad4; --tone3: #9ba3b1; --tone4: #77808f; --tone5: #5a6372;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
-  --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #52514e;
+  --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
   --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-  --good-text: #0ca30c;
+  --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -65,7 +68,7 @@ select {
 button { cursor: pointer; }
 button:hover, select:hover { background-color: var(--wash); }
 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 12px; }
 .updated { color: var(--muted); font-size: 12px; align-self: center; }
 .filters label, .controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--ink-2); gap: 2px; }
@@ -73,7 +76,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
 .card-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
-.sub { color: var(--ink-2); font-size: 12px; margin: 2px 0 0; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 2px 0 0; max-width: 75ch; }
 .controls { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: end; }
 .seg { display: inline-flex; gap: 0; }
 .seg button { border-radius: 0; margin-left: -1px; }
@@ -81,7 +84,8 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .seg button:last-child { border-radius: 0 6px 6px 0; }
 .hero-label { color: var(--ink-2); font-size: 12px; }
 .hero-value { font-size: 48px; font-weight: 600; line-height: 1.1; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 16px 0; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; margin: 16px 0 20px; }
+@media (min-width: 720px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { font-size: 22px; font-weight: 600; }
 .tile .note { color: var(--muted); font-size: 12px; }
@@ -92,14 +96,13 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .chart .marker-label { fill: var(--ink-2); }
 .trend { margin-top: 10px; }
 .trend-stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--ink-2); margin-top: 10px; }
-.key-line.dashed { background: repeating-linear-gradient(90deg, var(--s1) 0 5px, transparent 5px 9px); opacity: 0.7; }
+.key-line.dashed { background: repeating-linear-gradient(90deg, var(--tone1) 0 5px, transparent 5px 9px); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .key-rect { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .key-line { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
-.segbar { display: flex; gap: 2px; height: 28px; margin: 4px 0; }
-.segbar div { border-radius: 4px; color: #fff; font-size: 12px; font-weight: 600; padding: 0 6px; display: flex; align-items: center; overflow: hidden; white-space: nowrap; }
-.segbar div.dark-label { color: #0b0b0b; }
+.segbar { display: flex; gap: 2px; height: 20px; margin: 6px 0; }
+.segbar div { border-radius: 4px; min-width: 2px; }
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -111,11 +114,11 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .markers { list-style: none; padding: 0; margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
 .notice { color: var(--ink-2); font-size: 12px; margin: 6px 0 0; }
 .error { color: var(--critical); }
-.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.empty { color: var(--muted); padding: 24px 0; margin: 0 auto; max-width: 70ch; text-align: center; }
 .tooltip {
   position: fixed; z-index: 10; pointer-events: none; background: var(--surface); color: var(--ink);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12); max-width: 280px;
+  box-shadow: 0 6px 20px rgba(15,18,24,0.14); max-width: 280px;
 }
 .tooltip .title { color: var(--ink-2); margin-bottom: 4px; }
 .tooltip .row { display: flex; align-items: center; gap: 6px; }
@@ -132,7 +135,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .meter { position: relative; height: 8px; border-radius: 4px; background: var(--wash); }
 .meter.big { height: 14px; margin: 6px 0 10px; }
 .meter .fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; }
-.meter .pace-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink); }
+.meter .pace-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink); box-shadow: 0 0 0 1px var(--surface); }
 .status { display: inline-flex; align-items: center; gap: 5px; }
 .acct { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) minmax(0, 24rem); align-items: center; gap: 4px 12px; font-size: 12px; color: var(--ink-2); margin-top: 8px; }
 .acct-name { display: flex; flex-direction: column; min-width: 0; }
@@ -199,7 +202,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
     <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
       <h2 id="limits-title">Subscription limits</h2>
-      <p class="sub">For each window, the top bar pools the accounts in CPA, weighted by plan when every plan is known. Each account below is shown against its own limit. The dark tick marks where usage would be if it were spread evenly over the window.</p>
+      <p class="sub">For each window, the top bar pools the accounts in CPA, weighted by plan when every plan is known. Each account below is shown against its own limit. The tick marks where usage would be if it were spread evenly over the window.</p>
       <div id="limits-body"></div>
     </section>
 
@@ -524,14 +527,21 @@ function table(headers, rows) {
 
 const slots = {};
 const providerColor = providerPalette();
+// Hue is kept for identity that recurs across the page (providers, drift
+// series). Spaces that only split one bar take steps of the neutral ramp,
+// every other step first so two or three keys stay far apart.
+const NEUTRAL_SPACES = new Set(['tier']);
+const NEUTRAL_ORDER = [1, 3, 5, 2, 4];
 function colorFor(space, key) {
   if (space === 'provider') return providerColor(key);
   const assigned = (slots[space] = slots[space] || new Map());
-  if (!assigned.has(key)) assigned.set(key, assigned.size < SERIES_SLOTS ? 'var(--s' + (assigned.size + 1) + ')' : 'var(--other)');
+  if (!assigned.has(key)) {
+    const n = assigned.size;
+    if (NEUTRAL_SPACES.has(space)) assigned.set(key, n < NEUTRAL_ORDER.length ? `var(--tone${NEUTRAL_ORDER[n]})` : 'var(--other)');
+    else assigned.set(key, n < SERIES_SLOTS ? 'var(--s' + (n + 1) + ')' : 'var(--other)');
+  }
   return assigned.get(key);
 }
-// Light labels inside fills, except on the yellow slot.
-const darkLabel = (color) => color === 'var(--s4)';
 
 /* ---------- tooltip ---------- */
 
@@ -646,8 +656,9 @@ function buckets(size) {
 }
 
 function legend(container, entries, shape) {
+  const fill = (e) => (e.dash ? `repeating-linear-gradient(90deg, ${e.color} 0 4px, transparent 4px 7px)` : e.color);
   container.replaceChildren(...entries.map((e) => el('span', {},
-    el('span', { class: shape === 'line' ? 'key-line' : 'key-rect', style: 'background:' + e.color }), e.label)));
+    el('span', { class: shape === 'line' ? 'key-line' : 'key-rect', style: 'background:' + fill(e) }), e.label)));
 }
 
 function segmentedBar(container, parts, fmtValue) {
@@ -658,17 +669,15 @@ function segmentedBar(container, parts, fmtValue) {
     if (p.value <= 0) continue;
     const share = p.value / total;
     const rows = [{ value: fmtValue(p.value), label: fmtPct(share) }].concat(p.note ? [{ value: p.note, label: '' }] : []);
-    const block = el('div', { class: darkLabel(p.color) ? 'dark-label' : '', style: `background:${p.color};flex:${share} 1 0`, tabindex: 0 });
+    const block = el('div', { style: `background:${p.color};flex:${share} 1 0`, tabindex: 0 });
     block.addEventListener('pointermove', (e) => showTooltip(e, p.label, rows));
     block.addEventListener('focus', (e) => showTooltip(e, p.label, rows));
     block.addEventListener('pointerleave', hideTooltip);
     block.addEventListener('blur', hideTooltip);
     bar.append(block);
-    // Print the share only where it fits.
-    requestAnimationFrame(() => { if (block.clientWidth >= 44) block.textContent = fmtPct(share); });
   }
   const keys = el('div', { class: 'legend' });
-  legend(keys, parts.filter((p) => p.value > 0).map((p) => ({ color: p.color, label: `${p.label} ${fmtValue(p.value)}${p.note ? ' · ' + p.note : ''}` })));
+  legend(keys, parts.filter((p) => p.value > 0).map((p) => ({ color: p.color, label: `${p.label} ${fmtValue(p.value)} (${fmtPct(p.value / total)})${p.note ? ', ' + p.note : ''}` })));
   container.replaceChildren(bar, keys);
 }
 
@@ -713,21 +722,21 @@ function renderTotals() {
   segmentedBar(document.getElementById('t-providers'),
     data.summary.providers.map((p) => ({
       label: p.provider || 'unknown', value: p.cost_usd, color: colorFor('provider', p.provider),
-      note: [fmtCompact(p.tokens) + ' tokens', fmtCompact(p.sessions) + ' sessions'].join(' · '),
+      note: [fmtCompact(p.tokens) + ' tokens', fmtCompact(p.sessions) + ' sessions'].join(', '),
     })), fmtUSD);
   const types = t.cost_by_type;
   segmentedBar(document.getElementById('t-types'), [
-    { label: 'Input', value: types.input, color: 'var(--s1)' },
-    { label: 'Cache read', value: types.cache_read, color: 'var(--s2)' },
-    { label: 'Cache write', value: types.cache_write, color: 'var(--s3)' },
-    { label: 'Output', value: types.output, color: 'var(--s4)' },
+    { label: 'Input', value: types.input, color: 'var(--tone1)' },
+    { label: 'Cache read', value: types.cache_read, color: 'var(--tone2)' },
+    { label: 'Cache write', value: types.cache_write, color: 'var(--tone3)' },
+    { label: 'Output', value: types.output, color: 'var(--tone4)' },
   ], fmtUSD);
   // Same categories and colors as the cost bar. Output includes reasoning.
   segmentedBar(document.getElementById('t-token-types'), [
-    { label: 'Input', value: t.uncached_input, color: 'var(--s1)' },
-    { label: 'Cache read', value: t.cache_read, color: 'var(--s2)' },
-    { label: 'Cache write', value: t.cache_write, color: 'var(--s3)' },
-    { label: 'Output', value: t.output + t.reasoning, color: 'var(--s4)' },
+    { label: 'Input', value: t.uncached_input, color: 'var(--tone1)' },
+    { label: 'Cache read', value: t.cache_read, color: 'var(--tone2)' },
+    { label: 'Cache write', value: t.cache_write, color: 'var(--tone3)' },
+    { label: 'Output', value: t.output + t.reasoning, color: 'var(--tone4)' },
     { label: 'Unclassified', value: t.unclassified, color: 'var(--other)' },
   ], fmtCompact);
   segmentedBar(document.getElementById('t-tiers'),
@@ -738,7 +747,7 @@ function renderTotals() {
   document.getElementById('t-tier-note').textContent = [
     premium > 0 ? 'Premium over standard ' + fmtUSD(premium) : '',
     discount > 0 ? 'Saved below standard ' + fmtUSD(discount) : '',
-  ].filter(Boolean).join(' · ');
+  ].filter(Boolean).join(', ');
 }
 
 function renderModelDetail() {
@@ -754,11 +763,11 @@ function renderModelDetail() {
     tile('Requests', fmtCompact(t.requests)),
   );
   segmentedBar(document.getElementById('md-mix'), [
-    { label: 'Uncached input', value: t.uncached_input, color: 'var(--s1)' },
-    { label: 'Cache read', value: t.cache_read, color: 'var(--s2)' },
-    { label: 'Cache write', value: t.cache_write, color: 'var(--s3)' },
-    { label: 'Output', value: t.output, color: 'var(--s4)' },
-    { label: 'Reasoning', value: t.reasoning, color: 'var(--s5)' },
+    { label: 'Uncached input', value: t.uncached_input, color: 'var(--tone1)' },
+    { label: 'Cache read', value: t.cache_read, color: 'var(--tone2)' },
+    { label: 'Cache write', value: t.cache_write, color: 'var(--tone3)' },
+    { label: 'Output', value: t.output, color: 'var(--tone4)' },
+    { label: 'Reasoning', value: t.reasoning, color: 'var(--tone5)' },
     { label: 'Unclassified', value: t.unclassified, color: 'var(--other)' },
   ], fmtCompact);
 }
@@ -800,7 +809,7 @@ function renderDaily() {
   hitColumns(g, xs, (i) => {
     const stack = stackAt(xs[i]);
     const total = stack.reduce((s, e) => s + value(e.p), 0);
-    const title = (size === HOUR ? fmtDay(xs[i]) + ' ' + fmtHour(xs[i]) : fmtDay(xs[i])) + ' · total ' + fmtY(total);
+    const title = (size === HOUR ? fmtDay(xs[i]) + ' ' + fmtHour(xs[i]) : fmtDay(xs[i])) + ', total ' + fmtY(total);
     return { title, label: title, rows: stack.map((e) => ({ color: colorFor('provider', e.key), value: fmtY(value(e.p)), label: e.key || 'unknown' })) };
   });
   legend(document.getElementById('daily-legend'), keys.map((k) => ({ color: colorFor('provider', k), label: k || 'unknown' })), 'rect');
@@ -894,7 +903,7 @@ function renderDrift() {
       if (p && driftPlotted(p)) rows.push({ color: colorFor('drift:' + state.driftGroup, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
     }
     const marks = drift.markers.filter((mk) => mk.t === t).map((mk) => ({ value: 'new', label: mk.value }));
-    const title = fmtDay(t) + ' · ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
+    const title = fmtDay(t) + ', ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
     return { title, label: title, rows: rows.concat(marks) };
   });
   legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + state.driftGroup, s.key), label: s.key })), 'line');
@@ -936,28 +945,29 @@ function renderBurn() {
   const xs = buckets(DAY);
   const index = new Map(xs.map((t, i) => [t, i]));
   const accounts = [...new Set(points.map((p) => p.auth_index))];
-  const color = (a) => colorFor('account', a);
+  const styles = accountStyles(accounts.map((a) => ({ account: a, provider: points.find((p) => p.auth_index === a).provider })), providerColor);
+  const color = (a) => styles.get(a).color;
   const g = frame(container, xs, Math.max(...points.map((p) => p.usd_per_pct)), fmtUSD, fmtDay);
   g.svg.setAttribute('aria-label', 'Cost per 1% of the weekly limit by day and account');
   for (const a of accounts) {
     const pts = points.filter((p) => p.auth_index === a && index.has(p.t));
     if (pts.length > 1) {
       const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(p.usd_per_pct)).join(' ');
-      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color(a) }));
+      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', ...(styles.get(a).dash ? { 'stroke-dasharray': styles.get(a).dash } : {}), style: 'stroke:' + color(a) }));
     }
     for (const p of pts) {
       g.svg.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(p.usd_per_pct), r: 4, 'stroke-width': 2, style: `fill:${color(a)};stroke:var(--surface)` }));
     }
   }
   hitColumns(g, xs, (i) => {
-    const title = fmtDay(xs[i]) + ' · per 1% of the weekly limit';
+    const title = fmtDay(xs[i]) + ', per 1% of the weekly limit';
     const rows = points.filter((p) => p.t === xs[i]).map((p) => ({
       color: color(p.auth_index), value: fmtUSD(p.usd_per_pct),
       label: `${accountWithProvider(p.auth_index)}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
     }));
     return { title, label: title, rows };
   });
-  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ color: color(a), label: accountWithProvider(a) })), 'line');
+  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ ...styles.get(a), label: accountWithProvider(a) })), 'line');
   document.getElementById('burn-table').replaceChildren(table(
     ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
     points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct)]),
@@ -995,8 +1005,8 @@ function renderAffinity() {
   container.replaceChildren(table(
     ['Provider', 'Calls', 'Sessions', 'Switched sessions', 'Switches', 'Cache write', 'Written again after a switch'],
     rows.map((r) => [r.provider, fmtInt(r.calls), fmtInt(r.sessions), r.sessions ? `${fmtInt(r.switched_sessions)} (${fmtPct(r.switched_sessions / r.sessions)})` : '0',
-      fmtInt(r.switches), `${fmtCompact(r.cache_write)} · ${fmtUSD(r.cache_write_usd)}`,
-      `${fmtCompact(r.switch_cache_write)} · ${fmtUSD(r.switch_cache_write_usd)}` + (r.cache_write_usd > 0 ? ` (${fmtPct(r.switch_cache_write_usd / r.cache_write_usd)})` : '')]),
+      fmtInt(r.switches), `${fmtCompact(r.cache_write)}, ${fmtUSD(r.cache_write_usd)}`,
+      `${fmtCompact(r.switch_cache_write)}, ${fmtUSD(r.switch_cache_write_usd)}` + (r.cache_write_usd > 0 ? ` (${fmtPct(r.switch_cache_write_usd / r.cache_write_usd)})` : '')]),
   ));
 }
 
@@ -1042,8 +1052,8 @@ function renderBreakdown() {
 function renderQuality() {
   const q = data.summary.totals.cost_quality;
   segmentedBar(document.getElementById('q-bar'), [
-    { label: 'LiteLLM price', value: q.litellm_tokens, color: 'var(--s1)' },
-    { label: 'Override price', value: q.override_tokens, color: 'var(--s3)' },
+    { label: 'LiteLLM price', value: q.litellm_tokens, color: 'var(--tone2)' },
+    { label: 'Override price', value: q.override_tokens, color: 'var(--tone4)' },
     { label: 'Unpriced', value: q.unpriced_tokens, color: 'var(--other)' },
   ], fmtCompact);
   const models = document.getElementById('q-models');
@@ -1194,7 +1204,7 @@ const LIMIT_REACHED = 100;
 // reads as full without hovering.
 function accountRow(m, share, r, now) {
   const resets = (t) => (t && t > now ? `resets in ${fmtDuration(t - now)} (${fmtWhen(t)})` : '');
-  let color = 'var(--s1)';
+  let color = 'var(--tone3)';
   let status;
   if (m.blocked) {
     color = 'var(--other)';
@@ -1224,7 +1234,7 @@ function renderPool(pool, byAccount, now, readings) {
       pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
         el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
-    meter(pool.used, pool.expected, { big: true, color: 'var(--s1)',
+    meter(pool.used, pool.expected, { big: true, color: 'var(--tone1)',
       label: `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
     pool.id === 'weekly' && readings ? weeklyTrend(pool, byAccount, readings, now) : null,
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
@@ -1295,7 +1305,7 @@ function weeklyTrend(pool, byAccount, readings, now) {
   pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label));
   return el('div', {}, stats, chart,
     el('div', { class: 'legend' },
-      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--s1)' }), 'Recorded'),
+      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--tone1)' }), 'Recorded'),
       el('span', {}, el('span', { class: 'key-line dashed' }), `Projected at each account's rate over the last 24 h`)));
 }
 
@@ -1337,10 +1347,10 @@ function trendChart(container, recorded, projected, now, label) {
   };
   svg.append(svgEl('line', { x1: x(now), x2: x(now), y1: m.top - 6, y2: height - m.bottom, stroke: 'var(--axis)', 'stroke-width': 1 }));
   svg.append(svgEl('text', { x: x(now), y: m.top - 8, 'text-anchor': 'middle', class: 'marker-label', text: 'Now' }));
-  svg.append(svgEl('path', { d: path(recorded), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: 'stroke:var(--s1)' }));
-  svg.append(svgEl('path', { d: path(projected), fill: 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:var(--s1);opacity:0.7' }));
+  svg.append(svgEl('path', { d: path(recorded), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
+  svg.append(svgEl('path', { d: path(projected), fill: 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
   const all = recorded.concat(projected.slice(1));
-  const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: 'fill:var(--s1);stroke:var(--surface)', visibility: 'hidden' });
+  const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: 'fill:var(--tone1);stroke:var(--surface)', visibility: 'hidden' });
   svg.append(dot);
   const hit = svgEl('rect', { x: m.left, y: m.top, width: width - m.left - m.right, height: height - m.top - m.bottom, fill: 'transparent' });
   hit.addEventListener('pointermove', (e) => {
