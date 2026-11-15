@@ -231,6 +231,7 @@ func TestIndexInlinesScripts(t *testing.T) {
 	for placeholder, function := range map[string]string{
 		"/* limits.js */":  "function poolWindow(members, now)",
 		"/* compare.js */": "function relativeChange(current, previous)",
+		"/* colors.js */":  "function providerPalette()",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)
@@ -318,5 +319,22 @@ func TestIndexNamesAccountsWithTheirProvider(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
+	}
+}
+
+// Brand steps validated with the dataviz palette checker: light on #fcfcfb,
+// dark on #1a1a19, all pairs among the three brands plus the spare color.
+func TestIndexDefinesProviderColorsForBothThemes(t *testing.T) {
+	page := string(Index())
+	light := "--provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;"
+	dark := "--provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;"
+	if strings.Count(page, light) != 1 {
+		t.Error("light theme lacks the provider colors")
+	}
+	if strings.Count(page, dark) != 2 {
+		t.Error("dark theme lacks the provider colors in the media query and the data-theme scope")
+	}
+	if !strings.Contains(page, "if (space === 'provider') return providerColor(key);") {
+		t.Error("provider marks do not use the provider palette")
 	}
 }
