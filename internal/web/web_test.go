@@ -154,3 +154,23 @@ func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 		}
 	}
 }
+
+func TestIndexShowsProcessedTokensPerActiveDay(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`function tile(label, value, note)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+// The model breakdown has one row per provider and model. A row shows its
+// provider and opening it filters by both.
+func TestIndexModelRowsCarryProvider(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`colorFor('provider', r.provider)`, `setFilter('provider', r.provider, { refresh: false })`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}

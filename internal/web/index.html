@@ -73,6 +73,8 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 16px 0; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { font-size: 22px; font-weight: 600; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.provider-name { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .chart { position: relative; width: 100%; }
 .chart svg { display: block; width: 100%; overflow: visible; }
 .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -565,8 +567,16 @@ function segmentedBar(container, parts, fmtValue) {
 
 /* ---------- views ---------- */
 
-function tile(label, value) {
-  return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }));
+function tile(label, value, note) {
+  return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }),
+    note ? el('div', { class: 'note', text: note }) : null);
+}
+
+// Average over the buckets that had traffic, so idle days do not dilute it.
+function perActiveBucket(total) {
+  const active = new Set(data.daily.points.filter((p) => totalTokens(p) > 0).map((p) => p.t)).size;
+  if (!active) return '';
+  return fmtCompact(total / active) + ' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day');
 }
 
 function renderTotals() {
@@ -576,7 +586,7 @@ function renderTotals() {
     tile('Requests', fmtCompact(t.requests)),
     tile('Sessions', fmtCompact(t.sessions)),
     tile('Cost per request', t.requests > 0 ? fmtUSD(t.cost_usd / t.requests) : '-'),
-    tile('Processed tokens', fmtCompact(t.processed_tokens)),
+    tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens)),
     tile('Cache hit rate', fmtPct(t.cache_hit_rate)),
     tile('Cache savings', fmtUSD(t.cache_savings_usd)),
     tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning)),
@@ -777,8 +787,18 @@ function renderBreakdown() {
   const b = data.breakdown;
   const container = document.getElementById('breakdown-table');
   if (!b.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); return; }
-  const keyCell = (key) => {
-    if (b.by === 'model') return el('button', { class: 'link', type: 'button', text: key, onclick: () => setFilter('model', key) });
+  const keyCell = (r) => {
+    const key = r.key;
+    if (b.by === 'model') {
+      const provider = r.provider || 'unknown';
+      return el('span', {},
+        el('span', { class: 'key-rect', style: 'background:' + colorFor('provider', r.provider), title: provider }), ' ',
+        el('button', { class: 'link', type: 'button', text: key, title: `Filter by ${key} on ${provider}`, onclick: () => {
+          setFilter('provider', r.provider, { refresh: false });
+          setFilter('model', key);
+        } }),
+        el('span', { class: 'provider-name', text: provider }));
+    }
     if (b.by === 'client' && key !== 'unknown') {
       const name = key.split('/')[0];
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by client ' + name, onclick: () => setFilter('client', name) });
@@ -794,7 +814,7 @@ function renderBreakdown() {
   };
   container.replaceChildren(table(
     [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
-    b.rows.map((r) => [keyCell(r.key), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
+    b.rows.map((r) => [keyCell(r), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
       fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
       r.requests > 0 && r.cost_usd > 0 ? fmtUSD(r.cost_usd / r.requests) : '-', fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
       r.cost_per_million_tokens > 0 ? fmtUSD(r.cost_per_million_tokens) : '-', fmtPct(r.cache_hit_rate)]),
@@ -944,10 +964,11 @@ function reload(route, params, apply) {
   });
 }
 
-function setFilter(name, value) {
+function setFilter(name, value, { refresh: reload = true } = {}) {
   state[name] = value;
   const select = document.getElementById('f-' + name);
   if (select) select.value = value;
+  if (!reload) return;
   refresh();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }

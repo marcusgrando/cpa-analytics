@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/marcusgrando/cpa-analytics/internal/pricing"
@@ -231,7 +232,9 @@ func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string
 
 // BreakdownRow is one model, client version, day, API key hash or reasoning effort.
 type BreakdownRow struct {
-	Key      string `json:"key"`
+	Key string `json:"key"`
+	// Provider is set only when grouping by model.
+	Provider string `json:"provider,omitempty"`
 	Records  int64  `json:"records"`
 	Requests int64  `json:"requests"`
 	Tokens
@@ -252,14 +255,18 @@ type BreakdownResult struct {
 	Rows []BreakdownRow `json:"rows"`
 }
 
-// Breakdown returns one row per model, client version, day, API key hash or
-// reasoning effort.
+// providerModelSep joins provider and model in the model breakdown key. It is
+// the ASCII unit separator, which neither name contains.
+const providerModelSep = "\x1f"
+
+// Breakdown returns one row per provider and model, client version, day, API
+// key hash or reasoning effort.
 // Days are sorted by date, the others by cost.
 func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (BreakdownResult, error) {
 	var keyExpr string
 	switch by {
 	case "model":
-		keyExpr = modelExpr
+		keyExpr = "provider || char(31) || (" + modelExpr + ")"
 	case "client":
 		keyExpr = clientExpr
 	case "day":
@@ -311,6 +318,9 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 		br.CacheHitRate = cacheHitRate(br.Tokens)
 		br.MedianInput = percentile(inputs[key], 0.5)
 		br.MedianOutput = percentile(outputs[key], 0.5)
+		if by == "model" {
+			br.Provider, br.Key, _ = strings.Cut(key, providerModelSep)
+		}
 		if by == "day" {
 			ms, err := strconv.ParseInt(key, 10, 64)
 			if err != nil {
@@ -330,7 +340,10 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 				return a.Tokens.total() > b.Tokens.total()
 			}
 		}
-		return a.Key < b.Key
+		if a.Key != b.Key {
+			return a.Key < b.Key
+		}
+		return a.Provider < b.Provider
 	})
 	return res, nil
 }

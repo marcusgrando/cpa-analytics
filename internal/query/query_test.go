@@ -1,11 +1,13 @@
 package query
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -529,4 +531,63 @@ func TestDriftMeasuresLatencyAndTTFTPerRequest(t *testing.T) {
 		return
 	}
 	t.Fatalf("no point for codex/0.149.0 in %+v", d.Points)
+}
+
+// The same model reached through two providers is two rows, as in the provider
+// legend, so each row's cost belongs to one provider.
+func TestBreakdownByModelSplitsProviders(t *testing.T) {
+	s := seedDB(t)
+	other := seed{id: "x1", trace: "tx1", provider: "openai-compat", model: "gpt-5", response: "gpt-5", version: "0.130.0",
+		at: day3.Add(12 * time.Hour), generate: true, uncached: 1000, output: 10}
+	if err := s.InsertBatch([]store.Row{other.row()}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BreakdownRow{}
+	for _, r := range b.Rows {
+		got[r.Provider+" "+r.Key] = r
+	}
+	if len(b.Rows) != 3 {
+		t.Fatalf("rows = %+v, want gpt-5 per provider and gpt-5.1", b.Rows)
+	}
+	if r := got["codex gpt-5"]; r.Requests != 5 || r.Records != 7 {
+		t.Errorf("codex gpt-5 = %+v", r)
+	}
+	if r := got["openai-compat gpt-5"]; r.Requests != 1 || r.UncachedInput != 1000 || !near(r.CostUSD, 1000*gpt5Input+10*gpt5Output) {
+		t.Errorf("openai-compat gpt-5 = %+v", r)
+	}
+	if r := got["openai-compat gpt-5.1"]; r.Requests != 2 || r.UnpricedTokens != 2700 {
+		t.Errorf("openai-compat gpt-5.1 = %+v", r)
+	}
+}
+
+// A filter that matches nothing must still answer with empty lists. The page
+// maps over every list, and a null markers list broke the drift chart.
+func TestEmptyRangeAnswersEmptyLists(t *testing.T) {
+	s := seedDB(t)
+	f := Filter{From: day4.AddDate(0, 0, 10), To: day4.AddDate(0, 0, 11)}
+	prices := testPrices(t)
+	results := map[string]func() (any, error){
+		"summary":    func() (any, error) { return Summary(s.DB(), f, prices) },
+		"timeseries": func() (any, error) { return Timeseries(s.DB(), f, prices, "day", "provider") },
+		"drift":      func() (any, error) { return Drift(s.DB(), f, "response_model") },
+		"breakdown":  func() (any, error) { return Breakdown(s.DB(), f, prices, "model") },
+		"models":     func() (any, error) { return Models(s.DB(), f, prices) },
+	}
+	for name, run := range results {
+		v, err := run()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "null") {
+			t.Errorf("%s answers null: %s", name, raw)
+		}
+	}
 }

@@ -133,7 +133,7 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 // and reasoning effort appears in the range. Values already seen before From get no marker.
 func markers(db *sql.DB, f Filter) ([]Marker, error) {
 	where, args := f.where(false)
-	var out []Marker
+	out := []Marker{}
 	for _, mk := range markerKinds {
 		q := "SELECT " + mk.expr + ", MIN(requested_at) FROM requests WHERE " + where +
 			" AND generate = 1 AND NOT (" + mk.skip + ") GROUP BY 1 HAVING MIN(requested_at) >= ?"
