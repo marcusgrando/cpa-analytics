@@ -47,6 +47,7 @@ type ProviderShare struct {
 	CostShare      float64 `json:"cost_share"`
 	Tokens         int64   `json:"tokens"`
 	UnpricedTokens int64   `json:"unpriced_tokens"`
+	Sessions       int64   `json:"sessions"`
 }
 
 // SummaryResult answers the summary route.
@@ -127,7 +128,36 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 	if err != nil {
 		return SummaryResult{}, fmt.Errorf("summary counts: %w", err)
 	}
+	if err := providerSessions(db, where, args, res.Providers); err != nil {
+		return SummaryResult{}, err
+	}
 	return res, nil
+}
+
+// providerSessions fills Sessions on each provider share. A session that
+// spans two providers counts once in each.
+func providerSessions(db *sql.DB, where string, args []any, providers []ProviderShare) error {
+	rows, err := db.Query(`SELECT provider, COUNT(DISTINCT NULLIF(session_id, '')) FROM requests WHERE `+where+` GROUP BY provider`, args...)
+	if err != nil {
+		return fmt.Errorf("provider sessions: %w", err)
+	}
+	defer rows.Close()
+	sessions := map[string]int64{}
+	for rows.Next() {
+		var provider string
+		var n int64
+		if err := rows.Scan(&provider, &n); err != nil {
+			return fmt.Errorf("provider sessions scan: %w", err)
+		}
+		sessions[provider] = n
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("provider sessions rows: %w", err)
+	}
+	for i := range providers {
+		providers[i].Sessions = sessions[providers[i].Provider]
+	}
+	return nil
 }
 
 // Point is one bucket of one group in a time series.

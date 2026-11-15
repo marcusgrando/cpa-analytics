@@ -477,3 +477,56 @@ func TestDriftCountsEachWebSocketTurn(t *testing.T) {
 		t.Errorf("summary requests = %d, want 7 seeded calls plus 3 turns", sum.Totals.Requests)
 	}
 }
+
+func TestSummaryCountsSessionsPerProvider(t *testing.T) {
+	s := seedDB(t)
+	sum, err := Summary(s.DB(), rangeFilter(), testPrices(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, p := range sum.Providers {
+		got[p.Provider] = p.Sessions
+	}
+	if got["codex"] != 2 || got["openai-compat"] != 0 {
+		t.Errorf("sessions per provider = %v, want codex 2 (s1, s2) and openai-compat 0", got)
+	}
+}
+
+// Latency is measured per call, so the two billing rows of one call count
+// once. Calls without a first-token time (non-streaming) are left out of the
+// TTFT percentiles instead of pulling them toward zero.
+func TestDriftMeasuresLatencyAndTTFTPerRequest(t *testing.T) {
+	s := seedDB(t)
+	at := day1.Add(14 * time.Hour).UnixMilli()
+	row := func(id, trace string, at, latency, ttft int64) store.Row {
+		return store.Row{RequestID: id, TraceID: trace, RequestedAt: at, Provider: "codex", Model: "gpt-5",
+			Generate: true, ClientName: "codex", ClientVersion: "0.149.0", LatencyMs: latency, TTFTMs: ttft, UncachedInput: 10}
+	}
+	rows := []store.Row{
+		row("l1", "tl1", at, 1000, 200),
+		row("l2a", "tl2", at+1, 3000, 0),
+		row("l2b", "tl2", at+1, 3000, 0),
+		row("l3", "tl3", at+2, 2000, 600),
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pt := range d.Points {
+		if pt.Key != "codex/0.149.0" {
+			continue
+		}
+		if pt.Requests != 3 || pt.Median.LatencyMs != 2000 || !near(pt.P90.LatencyMs, 2800) {
+			t.Errorf("latency = %+v / %+v, want 3 requests, median 2000, p90 2800", pt.Median, pt.P90)
+		}
+		if pt.Median.TTFTMs != 400 || !near(pt.P90.TTFTMs, 560) {
+			t.Errorf("ttft = %v / %v, want median 400 and p90 560 over the two streamed calls", pt.Median.TTFTMs, pt.P90.TTFTMs)
+		}
+		return
+	}
+	t.Fatalf("no point for codex/0.149.0 in %+v", d.Points)
+}

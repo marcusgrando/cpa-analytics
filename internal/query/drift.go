@@ -7,13 +7,16 @@ import (
 	"sort"
 )
 
-// Stats holds one value per token bucket, for a median or a p90.
+// Stats holds one value per token bucket and per timing, for a median or a p90.
 type Stats struct {
 	UncachedInput float64 `json:"uncached_input"`
 	CacheRead     float64 `json:"cache_read"`
 	CacheWrite    float64 `json:"cache_write"`
 	Output        float64 `json:"output"`
 	Reasoning     float64 `json:"reasoning"`
+	LatencyMs     float64 `json:"latency_ms"`
+	// TTFTMs covers only calls that reported a first token (streamed ones).
+	TTFTMs float64 `json:"ttft_ms"`
 }
 
 // DriftPoint is one day of one group, measured per request (see perRequest).
@@ -68,14 +71,14 @@ func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
 		t   int64
 		key string
 	}
-	buckets := map[dayKey][]Tokens{}
+	buckets := map[dayKey][]inbound{}
 	for _, rq := range reqs {
 		k := dayKey{f.bucketStart(rq.at, dayMillis), rq.key}
-		buckets[k] = append(buckets[k], rq.tokens)
+		buckets[k] = append(buckets[k], rq)
 	}
 	res := DriftResult{Group: group, Points: make([]DriftPoint, 0, len(buckets))}
-	for k, reqTokens := range buckets {
-		res.Points = append(res.Points, driftPoint(k.t, k.key, reqTokens))
+	for k, calls := range buckets {
+		res.Points = append(res.Points, driftPoint(k.t, k.key, calls))
 	}
 	sort.Slice(res.Points, func(i, j int) bool {
 		if res.Points[i].T != res.Points[j].T {
@@ -89,31 +92,39 @@ func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
 	return res, nil
 }
 
-func driftPoint(t int64, key string, reqTokens []Tokens) DriftPoint {
-	columns := func(pick func(Tokens) int64) []float64 {
-		out := make([]float64, len(reqTokens))
-		for i, tk := range reqTokens {
-			out[i] = float64(pick(tk))
+func driftPoint(t int64, key string, calls []inbound) DriftPoint {
+	columns := func(pick func(inbound) int64) []float64 {
+		out := make([]float64, len(calls))
+		for i, c := range calls {
+			out[i] = float64(pick(c))
 		}
 		return out
 	}
-	uncached := columns(func(t Tokens) int64 { return t.UncachedInput })
-	cacheRead := columns(func(t Tokens) int64 { return t.CacheRead })
-	cacheWrite := columns(func(t Tokens) int64 { return t.CacheWrite })
-	output := columns(func(t Tokens) int64 { return t.Output })
-	reasoning := columns(func(t Tokens) int64 { return t.Reasoning })
+	uncached := columns(func(c inbound) int64 { return c.tokens.UncachedInput })
+	cacheRead := columns(func(c inbound) int64 { return c.tokens.CacheRead })
+	cacheWrite := columns(func(c inbound) int64 { return c.tokens.CacheWrite })
+	output := columns(func(c inbound) int64 { return c.tokens.Output })
+	reasoning := columns(func(c inbound) int64 { return c.tokens.Reasoning })
+	latency := columns(func(c inbound) int64 { return c.latencyMs })
+	var ttft []float64
+	for _, c := range calls {
+		if c.ttftMs > 0 {
+			ttft = append(ttft, float64(c.ttftMs))
+		}
+	}
 	stats := func(p float64) Stats {
 		return Stats{
 			UncachedInput: percentile(uncached, p), CacheRead: percentile(cacheRead, p),
 			CacheWrite: percentile(cacheWrite, p), Output: percentile(output, p), Reasoning: percentile(reasoning, p),
+			LatencyMs: percentile(latency, p), TTFTMs: percentile(ttft, p),
 		}
 	}
 	var sum Tokens
-	for _, tk := range reqTokens {
-		sum.add(tk)
+	for _, c := range calls {
+		sum.add(c.tokens)
 	}
 	return DriftPoint{
-		T: t, Key: key, Requests: int64(len(reqTokens)),
+		T: t, Key: key, Requests: int64(len(calls)),
 		Median: stats(0.5), P90: stats(0.9), CacheHitRate: cacheHitRate(sum),
 	}
 }
@@ -161,9 +172,11 @@ func markers(db *sql.DB, f Filter) ([]Marker, error) {
 
 // inbound is one request (one upstream call) within one group.
 type inbound struct {
-	key    string
-	at     int64
-	tokens Tokens
+	key       string
+	at        int64
+	tokens    Tokens
+	latencyMs int64
+	ttftMs    int64
 }
 
 // perRequest sums the successful generating rows per request and group. A
@@ -171,9 +184,10 @@ type inbound struct {
 // failed attempts are left out, and one per WebSocket turn. Split billing rows
 // of a call that land in two model groups count once in each. Failed attempts
 // are left out so an outage does not read as a drop in tokens per request.
+// MAX keeps one timing per call when its billing rows repeat it.
 func perRequest(db *sql.DB, f Filter, keyExpr string) ([]inbound, error) {
 	where, args := f.where(true)
-	q := "SELECT CAST(" + keyExpr + " AS TEXT), MIN(requested_at), " + tokenSums +
+	q := "SELECT CAST(" + keyExpr + " AS TEXT), MIN(requested_at), MAX(latency_ms), MAX(ttft_ms), " + tokenSums +
 		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY " + callExpr + ", 1"
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -183,7 +197,7 @@ func perRequest(db *sql.DB, f Filter, keyExpr string) ([]inbound, error) {
 	var out []inbound
 	for rows.Next() {
 		var in inbound
-		if err := rows.Scan(append([]any{&in.key, &in.at}, in.tokens.scanTargets()...)...); err != nil {
+		if err := rows.Scan(append([]any{&in.key, &in.at, &in.latencyMs, &in.ttftMs}, in.tokens.scanTargets()...)...); err != nil {
 			return nil, fmt.Errorf("per request scan: %w", err)
 		}
 		out = append(out, in)

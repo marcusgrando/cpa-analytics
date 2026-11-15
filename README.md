@@ -82,6 +82,8 @@ The page reloads its data every 60 seconds while the tab is visible. **Auto refr
 
 The drift chart is the main view. It plots median or p90 input and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider. Grouping by reasoning effort catches a client that raised its default effort: output and reasoning go up with no model change.
 
+The same chart plots median or p90 latency and time to first token per request. Time to first token covers streamed calls only, since CPA reports none for the others.
+
 A request is one successful upstream call: one per HTTP request, and one per turn on a Responses WebSocket connection. Failed attempts count in totals and cost but not in the per-request medians.
 
 ## Management routes

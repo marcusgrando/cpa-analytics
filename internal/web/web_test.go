@@ -117,3 +117,40 @@ func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestIndexSplitsTokensByType(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`id="t-token-types"`, `Tokens by token type`, `label: 'Unclassified', value: t.unclassified`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexShowsTokensAndSessionsPerProvider(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`fmtCompact(p.tokens) + ' tokens'`, `fmtCompact(p.sessions) + ' sessions'`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexShowsCostPerRequestAndTimings(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`tile('Cost per request'`, `'Per request'`, `<option value="latency_ms">`, `<option value="ttft_ms">`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+// The drift card measures timings too, so its title names the chosen measure.
+func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{`<h2 id="drift-title">Per request</h2>`, `textContent = isRate ? 'Daily cache hit rate' : driftMetricLabel() + ' per request'`, `const fmtSeconds = (ms) => (ms === 0 ? '0 s'`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}

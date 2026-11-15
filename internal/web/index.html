@@ -171,6 +171,10 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             <div id="t-types"></div>
           </div>
           <div>
+            <div class="hero-label">Tokens by token type</div>
+            <div id="t-token-types"></div>
+          </div>
+          <div>
             <div class="split-head"><span class="hero-label">Cost by service tier</span><span id="t-tier-note" class="hero-label"></span></div>
             <div id="t-tiers"></div>
           </div>
@@ -187,7 +191,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <section id="drift" class="card" aria-labelledby="drift-title">
         <div class="card-head">
           <div>
-            <h2 id="drift-title">Tokens per request</h2>
+            <h2 id="drift-title">Per request</h2>
             <p class="sub">Per request (one HTTP request or WebSocket turn), daily. Vertical lines mark the first day a client version, reported model or reasoning effort appears.</p>
           </div>
           <div class="controls">
@@ -206,6 +210,8 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
                 <option value="output">Output</option>
                 <option value="reasoning">Reasoning</option>
                 <option value="cache_hit_rate">Cache hit rate</option>
+                <option value="latency_ms">Latency</option>
+                <option value="ttft_ms">Time to first token</option>
               </select>
             </label>
             <div class="seg" role="group" aria-label="Statistic">
@@ -384,6 +390,7 @@ function fmtUSD(v) {
   const digits = v >= 100 ? 0 : v >= 0.01 || v === 0 ? 2 : 4;
   return '$' + v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
+const fmtSeconds = (ms) => (ms === 0 ? '0 s' : (ms / 1000).toFixed(ms >= 10000 ? 0 : ms >= 1000 ? 1 : 2) + ' s');
 const tzMs = () => -new Date().getTimezoneOffset() * 60000;
 const fmtDay = (t) => new Date(t + tzMs()).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const fmtHour = (t) => new Date(t + tzMs()).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
@@ -537,13 +544,14 @@ function legend(container, entries, shape) {
 function segmentedBar(container, parts, fmtValue) {
   const total = parts.reduce((s, p) => s + p.value, 0);
   if (total <= 0) { container.replaceChildren(el('div', { class: 'empty', text: 'No data in this range' })); return; }
-  const bar = el('div', { class: 'segbar', role: 'img', 'aria-label': parts.map((p) => `${p.label}: ${fmtValue(p.value)} (${fmtPct(p.value / total)})`).join(', ') });
+  const bar = el('div', { class: 'segbar', role: 'img', 'aria-label': parts.map((p) => `${p.label}: ${fmtValue(p.value)} (${fmtPct(p.value / total)})${p.note ? ', ' + p.note : ''}`).join('; ') });
   for (const p of parts) {
     if (p.value <= 0) continue;
     const share = p.value / total;
+    const rows = [{ value: fmtValue(p.value), label: fmtPct(share) }].concat(p.note ? [{ value: p.note, label: '' }] : []);
     const block = el('div', { class: darkLabel(p.color) ? 'dark-label' : '', style: `background:${p.color};flex:${share} 1 0`, tabindex: 0 });
-    block.addEventListener('pointermove', (e) => showTooltip(e, p.label, [{ value: fmtValue(p.value), label: fmtPct(share) }]));
-    block.addEventListener('focus', (e) => showTooltip(e, p.label, [{ value: fmtValue(p.value), label: fmtPct(share) }]));
+    block.addEventListener('pointermove', (e) => showTooltip(e, p.label, rows));
+    block.addEventListener('focus', (e) => showTooltip(e, p.label, rows));
     block.addEventListener('pointerleave', hideTooltip);
     block.addEventListener('blur', hideTooltip);
     bar.append(block);
@@ -551,7 +559,7 @@ function segmentedBar(container, parts, fmtValue) {
     requestAnimationFrame(() => { if (block.clientWidth >= 44) block.textContent = fmtPct(share); });
   }
   const keys = el('div', { class: 'legend' });
-  legend(keys, parts.filter((p) => p.value > 0).map((p) => ({ color: p.color, label: `${p.label} ${fmtValue(p.value)}` })));
+  legend(keys, parts.filter((p) => p.value > 0).map((p) => ({ color: p.color, label: `${p.label} ${fmtValue(p.value)}${p.note ? ' · ' + p.note : ''}` })));
   container.replaceChildren(bar, keys);
 }
 
@@ -567,6 +575,7 @@ function renderTotals() {
   document.getElementById('t-tiles').replaceChildren(
     tile('Requests', fmtCompact(t.requests)),
     tile('Sessions', fmtCompact(t.sessions)),
+    tile('Cost per request', t.requests > 0 ? fmtUSD(t.cost_usd / t.requests) : '-'),
     tile('Processed tokens', fmtCompact(t.processed_tokens)),
     tile('Cache hit rate', fmtPct(t.cache_hit_rate)),
     tile('Cache savings', fmtUSD(t.cache_savings_usd)),
@@ -574,7 +583,10 @@ function renderTotals() {
     tile('Failed records', fmtCompact(t.failed)),
   );
   segmentedBar(document.getElementById('t-providers'),
-    data.summary.providers.map((p) => ({ label: p.provider || 'unknown', value: p.cost_usd, color: colorFor('provider', p.provider) })), fmtUSD);
+    data.summary.providers.map((p) => ({
+      label: p.provider || 'unknown', value: p.cost_usd, color: colorFor('provider', p.provider),
+      note: [fmtCompact(p.tokens) + ' tokens', fmtCompact(p.sessions) + ' sessions'].join(' · '),
+    })), fmtUSD);
   const types = t.cost_by_type;
   segmentedBar(document.getElementById('t-types'), [
     { label: 'Input', value: types.input, color: 'var(--s1)' },
@@ -582,6 +594,14 @@ function renderTotals() {
     { label: 'Cache write', value: types.cache_write, color: 'var(--s3)' },
     { label: 'Output', value: types.output, color: 'var(--s4)' },
   ], fmtUSD);
+  // Same categories and colors as the cost bar. Output includes reasoning.
+  segmentedBar(document.getElementById('t-token-types'), [
+    { label: 'Input', value: t.uncached_input, color: 'var(--s1)' },
+    { label: 'Cache read', value: t.cache_read, color: 'var(--s2)' },
+    { label: 'Cache write', value: t.cache_write, color: 'var(--s3)' },
+    { label: 'Output', value: t.output + t.reasoning, color: 'var(--s4)' },
+    { label: 'Unclassified', value: t.unclassified, color: 'var(--other)' },
+  ], fmtCompact);
   segmentedBar(document.getElementById('t-tiers'),
     t.cost_by_tier.map((c) => ({ label: c.tier || 'not reported', value: c.cost_usd, color: colorFor('tier', c.tier) })), fmtUSD);
   // Priority costs more than standard and flex less. Show both differences.
@@ -665,6 +685,10 @@ function renderDaily() {
 const MARKER_KINDS = { client_version: 'client version', response_model: 'reported model', reasoning_effort: 'reasoning effort' };
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
 
+// Calls that never streamed have no first-token time, so a day without one
+// has no TTFT point rather than a zero.
+const driftPlotted = (p) => state.driftMetric !== 'ttft_ms' || p.median.ttft_ms > 0;
+
 function driftValue(p) {
   if (state.driftMetric === 'cache_hit_rate') return p.cache_hit_rate;
   return p[state.driftStat][state.driftMetric];
@@ -674,7 +698,10 @@ function renderDrift() {
   const container = document.getElementById('drift-chart');
   const drift = data.drift;
   const isRate = state.driftMetric === 'cache_hit_rate';
-  const fmtY = isRate ? fmtPct : fmtCompact;
+  // The hit rate is the day's cache reads over its input, not a per-request value.
+  document.getElementById('drift-title').textContent = isRate ? 'Daily cache hit rate' : driftMetricLabel() + ' per request';
+  const isTime = state.driftMetric === 'latency_ms' || state.driftMetric === 'ttft_ms';
+  const fmtY = isRate ? fmtPct : isTime ? fmtSeconds : fmtCompact;
   const xs = buckets(DAY);
   const byKey = new Map();
   for (const p of drift.points) {
@@ -695,7 +722,7 @@ function renderDrift() {
     document.getElementById('drift-table').replaceChildren();
     return;
   }
-  const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.map(driftValue)));
+  const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.filter(driftPlotted).map(driftValue)));
   const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate ? 0 : 1);
   g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by day');
   const index = new Map(xs.map((t, i) => [t, i]));
@@ -715,7 +742,7 @@ function renderDrift() {
   }
   for (const s of shown) {
     const color = colorFor('drift:' + state.driftGroup, s.key);
-    const pts = s.pts.filter((p) => index.has(p.t)).sort((a, b) => a.t - b.t);
+    const pts = s.pts.filter((p) => index.has(p.t) && driftPlotted(p)).sort((a, b) => a.t - b.t);
     if (pts.length > 1) {
       const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(driftValue(p))).join(' ');
       g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
@@ -729,7 +756,7 @@ function renderDrift() {
     const rows = [];
     for (const s of shown) {
       const p = s.pts.find((q) => q.t === t);
-      if (p) rows.push({ color: colorFor('drift:' + state.driftGroup, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
+      if (p && driftPlotted(p)) rows.push({ color: colorFor('drift:' + state.driftGroup, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
     }
     const marks = drift.markers.filter((mk) => mk.t === t).map((mk) => ({ value: 'new', label: mk.value }));
     const title = fmtDay(t) + ' · ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
@@ -737,10 +764,11 @@ function renderDrift() {
   });
   legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + state.driftGroup, s.key), label: s.key })), 'line');
   document.getElementById('drift-table').replaceChildren(table(
-    ['Day', 'Group', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit'],
+    ['Day', 'Group', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit', 'Latency', 'TTFT'],
     drift.points.map((p) => {
       const st = p[state.driftStat];
-      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write), fmtInt(st.output), fmtInt(st.reasoning), fmtPct(p.cache_hit_rate)];
+      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write), fmtInt(st.output), fmtInt(st.reasoning), fmtPct(p.cache_hit_rate),
+        fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-'];
     }),
   ));
 }
@@ -765,10 +793,10 @@ function renderBreakdown() {
     return key;
   };
   container.replaceChildren(table(
-    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
+    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
     b.rows.map((r) => [keyCell(r.key), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
       fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
-      fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
+      r.requests > 0 && r.cost_usd > 0 ? fmtUSD(r.cost_usd / r.requests) : '-', fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
       r.cost_per_million_tokens > 0 ? fmtUSD(r.cost_per_million_tokens) : '-', fmtPct(r.cache_hit_rate)]),
   ));
 }
