@@ -237,3 +237,28 @@ func TestRetentionZeroKeepsEverything(t *testing.T) {
 		t.Errorf("rows = %d, err %v", n, err)
 	}
 }
+
+func TestDashboardResourceIsServed(t *testing.T) {
+	p, _ := startPlugin(t)
+	env := call(t, p, pluginabi.MethodManagementRegister, map[string]any{})
+	var reg struct {
+		Resources []struct{ Path, Menu string } `json:"resources"`
+	}
+	if err := json.Unmarshal(env.Result, &reg); err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Resources) != 1 || reg.Resources[0].Path != dashboardPath || reg.Resources[0].Menu != "Analytics" {
+		t.Fatalf("resources = %+v", reg.Resources)
+	}
+	env = call(t, p, pluginabi.MethodManagementHandle, map[string]any{"Method": "GET", "Path": dashboardPath})
+	var resp pluginapi.ManagementResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || resp.Headers.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(string(resp.Body), `id="drift"`) {
+		t.Errorf("dashboard: %d %v", resp.StatusCode, resp.Headers)
+	}
+	if !strings.Contains(resp.Headers.Get("Content-Security-Policy"), "connect-src 'self'") {
+		t.Errorf("CSP = %q", resp.Headers.Get("Content-Security-Policy"))
+	}
+}

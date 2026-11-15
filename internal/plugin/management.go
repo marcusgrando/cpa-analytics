@@ -13,12 +13,21 @@ import (
 
 	"github.com/marcus-grando-azion/cpa-analytics/internal/pricing"
 	"github.com/marcus-grando-azion/cpa-analytics/internal/query"
+	"github.com/marcus-grando-azion/cpa-analytics/internal/web"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
 // managementBase is where CPA serves the plugin's management routes. CPA
 // requires exact paths, so every route is listed.
 const managementBase = "/v0/management/" + pluginName + "/"
+
+// dashboardPath serves the page. CPA rejects a resource at the bare plugin
+// prefix, so it needs a name. Resource routes are not authenticated: the page
+// holds no data and fetches everything from the management routes.
+const dashboardPath = "/v0/resource/plugins/" + pluginName + "/dashboard"
+
+// dashboardCSP allows the inline page and calls to the same origin only.
+const dashboardCSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
 
 // apiError is a JSON error body. Codes tell the caller whether retrying helps:
 // invalid_parameter never does, storage_unavailable may.
@@ -82,8 +91,15 @@ type managementRoute struct {
 	Description string
 }
 
+type resourceRoute struct {
+	Path        string
+	Menu        string
+	Description string
+}
+
 type managementRegistration struct {
-	Routes []managementRoute `json:"routes"`
+	Routes    []managementRoute `json:"routes"`
+	Resources []resourceRoute   `json:"resources"`
 }
 
 func (p *Plugin) managementRegister([]byte) ([]byte, error) {
@@ -93,7 +109,9 @@ func (p *Plugin) managementRegister([]byte) ([]byte, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var reg managementRegistration
+	reg := managementRegistration{Resources: []resourceRoute{{
+		Path: dashboardPath, Menu: "Analytics", Description: "Token usage, cost and per-request drift",
+	}}}
 	for _, name := range names {
 		reg.Routes = append(reg.Routes, managementRoute{Method: http.MethodGet, Path: managementBase + name, Description: routes[name].description})
 	}
@@ -104,6 +122,17 @@ func (p *Plugin) managementHandle(raw []byte) ([]byte, error) {
 	var req pluginapi.ManagementRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fmt.Errorf("decode management request: %w", err)
+	}
+	if req.Path == dashboardPath {
+		return json.Marshal(pluginapi.ManagementResponse{
+			StatusCode: http.StatusOK,
+			Headers: http.Header{
+				"Content-Type":            {"text/html; charset=utf-8"},
+				"Content-Security-Policy": {dashboardCSP},
+				"Cache-Control":           {"no-cache"},
+			},
+			Body: web.Index(),
+		})
 	}
 	body, err := p.serve(req)
 	if err != nil {
