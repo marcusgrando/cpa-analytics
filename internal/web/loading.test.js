@@ -2,17 +2,18 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { mapLimit } from './limits.js';
+import { previousPeriod, recordedThrough } from './compare.js';
 
 const page = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const loading = page.split('/* ---------- loading ---------- */')[1].split('/* ---------- auto refresh ---------- */')[0];
-const wiring = page.slice(page.indexOf("document.getElementById('drift-group').addEventListener"), page.indexOf('let resizeTimer'));
+const wiring = page.slice(page.indexOf('for (const section of DETAIL_SECTIONS) {'), page.indexOf('let resizeTimer'));
 const deferred = () => Promise.withResolvers();
 
 function dashboard() {
   const nodes = new Map();
   const node = (id) => {
     if (!nodes.has(id)) nodes.set(id, {
-      hidden: false, textContent: '', value: '', children: [], attrs: {}, listeners: {},
+      hidden: false, open: false, textContent: '', value: '', children: [], attrs: {}, listeners: {},
       replaceChildren(...children) { this.children = children; },
       setAttribute(k, v) { this.attrs[k] = v; },
       addEventListener(k, fn) { this.listeners[k] = fn; },
@@ -20,7 +21,7 @@ function dashboard() {
     });
     return nodes.get(id);
   };
-  const calls = [], renders = [], painted = [], classes = new Set();
+  const calls = [], credentialCalls = [], renders = [], painted = [], classes = new Set();
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
     timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
@@ -38,19 +39,281 @@ function dashboard() {
     previousPeriod: () => ({ from: 0, to: 100 }), recordedThrough: () => true,
     el: (tag, attrs) => ({ tag, ...attrs }),
     api: async (route, params) => { calls.push({ route, params }); return responses[route]; },
-    management: async () => ({ files: [] }),
+    management: async () => { credentialCalls.push('credentials'); return { files: [] }; },
     renderHealth() {},
     renderTotals: () => { renders.push('totals'); painted.push(ctx.data.params?.provider); },
     renderDaily: () => renders.push('daily'), renderModelDetail() {},
-    renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {},
+    renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {}, renderCostWarning() {},
     renderDrift: () => renders.push('drift'), renderBreakdown: () => renders.push('breakdown'),
-    forgetKey: () => renders.push('forget-key'), showKeyForm: () => renders.push('key-form'),
+    forgetKey: () => { ctx.data = {}; renders.push('forget-key'); }, showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
   ctx.filterParams = () => ({ ...ctx.rangeParams(), provider: ctx.state.provider, model: ctx.state.model, client: ctx.state.client, api_key: ctx.state.apiKey });
   vm.runInContext(loading + wiring, ctx);
-  return { ctx, calls, renders, painted, node, classes, responses };
+  return { ctx, calls, credentialCalls, renders, painted, node, classes, responses };
 }
+
+test('opening usage does not query collapsed analyses or an incomplete previous period', async () => {
+  const { ctx, calls, node } = dashboard();
+  ctx.recordedThrough = () => false;
+  await ctx.refresh();
+  expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'drift', 'breakdown', 'limit-burn']);
+  for (const section of ['affinity', 'leftover', 'quality']) {
+    expect(node(section).open).toBe(false);
+    expect(node(section).attrs['aria-busy']).toBe('false');
+  }
+});
+
+test('each disclosure loads on first expansion and reuses its result until refresh', async () => {
+  const { ctx, calls, node } = dashboard();
+  await ctx.refresh();
+  calls.length = 0;
+  for (const section of ['affinity', 'leftover', 'quality']) {
+    node(section).open = true;
+    await ctx.refreshDetail(section);
+    node(section).open = false;
+    await ctx.refreshDetail(section);
+    node(section).open = true;
+    await ctx.refreshDetail(section);
+  }
+  expect(calls.map((c) => c.route)).toEqual(['affinity', 'limit-leftover', 'pricing']);
+  calls.length = 0;
+  await ctx.refresh();
+  expect(calls.map((c) => c.route)).toEqual(expect.arrayContaining(['affinity', 'limit-leftover', 'pricing']));
+});
+
+test('filter navigation reuses options, credentials and account limits within the displayed range', async () => {
+  const { ctx, calls, credentialCalls, node } = dashboard();
+  node('leftover').open = true;
+  await ctx.refresh();
+  calls.length = credentialCalls.length = 0;
+  ctx.rangeParams = () => ({ from: 300, to: 400, tz: -300 });
+  ctx.state.model = 'gpt-5';
+  await ctx.refreshFilters();
+  ctx.state.client = 'codex';
+  await ctx.refreshFilters();
+  ctx.state.apiKey = 'abcdef123456';
+  await ctx.refreshFilters();
+  expect(calls.every((c) => ['summary', 'timeseries', 'drift', 'breakdown'].includes(c.route))).toBe(true);
+  expect(credentialCalls).toEqual([]);
+  expect(ctx.data.params.from).toBe(100);
+  expect(ctx.data.params.to).toBe(200);
+  calls.length = 0;
+  ctx.state.provider = 'claude';
+  await ctx.refreshFilters();
+  expect(calls.filter((c) => c.route.startsWith('limit-')).map((c) => c.route)).toEqual(['limit-burn', 'limit-leftover']);
+  expect(calls.some((c) => c.route === 'options')).toBe(false);
+});
+
+test('refresh and period changes renew metadata and limit results', async () => {
+  const { ctx, calls, credentialCalls } = dashboard();
+  await ctx.refresh();
+  for (const changePeriod of [false, true]) {
+    calls.length = credentialCalls.length = 0;
+    ctx.rangeParams = () => ({ from: 300, to: 400, tz: -300 });
+    if (changePeriod) { ctx.state.period = 30; await ctx.refreshFilters(); }
+    else await ctx.refresh();
+    expect(calls.map((c) => c.route)).toEqual(expect.arrayContaining(['health', 'options', 'limit-burn']));
+    expect(credentialCalls.length).toBe(1);
+    expect(ctx.data.params.from).toBe(300);
+  }
+});
+
+test('a collapsed detail is invalidated by refresh and uses the new filters when opened', async () => {
+  const { ctx, calls, node } = dashboard();
+  await ctx.refresh();
+  node('affinity').open = true;
+  await ctx.refreshDetail('affinity');
+  node('affinity').open = false;
+  ctx.state.model = 'new-model';
+  await ctx.refreshFilters();
+  calls.length = 0;
+  node('affinity').open = true;
+  await ctx.refreshDetail('affinity');
+  expect(calls).toEqual([{ route: 'affinity', params: ctx.data.params }]);
+  expect(calls[0].params.model).toBe('new-model');
+});
+
+test('expanding during a full load waits for it and does not duplicate the detail query', async () => {
+  const { ctx, calls, node } = dashboard();
+  const gate = deferred(), api = ctx.api;
+  ctx.api = (route, params) => route === 'timeseries' ? gate.promise : api(route, params);
+  const full = ctx.refresh();
+  node('affinity').open = true;
+  const detail = ctx.refreshDetail('affinity');
+  expect(calls.some((c) => c.route === 'affinity')).toBe(false);
+  gate.resolve({});
+  await Promise.all([full, detail]);
+  expect(calls.filter((c) => c.route === 'affinity').length).toBe(1);
+});
+
+test('a stale expanded detail cannot paint or overlap the next full load', async () => {
+  const { ctx, node, calls } = dashboard();
+  await ctx.refresh();
+  const gate = deferred(), api = ctx.api;
+  ctx.api = (route, params) => route === 'affinity' ? gate.promise : api(route, params);
+  node('affinity').open = true;
+  const detail = ctx.refreshDetail('affinity');
+  await new Promise(setImmediate);
+  calls.length = 0;
+  node('affinity').open = false;
+  ctx.state.model = 'new-model';
+  const full = ctx.refreshFilters();
+  await new Promise(setImmediate);
+  expect(calls).toEqual([]);
+  gate.resolve({ stale: true });
+  await Promise.all([full, detail]);
+  expect(ctx.data.affinity).toBeUndefined();
+  expect(ctx.data.params.model).toBe('new-model');
+});
+
+test('detail errors keep the overview usable and can retry on reopening', async () => {
+  const { ctx, node, renders } = dashboard();
+  await ctx.refresh();
+  const api = ctx.api;
+  ctx.api = async () => { throw new Error('offline'); };
+  node('quality').open = true;
+  await ctx.refreshDetail('quality');
+  expect(node('quality .section-status').textContent).toContain('Could not load');
+  expect(node('app').hidden).toBe(false);
+  expect(renders).toContain('totals');
+  ctx.api = api;
+  await ctx.refreshDetail('quality');
+  expect(node('quality .section-status').hidden).toBe(true);
+  expect(node('load-error').textContent).toBe('');
+});
+
+test('credential authentication errors stop loading and discard reusable data', async () => {
+  const { ctx, renders } = dashboard();
+  ctx.management = async () => { throw new ctx.AuthError('key expired'); };
+  await ctx.refresh();
+  expect(renders).toContain('key-form');
+  expect(ctx.data).toEqual({});
+});
+
+test('forgetting a key clears usage metadata, account profiles and visible health', () => {
+  const { ctx, node } = dashboard();
+  ctx.data = { credentials: [{ label: 'previous account' }], options: { clients: ['previous client'] } };
+  ctx.limitsData = { results: ['previous limit'] };
+  ctx.claudeProfiles = new Map([['previous account', {}]]);
+  node('health').children = ['previous error'];
+  vm.runInContext(page.slice(page.indexOf('function forgetKey()'), page.indexOf('function showKeyForm(')), ctx);
+  ctx.forgetKey();
+  expect(ctx.data).toEqual({});
+  expect(ctx.limitsData).toBeNull();
+  expect(ctx.claudeProfiles.size).toBe(0);
+  expect(node('health').children).toEqual([]);
+});
+
+test('the previous period is queried only when recording covers its entire range', async () => {
+  for (const [since, count] of [[50, 2], [150, 1], [0, 1]]) {
+    const { ctx, calls, responses } = dashboard();
+    ctx.rangeParams = () => ({ from: 200, to: 300, tz: 0 });
+    ctx.previousPeriod = previousPeriod;
+    ctx.recordedThrough = recordedThrough;
+    responses.summary.data_since = since;
+    await ctx.refresh();
+    expect(calls.filter((c) => c.route === 'summary').length).toBe(count);
+  }
+});
+
+test('toggle controls fetch their own detail and rapid expansions stay serialized', async () => {
+  const { ctx, calls, node } = dashboard();
+  await ctx.refresh();
+  calls.length = 0;
+  const gate = deferred(), api = ctx.api;
+  ctx.api = (route, params) => {
+    if (route === 'affinity') { calls.push({ route, params }); return gate.promise; }
+    return api(route, params);
+  };
+  node('affinity').open = true;
+  const a = node('affinity').listeners.toggle();
+  const duplicate = node('affinity').listeners.toggle();
+  node('quality').open = true;
+  const b = node('quality').listeners.toggle();
+  await new Promise(setImmediate);
+  expect(calls.map((c) => c.route)).toEqual(['affinity']);
+  gate.resolve({});
+  await Promise.all([a, duplicate, b]);
+  expect(calls.map((c) => c.route)).toEqual(['affinity', 'pricing']);
+});
+
+test('a failed primary load cannot start a detail with obsolete filters', async () => {
+  const { ctx, calls, node } = dashboard();
+  await ctx.refresh();
+  const api = ctx.api;
+  ctx.api = async () => { throw new Error('offline'); };
+  ctx.state.client = 'new-client';
+  await ctx.refreshFilters();
+  calls.length = 0;
+  ctx.api = api;
+  node('affinity').open = true;
+  await ctx.refreshDetail('affinity');
+  expect(calls).toEqual([]);
+});
+
+test('a queued full refresh still renews metadata after a later filter change', async () => {
+  const { ctx, calls } = dashboard();
+  await ctx.refresh();
+  const gate = deferred(), api = ctx.api;
+  ctx.api = (route, params) => route === 'timeseries' ? gate.promise : api(route, params);
+  const first = ctx.refreshFilters();
+  await new Promise(setImmediate);
+  ctx.api = api;
+  const full = ctx.refresh();
+  ctx.state.model = 'gpt-5';
+  const last = ctx.refreshFilters();
+  calls.length = 0;
+  gate.resolve({});
+  await Promise.all([first, full, last]);
+  expect(calls.map((c) => c.route)).toContain('options');
+});
+
+test('filter changes cannot turn an active full refresh into reuse of an older snapshot', async () => {
+  const { ctx, calls } = dashboard();
+  await ctx.refresh();
+  const gate = deferred(), api = ctx.api;
+  ctx.rangeParams = () => ({ from: 300, to: 400, tz: -300 });
+  ctx.api = (route, params) => route === 'timeseries' ? gate.promise : api(route, params);
+  const full = ctx.refresh();
+  await new Promise(setImmediate);
+  ctx.api = api;
+  ctx.state.model = 'gpt-5';
+  const filter = ctx.refreshFilters();
+  calls.length = 0;
+  gate.resolve({});
+  await Promise.all([full, filter]);
+  expect(ctx.data.params.to).toBe(400);
+  expect(calls.map((c) => c.route)).toContain('options');
+});
+
+test('chart sections are visible before measuring them on loads and filter reuse', async () => {
+  const { ctx, node } = dashboard();
+  const visible = [];
+  ctx.renderDrift = () => visible.push(!node('drift .section-content').hidden);
+  ctx.renderBurn = () => visible.push(!node('burn .section-content').hidden);
+  await ctx.refresh();
+  ctx.state.model = 'gpt-5';
+  await ctx.refreshFilters();
+  expect(visible).toEqual([true, true, true, true]);
+});
+
+test('health shows only collection or pricing failures, while unpriced tokens remain visible without pricing details', () => {
+  const { ctx, node } = dashboard();
+  ctx.fmtCompact = ctx.fmtInt = String;
+  vm.runInContext(page.slice(page.indexOf('function renderCostWarning()'), page.indexOf('/* ---------- limits ---------- */')), ctx);
+  ctx.renderHealth({ writer: { written: 10, dropped: 0 }, trace_hits: 9, trace_misses: 2, pricing: {} });
+  expect(node('health').children).toEqual([]);
+  ctx.renderHealth({ storage_error: 'disk full', writer: { dropped: 3, last_error: 'write failed' }, pricing: { last_error: 'offline' } });
+  expect(node('health').children.length).toBe(4);
+  ctx.data = { summary: { totals: { cost_quality: { unpriced_tokens: 42 } } } };
+  ctx.renderCostWarning();
+  expect(node('cost-warning').hidden).toBe(false);
+  expect(node('cost-warning').textContent).toContain('42 tokens');
+  ctx.data.summary.totals.cost_quality.unpriced_tokens = 0;
+  ctx.renderCostWarning();
+  expect(node('cost-warning').hidden).toBe(true);
+});
 
 test('full load uses one lightweight options query and keeps the selected value', async () => {
   const { ctx, calls, node } = dashboard();

@@ -75,6 +75,10 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--surface); bor
 .filters input { width: 9em; }
 .grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+details.card { margin: 0; }
+details.card > summary { color: var(--ink); }
+details.card > summary h2 { display: inline; }
+details.card[open] > summary { margin-bottom: 8px; }
 .card-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
 .sub { color: var(--ink-2); font-size: 13px; margin: 2px 0 0; max-width: 75ch; }
 .controls { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: end; }
@@ -224,6 +228,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="hero-label">Cost, API estimate</div>
         <div id="t-cost" class="hero-value">-</div>
         <div id="t-cost-change" class="hero-label"></div>
+        <p id="cost-warning" class="notice" role="status" hidden></p>
         <div id="t-cost-trend" class="spark hero-spark"></div>
         <div id="t-tiles" class="tiles"></div>
         <div class="hero-label">Cost share by provider</div>
@@ -294,37 +299,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         </div>
       </section>
 
-      <section id="burn" class="card" aria-labelledby="burn-title">
-        <h2 id="burn-title">Value of the weekly limit</h2>
-        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day. For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
-        <p class="section-status notice" role="status" hidden></p>
-        <div class="section-content">
-          <div id="burn-chart" class="chart"></div>
-          <div id="burn-legend" class="legend"></div>
-          <p id="burn-note" class="sub"></p>
-          <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
-        </div>
-      </section>
-
-      <section id="leftover" class="card" aria-labelledby="leftover-title">
-        <h2 id="leftover-title">Quota left at reset</h2>
-        <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. It does not carry over. Early means a new cycle began before the reset.</p>
-        <p class="section-status notice" role="status" hidden></p>
-        <div class="section-content">
-          <p id="leftover-total" class="hero-label"></p>
-          <div id="leftover-table" class="table-wrap"></div>
-        </div>
-      </section>
-
-      <section id="affinity" class="card" aria-labelledby="affinity-title">
-        <h2 id="affinity-title">Account affinity</h2>
-        <p class="sub">The prompt cache lives on the account, so a session that moves to another account writes its cache again. Counts session and model pairs with two or more calls.</p>
-        <p class="section-status notice" role="status" hidden></p>
-        <div class="section-content">
-          <div id="affinity-table" class="table-wrap"></div>
-        </div>
-      </section>
-
       <section id="daily" class="card" aria-labelledby="daily-title">
         <div class="card-head">
           <div>
@@ -362,8 +336,39 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         </div>
       </section>
 
-      <section id="quality" class="card" aria-labelledby="quality-title">
-        <h2 id="quality-title">Cost quality</h2>
+      <section id="burn" class="card" aria-labelledby="burn-title">
+        <h2 id="burn-title">Value of the weekly limit</h2>
+        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day. For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="burn-chart" class="chart"></div>
+          <div id="burn-legend" class="legend"></div>
+          <p id="burn-note" class="sub"></p>
+          <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
+        </div>
+      </section>
+
+      <details id="leftover" class="card" aria-labelledby="leftover-title">
+        <summary><h2 id="leftover-title">Quota left at reset</h2></summary>
+        <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. It does not carry over. Early means a new cycle began before the reset.</p>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <p id="leftover-total" class="hero-label"></p>
+          <div id="leftover-table" class="table-wrap"></div>
+        </div>
+      </details>
+
+      <details id="affinity" class="card" aria-labelledby="affinity-title">
+        <summary><h2 id="affinity-title">Account affinity</h2></summary>
+        <p class="sub">The prompt cache lives on the account, so a session that moves to another account writes its cache again. Counts session and model pairs with two or more calls.</p>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="affinity-table" class="table-wrap"></div>
+        </div>
+      </details>
+
+      <details id="quality" class="card" aria-labelledby="quality-title">
+        <summary><h2 id="quality-title">Cost quality</h2></summary>
         <p class="sub">Where each token's price came from. Unpriced tokens count as $0.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
@@ -371,7 +376,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <div id="q-models"></div>
           <p id="q-pricing" class="notice"></p>
         </div>
-      </section>
+      </details>
     </div>
   </main>
 </div>
@@ -456,6 +461,10 @@ function rememberKey(key) {
 }
 
 function forgetKey() {
+  data = {};
+  limitsData = null;
+  claudeProfiles.clear();
+  document.getElementById('health').replaceChildren();
   managementKey = '';
   try { sessionStorage.removeItem(KEY_STORE); } catch (_) { /* nothing stored */ }
 }
@@ -1171,6 +1180,13 @@ function renderBreakdown() {
   ));
 }
 
+function renderCostWarning() {
+  const tokens = data.summary.totals.cost_quality.unpriced_tokens;
+  const warning = document.getElementById('cost-warning');
+  warning.hidden = tokens === 0;
+  warning.textContent = tokens > 0 ? fmtCompact(tokens) + ' tokens have no price and count as $0. Expand Cost quality for details.' : '';
+}
+
 function renderQuality() {
   const q = data.summary.totals.cost_quality;
   segmentedBar(document.getElementById('q-bar'), [
@@ -1199,12 +1215,8 @@ function renderHealth(h) {
   const items = [];
   const item = (color, label) => items.push(el('span', { class: 'item' }, color ? el('span', { class: 'dot', style: 'background:' + color }) : null, label));
   if (h.storage_error) item('var(--critical)', 'Storage error: ' + h.storage_error);
-  else item('var(--good)', 'Storage OK');
-  item(null, fmtInt(h.writer.written) + ' rows written');
   if (h.writer.dropped > 0) item('var(--warning)', fmtInt(h.writer.dropped) + ' rows dropped');
   if (h.writer.last_error) item('var(--warning)', 'Last write error: ' + h.writer.last_error);
-  const joins = h.trace_hits + h.trace_misses;
-  if (joins > 0) item(null, 'Client identified on ' + fmtPct(h.trace_hits / joins) + ' of records');
   if (h.pricing.last_error) item('var(--warning)', 'Price refresh failed');
   document.getElementById('health').replaceChildren(...items);
 }
@@ -1534,20 +1546,34 @@ async function guarded(work, quiet) {
 
 let refreshPromise = null;
 let refreshPending = false;
+let refreshReuse = false;
+let detailPromise = null;
 
-function refresh(quiet) {
+function refreshFilters() {
+  return refresh(false, true);
+}
+
+function refresh(quiet, reuse = false) {
   clearTimeout(autoRefresh.timer);
   if (refreshPromise) {
-    // Finish the active batch, then query only the latest selection. The C
-    // ABI cannot cancel SQLite work already running on behalf of a fetch.
+    // A full refresh must still renew the range when filters change while
+    // it is queued. Finish in-flight SQLite work before starting that load.
+    refreshReuse = refreshReuse && reuse;
     ++loadSeq;
     refreshPending = true;
     return refreshPromise;
   }
+  refreshReuse = reuse;
   refreshPromise = (async () => {
     do {
+      const reuseRange = refreshReuse;
       refreshPending = false;
-      await guarded(state.view === 'limits' ? loadLimits : loadUsage, quiet);
+      await guarded(async (current) => {
+        if (detailPromise) await detailPromise;
+        if (!current()) return;
+        if (state.view === 'limits') await loadLimits(current);
+        else await loadUsage(current, reuseRange);
+      }, quiet);
     } while (refreshPending);
   })().finally(() => { refreshPromise = null; scheduleAutoRefresh(); });
   return refreshPromise;
@@ -1562,19 +1588,56 @@ function sectionState(section, message = '', busy = false) {
   status.hidden = !message;
 }
 
-async function loadUsage(current) {
+const DETAIL_SECTIONS = ['leftover', 'affinity', 'quality'];
+
+function detailJob(section) {
+  const p = data.params;
+  const range = { from: p.from, to: p.to, tz: p.tz };
+  switch (section) {
+    case 'leftover': return { section, ready: () => Boolean(data.leftover),
+      load: () => api('limit-leftover', { ...range, provider: p.provider }),
+      apply: (v) => { data.leftover = v; renderLeftover(); } };
+    case 'affinity': return { section, ready: () => Boolean(data.affinity),
+      load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } };
+    case 'quality': return { section, ready: () => Boolean(data.pricing),
+      load: () => api('pricing', p), apply: (v) => { data.pricing = v; renderQuality(); } };
+  }
+}
+
+async function runUsageJob(job, current) {
+  if (!current()) return true;
+  if (DETAIL_SECTIONS.includes(job.section) && (!document.getElementById(job.section).open || job.ready())) return true;
+  if (job.section) sectionState(job.section, 'Loading…', true);
+  try {
+    const result = await job.load();
+    if (!current()) return true;
+    if (job.section) sectionState(job.section);
+    job.apply(result);
+    return true;
+  } catch (err) {
+    if (!current()) return true;
+    if (job.section) sectionState(job.section, 'Could not load. Refresh to retry.');
+    showLoadError(err);
+    return false;
+  }
+}
+
+async function loadUsage(current, reuse) {
   const p = filterParams();
   const period = state.period;
+  const prior = reuse && data.period === period && data.params?.tz === p.tz ? data : null;
+  // Filter navigation compares the same snapshot. Refresh advances the
+  // interval and renews all data, including metadata and closed details.
+  if (prior) Object.assign(p, { from: prior.params.from, to: prior.params.to, tz: prior.params.tz });
+  const sameProvider = prior && prior.params.provider === p.provider;
   const group = state.driftGroup, by = state.by;
   const range = { from: p.from, to: p.to, tz: p.tz };
   const prevRange = previousPeriod(p);
-  const health = api('health').then(
+  const health = prior ? Promise.resolve() : api('health').then(
     (h) => { if (current()) renderHealth(h); },
     (err) => { if (current()) showLoadError(err); },
   );
   try {
-    // Let the overview finish before the detail queries compete for SQLite
-    // and HTTP connections. Settle both calls before a queued refresh starts.
     const primary = await Promise.allSettled([
       api('summary', p),
       api('timeseries', { ...p, bucket: period <= 1 ? 'hour' : 'day', group: 'provider' }),
@@ -1582,63 +1645,78 @@ async function loadUsage(current) {
     if (!current()) return;
     const failed = primary.find((r) => r.status === 'rejected');
     if (failed) throw failed.reason;
-    data = { summary: primary[0].value, daily: primary[1].value, previous: null, credentials: [], params: p, period };
-    for (const section of ['drift', 'burn', 'leftover', 'affinity', 'breakdown', 'quality']) sectionState(section, 'Loading…', true);
+    data = { summary: primary[0].value, daily: primary[1].value, previous: null, params: p, period,
+      options: prior?.options, credentials: prior?.credentials,
+      burn: sameProvider ? prior.burn : undefined, leftover: sameProvider ? prior.leftover : undefined };
+    for (const section of ['drift', 'burn', 'leftover', 'affinity', 'breakdown', 'quality']) {
+      sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
+    }
     document.getElementById('key-form').hidden = true;
     document.getElementById('app').hidden = false;
     renderTotals();
     renderModelDetail();
     renderDaily();
+    renderCostWarning();
+    if (data.options) renderOptions(data.options);
+    if (data.burn) { sectionState('burn'); renderBurn(); }
+    if (data.leftover) { sectionState('leftover'); renderLeftover(); }
     document.body.classList.remove('loading');
     document.getElementById('updated').textContent = 'Loading details…';
 
-    const jobs = [
-      { load: () => api('options', range), apply: renderOptions },
-      { load: () => management('/v8/management/credentials').then((c) => c.files || [], () => []), apply: (files) => {
-        data.credentials = files;
-        if (data.burn) renderBurn();
-        if (data.leftover) renderLeftover();
-        if (data.breakdown && data.breakdown.by === 'account') renderBreakdown();
-      } },
-      { load: () => api('summary', { ...p, ...prevRange }), apply: (prev) => {
-        data.previous = recordedThrough(prevRange, prev.data_since) ? prev.totals : null;
-        renderTotals();
-      } },
+    const jobs = [];
+    if (!data.options) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
+    if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
+      data.credentials = files;
+      if (data.burn) renderBurn();
+      if (data.leftover) renderLeftover();
+      if (data.breakdown && data.breakdown.by === 'account') renderBreakdown();
+    } });
+    if (recordedThrough(prevRange, data.summary.data_since)) jobs.push({ load: () => api('summary', { ...p, ...prevRange }), apply: (prev) => {
+      data.previous = recordedThrough(prevRange, prev.data_since) ? prev.totals : null;
+      renderTotals();
+    } });
+    jobs.push(
       { section: 'drift', load: () => api('drift', { ...p, group }), apply: (v) => { data.drift = v; renderDrift(); } },
       { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
-      { section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider }), apply: (v) => { data.burn = v; renderBurn(); } },
-      { section: 'leftover', load: () => api('limit-leftover', { ...range, provider: p.provider }), apply: (v) => { data.leftover = v; renderLeftover(); } },
-      { section: 'affinity', load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } },
-      { section: 'quality', load: () => api('pricing', p), apply: (v) => { data.pricing = v; renderQuality(); } },
-    ];
-    let incomplete = false;
-    await mapLimit(jobs, 2, async (job) => {
-      if (!current()) return;
-      try {
-        const result = await job.load();
-        if (!current()) return;
-        if (job.section) sectionState(job.section);
-        job.apply(result);
-      } catch (err) {
-        if (!current()) return;
-        incomplete = true;
-        if (job.section) sectionState(job.section, 'Could not load. Refresh to retry.');
-        showLoadError(err);
-      }
-    });
-    if (current()) document.getElementById('updated').textContent = incomplete
-      ? 'Some details could not be loaded' : 'Updated ' + new Date().toLocaleTimeString();
+    );
+    if (!data.burn) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider }), apply: (v) => { data.burn = v; renderBurn(); } });
+    for (const section of DETAIL_SECTIONS) if (document.getElementById(section).open) jobs.push(detailJob(section));
+    const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current));
+    if (current()) document.getElementById('updated').textContent = results.includes(false)
+      ? 'Some details could not be loaded' : 'Through ' + new Date(p.to).toLocaleTimeString();
   } finally {
     await health;
   }
 }
 
+function matchesSelection() {
+  const p = data.params;
+  return p && data.period === state.period && p.provider === state.provider &&
+    p.model === state.model && p.client === state.client && p.api_key === state.apiKey;
+}
+
+async function refreshDetail(section) {
+  if (!document.getElementById(section).open) return;
+  if (refreshPromise) await refreshPromise;
+  const seq = loadSeq;
+  const current = () => seq === loadSeq && state.view === 'usage' && matchesSelection();
+  if (!current()) return;
+  document.getElementById('load-error').textContent = '';
+  // Serial disclosure loads share the full loader's lifetime, so expanding
+  // multiple sections never adds a burst of competing SQLite queries.
+  const pending = (async () => {
+    if (detailPromise) await detailPromise;
+    if (!current()) return;
+    await runUsageJob(detailJob(section), current);
+  })();
+  detailPromise = pending;
+  try { await pending; } finally { if (detailPromise === pending) detailPromise = null; }
+}
+
 const groupSeq = { drift: 0, breakdown: 0 };
 
 async function refreshGroup(section) {
-  const p = data.params;
-  if (refreshPromise || !p || data.period !== state.period || p.provider !== state.provider ||
-      p.model !== state.model || p.client !== state.client || p.api_key !== state.apiKey) return refresh();
+  if (refreshPromise || !matchesSelection()) return refreshFilters();
   const pageSeq = loadSeq;
   const seq = ++groupSeq[section];
   const current = () => pageSeq === loadSeq && seq === groupSeq[section] && state.view === 'usage';
@@ -1696,7 +1774,7 @@ function setFilter(name, value, { refresh: reload = true } = {}) {
   const select = document.getElementById('f-' + name);
   if (select) select.value = value;
   if (!reload) return;
-  refresh();
+  refreshFilters();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1737,16 +1815,16 @@ document.getElementById('auto-refresh').addEventListener('change', (e) => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && autoRefresh.due) refresh(true);
 });
-document.getElementById('f-period').addEventListener('change', (e) => { state.period = Number(e.target.value); refresh(); });
+document.getElementById('f-period').addEventListener('change', (e) => { state.period = Number(e.target.value); refreshFilters(); });
 for (const name of ['provider', 'model', 'client']) {
-  document.getElementById('f-' + name).addEventListener('change', (e) => { state[name] = e.target.value; refresh(); });
+  document.getElementById('f-' + name).addEventListener('change', (e) => { state[name] = e.target.value; refreshFilters(); });
 }
 document.getElementById('f-apikey').addEventListener('change', (e) => {
   const v = e.target.value.trim().toLowerCase();
   e.target.setCustomValidity(/^([0-9a-f]{12})?$/.test(v) ? '' : 'Use the 12 hex characters from the API key breakdown.');
   if (!e.target.reportValidity()) return;
   state.apiKey = v;
-  refresh();
+  refreshFilters();
 });
 document.querySelectorAll('[data-daily]').forEach((b) => b.addEventListener('click', () => {
   state.dailyMode = b.dataset.daily; pressed('#daily', 'data-daily', state.dailyMode); renderDaily();
@@ -1755,6 +1833,9 @@ document.querySelectorAll('[data-stat]').forEach((b) => b.addEventListener('clic
   state.driftStat = b.dataset.stat; pressed('#drift', 'data-stat', state.driftStat); renderDrift();
 }));
 document.getElementById('drift-metric').addEventListener('change', (e) => { state.driftMetric = e.target.value; renderDrift(); });
+for (const section of DETAIL_SECTIONS) {
+  document.getElementById(section).addEventListener('toggle', () => refreshDetail(section));
+}
 document.getElementById('drift-group').addEventListener('change', (e) => {
   state.driftGroup = e.target.value;
   refreshGroup('drift');
