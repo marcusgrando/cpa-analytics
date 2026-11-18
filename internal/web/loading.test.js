@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { mapLimit } from './limits.js';
 
 const page = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const loading = page.split('/* ---------- loading ---------- */')[1].split('/* ---------- auto refresh ---------- */')[0];
@@ -15,10 +16,11 @@ function dashboard() {
       replaceChildren(...children) { this.children = children; },
       setAttribute(k, v) { this.attrs[k] = v; },
       addEventListener(k, fn) { this.listeners[k] = fn; },
+      querySelector(selector) { return node(id + ' ' + selector); },
     });
     return nodes.get(id);
   };
-  const calls = [], renders = [], classes = new Set();
+  const calls = [], renders = [], painted = [], classes = new Set();
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
     timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
@@ -31,29 +33,33 @@ function dashboard() {
       body: { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) } },
       getElementById: node, querySelectorAll: () => [],
     },
-    clearTimeout() {}, scheduleAutoRefresh() {}, pressed() {},
+    clearTimeout() {}, scheduleAutoRefresh() {}, pressed() {}, mapLimit,
     rangeParams: () => ({ from: 100, to: 200, tz: -300 }),
     previousPeriod: () => ({ from: 0, to: 100 }), recordedThrough: () => true,
     el: (tag, attrs) => ({ tag, ...attrs }),
     api: async (route, params) => { calls.push({ route, params }); return responses[route]; },
     management: async () => ({ files: [] }),
-    renderAll: () => renders.push('all'), renderHealth() {},
+    renderHealth() {},
+    renderTotals: () => { renders.push('totals'); painted.push(ctx.data.params?.provider); },
+    renderDaily: () => renders.push('daily'), renderModelDetail() {},
+    renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {},
     renderDrift: () => renders.push('drift'), renderBreakdown: () => renders.push('breakdown'),
     forgetKey: () => renders.push('forget-key'), showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
   ctx.filterParams = () => ({ ...ctx.rangeParams(), provider: ctx.state.provider, model: ctx.state.model, client: ctx.state.client, api_key: ctx.state.apiKey });
   vm.runInContext(loading + wiring, ctx);
-  return { ctx, calls, renders, node, classes, responses };
+  return { ctx, calls, renders, painted, node, classes, responses };
 }
 
-test('full load uses one lightweight options query in the same batch and keeps the selected value', async () => {
+test('full load uses one lightweight options query and keeps the selected value', async () => {
   const { ctx, calls, node } = dashboard();
   ctx.state.model = 'no-longer-in-range';
   const gate = deferred();
   const api = ctx.api;
   ctx.api = (route, params) => route === 'drift' ? gate.promise : api(route, params);
   const pending = ctx.refresh();
+  await new Promise(setImmediate);
   expect(calls.filter((c) => c.route === 'options')).toEqual([{ route: 'options', params: { from: 100, to: 200, tz: -300 } }]);
   gate.resolve({ points: [] });
   await pending;
@@ -138,7 +144,7 @@ test('a full refresh supersedes partial data and authentication errors', async (
 });
 
 test('rapid filter changes finish the active batch and only run the latest pending selection', async () => {
-  const { ctx, calls, renders, classes } = dashboard();
+  const { ctx, calls, painted, classes } = dashboard();
   const first = deferred(), api = ctx.api;
   let blocked = false;
   ctx.api = (route, params) => {
@@ -154,21 +160,22 @@ test('rapid filter changes finish the active batch and only run the latest pendi
   first.resolve({ points: [] });
   await Promise.all([a, b, c]);
   expect(calls.filter((c) => c.route === 'timeseries').map((c) => c.params.provider)).toEqual(['', 'claude']);
-  expect(renders).toEqual(['all']);
+  expect([...new Set(painted)]).toEqual(['claude']);
   expect(classes.size).toBe(0);
 });
 
 test('a late credentials response cannot paint an obsolete full load', async () => {
-  const { ctx, renders } = dashboard();
+  const { ctx, painted } = dashboard();
   const credentials = deferred();
   ctx.management = () => credentials.promise;
   const first = ctx.refresh();
   await new Promise(setImmediate);
+  painted.length = 0;
   ctx.state.provider = 'claude';
   const second = ctx.refresh();
   credentials.resolve({ files: [] });
   await Promise.all([first, second]);
-  expect(renders).toEqual(['all']);
+  expect([...new Set(painted)]).toEqual(['claude']);
 });
 
 test('a failed filter change cannot reuse the previous selection for a partial load', async () => {
@@ -189,7 +196,7 @@ test('a failing batch still settles before the next selection starts', async () 
   const gate = deferred(), api = ctx.api;
   ctx.api = (route, params) => {
     if (route === 'summary') return Promise.reject(new Error('storage unavailable'));
-    if (route === 'drift') return gate.promise;
+    if (route === 'timeseries') { calls.push({ route, params }); return gate.promise; }
     return api(route, params);
   };
   const first = ctx.refresh();
@@ -211,4 +218,93 @@ test('current partial failures stay visible and clear the busy state', async () 
   await ctx.refreshGroup('breakdown');
   expect(node('load-error').textContent).toContain('storage unavailable');
   expect(node('breakdown').attrs['aria-busy']).toBe('false');
+});
+
+test('summary and daily usage render before slow details or credentials finish', async () => {
+  const { ctx, renders, node, classes } = dashboard();
+  const details = deferred(), credentials = deferred(), api = ctx.api;
+  ctx.api = (route, params) => ['summary', 'timeseries', 'health'].includes(route) ? api(route, params) : details.promise;
+  ctx.management = () => credentials.promise;
+  node('app').hidden = true;
+  const pending = ctx.refresh();
+  await new Promise(setImmediate);
+  expect(node('app').hidden).toBe(false);
+  expect(renders).toContain('totals');
+  expect(renders).toContain('daily');
+  expect(renders).not.toContain('drift');
+  expect(classes.has('loading')).toBe(false);
+  expect(node('drift').attrs['aria-busy']).toBe('true');
+  expect(node('drift .section-content').hidden).toBe(true);
+  details.resolve({ providers: [], models: [], clients: [] });
+  credentials.resolve({ files: [] });
+  await pending;
+});
+
+test('only two data queries run at once and details do not compete with the first paint', async () => {
+  const { ctx, calls } = dashboard();
+  const primary = deferred(), api = ctx.api;
+  let active = 0, peak = 0;
+  ctx.api = async (route, params) => {
+    if (route === 'health') return api(route, params);
+    active++;
+    peak = Math.max(peak, active);
+    try {
+      if (route === 'summary' || route === 'timeseries') await primary.promise;
+      else await new Promise(setImmediate);
+      return await api(route, params);
+    } finally { active--; }
+  };
+  const pending = ctx.refresh();
+  await new Promise(setImmediate);
+  expect(active).toBe(2);
+  expect(calls.map((c) => c.route)).toEqual(['health']);
+  primary.resolve();
+  await pending;
+  expect(peak).toBe(2);
+});
+
+test('one failed detail keeps the primary data and other details visible', async () => {
+  const { ctx, renders, node } = dashboard();
+  const api = ctx.api;
+  ctx.api = (route, params) => route === 'drift' ? Promise.reject(new Error('storage unavailable')) : api(route, params);
+  await ctx.refresh();
+  expect(renders).toContain('totals');
+  expect(renders).toContain('breakdown');
+  expect(node('load-error').textContent).toContain('storage unavailable');
+  expect(node('drift').attrs['aria-busy']).toBe('false');
+  expect(node('drift .section-status').textContent).toContain('Could not load');
+  expect(node('drift .section-content').hidden).toBe(true);
+  expect(node('breakdown .section-content').hidden).toBe(false);
+});
+
+test('superseded first paint never starts its queued detail queries', async () => {
+  const { ctx, calls, painted } = dashboard();
+  const primary = deferred(), api = ctx.api;
+  ctx.api = (route, params) => route === 'timeseries' && params.provider === '' ? primary.promise : api(route, params);
+  const first = ctx.refresh();
+  ctx.state.provider = 'claude';
+  const last = ctx.refresh();
+  primary.resolve({});
+  await Promise.all([first, last]);
+  expect(calls.filter((c) => c.route === 'drift').map((c) => c.params.provider)).toEqual(['claude']);
+  expect([...new Set(painted)]).toEqual(['claude']);
+});
+
+test('authentication failure in a detail stops queued work and requests a key', async () => {
+  const { ctx, calls, renders } = dashboard();
+  const api = ctx.api;
+  ctx.api = (route, params) => route === 'drift' ? Promise.reject(new ctx.AuthError('key expired')) : api(route, params);
+  await ctx.refresh();
+  expect(renders).toContain('forget-key');
+  expect(renders).toContain('key-form');
+  expect(calls.some((c) => c.route === 'limit-burn')).toBe(false);
+});
+
+test('chart controls and resize are safe before their detail data arrives', () => {
+  const ctx = vm.createContext({ data: {} });
+  const drift = page.slice(page.indexOf('function renderDrift()'), page.indexOf('function burnAccountName('));
+  const burn = page.slice(page.indexOf('function renderBurn()'), page.indexOf('function renderLeftover()'));
+  vm.runInContext(drift + burn, ctx);
+  expect(() => ctx.renderDrift()).not.toThrow();
+  expect(() => ctx.renderBurn()).not.toThrow();
 });

@@ -136,6 +136,8 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .key-form p { margin: 0; color: var(--ink-2); }
 body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .card[aria-busy="true"] { opacity: 0.6; }
+.section-status { min-height: 80px; display: grid; place-items: center; }
+#drift .section-status, #burn .section-status { min-height: 240px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 #limits-body { margin-top: 16px; }
 .limits-provider + .limits-provider { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--grid); }
@@ -282,33 +284,45 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             </div>
           </div>
         </div>
-        <div id="drift-chart" class="chart"></div>
-        <div id="drift-legend" class="legend"></div>
-        <p id="drift-note" class="notice"></p>
-        <details id="drift-changes" hidden><summary id="drift-changes-summary"></summary><ul id="drift-markers" class="markers"></ul></details>
-        <details><summary>Table</summary><div id="drift-table" class="table-wrap"></div></details>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="drift-chart" class="chart"></div>
+          <div id="drift-legend" class="legend"></div>
+          <p id="drift-note" class="notice"></p>
+          <details id="drift-changes" hidden><summary id="drift-changes-summary"></summary><ul id="drift-markers" class="markers"></ul></details>
+          <details><summary>Table</summary><div id="drift-table" class="table-wrap"></div></details>
+        </div>
       </section>
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
         <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day. For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
-        <div id="burn-chart" class="chart"></div>
-        <div id="burn-legend" class="legend"></div>
-        <p id="burn-note" class="sub"></p>
-        <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="burn-chart" class="chart"></div>
+          <div id="burn-legend" class="legend"></div>
+          <p id="burn-note" class="sub"></p>
+          <details><summary>Table</summary><div id="burn-table" class="table-wrap"></div></details>
+        </div>
       </section>
 
       <section id="leftover" class="card" aria-labelledby="leftover-title">
         <h2 id="leftover-title">Quota left at reset</h2>
         <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. It does not carry over. Early means a new cycle began before the reset.</p>
-        <p id="leftover-total" class="hero-label"></p>
-        <div id="leftover-table" class="table-wrap"></div>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <p id="leftover-total" class="hero-label"></p>
+          <div id="leftover-table" class="table-wrap"></div>
+        </div>
       </section>
 
       <section id="affinity" class="card" aria-labelledby="affinity-title">
         <h2 id="affinity-title">Account affinity</h2>
         <p class="sub">The prompt cache lives on the account, so a session that moves to another account writes its cache again. Counts session and model pairs with two or more calls.</p>
-        <div id="affinity-table" class="table-wrap"></div>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="affinity-table" class="table-wrap"></div>
+        </div>
       </section>
 
       <section id="daily" class="card" aria-labelledby="daily-title">
@@ -342,15 +356,21 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
             <button type="button" data-by="account" aria-pressed="false">Account</button>
           </div>
         </div>
-        <div id="breakdown-table" class="table-wrap"></div>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="breakdown-table" class="table-wrap"></div>
+        </div>
       </section>
 
       <section id="quality" class="card" aria-labelledby="quality-title">
         <h2 id="quality-title">Cost quality</h2>
         <p class="sub">Where each token's price came from. Unpriced tokens count as $0.</p>
-        <div id="q-bar"></div>
-        <div id="q-models"></div>
-        <p id="q-pricing" class="notice"></p>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="q-bar"></div>
+          <div id="q-models"></div>
+          <p id="q-pricing" class="notice"></p>
+        </div>
       </section>
     </div>
   </main>
@@ -902,6 +922,7 @@ function driftValue(p) {
 }
 
 function renderDrift() {
+  if (!data.drift) return;
   const container = document.getElementById('drift-chart');
   const drift = data.drift;
   const isRate = state.driftMetric === 'cache_hit_rate';
@@ -1031,6 +1052,7 @@ function accountWithProvider(authIndex) {
 }
 
 function renderBurn() {
+  if (!data.burn) return;
   const container = document.getElementById('burn-chart');
   const points = data.burn.points;
   const note = document.getElementById('burn-note');
@@ -1467,18 +1489,6 @@ function trendChart(container, recorded, projected, now, label) {
   svg.append(hit);
 }
 
-function renderAll() {
-  renderTotals();
-  renderModelDetail();
-  renderDrift();
-  renderBurn();
-  renderLeftover();
-  renderAffinity();
-  renderDaily();
-  renderBreakdown();
-  renderQuality();
-}
-
 /* ---------- loading ---------- */
 
 function fillSelect(id, values, current, allLabel) {
@@ -1495,6 +1505,18 @@ function renderOptions(options) {
   fillSelect('f-client', options.clients, state.client, 'All clients');
 }
 
+function showLoadError(err) {
+  if (err instanceof AuthError) {
+    ++loadSeq;
+    refreshPending = false;
+    document.body.classList.remove('loading');
+    forgetKey();
+    showKeyForm(err.message);
+    return;
+  }
+  document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
+}
+
 let loadSeq = 0;
 async function guarded(work, quiet) {
   const seq = ++loadSeq;
@@ -1504,8 +1526,7 @@ async function guarded(work, quiet) {
     await work(() => seq === loadSeq);
   } catch (err) {
     if (seq !== loadSeq) return;
-    if (err instanceof AuthError) { forgetKey(); showKeyForm(err.message); return; }
-    document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
+    showLoadError(err);
   } finally {
     if (seq === loadSeq) document.body.classList.remove('loading');
   }
@@ -1532,44 +1553,84 @@ function refresh(quiet) {
   return refreshPromise;
 }
 
+function sectionState(section, message = '', busy = false) {
+  const card = document.getElementById(section);
+  card.setAttribute('aria-busy', String(busy));
+  card.querySelector('.section-content').hidden = Boolean(message);
+  const status = card.querySelector('.section-status');
+  status.textContent = message;
+  status.hidden = !message;
+}
+
 async function loadUsage(current) {
   const p = filterParams();
   const period = state.period;
+  const group = state.driftGroup, by = state.by;
   const range = { from: p.from, to: p.to, tz: p.tz };
-  // Health renders even when the data routes fail, since that is when it explains why.
-  const health = api('health').then((h) => { if (current()) renderHealth(h); });
-  // The previous period is fetched alongside and kept only if recording covered it.
   const prevRange = previousPeriod(p);
-  // Credentials only name the accounts, so the chart still draws without them.
-  const credentials = management('/v8/management/credentials').then((c) => c.files || [], () => []);
-  // Settle the whole batch before a queued refresh starts, including on error.
-  const results = await Promise.allSettled([
-    api('summary', p),
-    api('summary', { ...p, ...prevRange }),
-    api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
-    api('drift', { ...p, group: state.driftGroup }),
-    api('limit-burn', { ...range, provider: p.provider }),
-    api('limit-leftover', { ...range, provider: p.provider }),
-    api('affinity', p),
-    api('breakdown', { ...p, by: state.by }),
-    api('pricing', p),
-    api('options', range),
-    credentials,
-    health,
-  ]);
-  if (!current()) return;
-  const failed = results.find((r) => r.status === 'rejected');
-  if (failed) throw failed.reason;
-  const [summary, prev, daily, drift, burn, leftover, affinity, breakdown, pricing, options, files] = results.map((r) => r.value);
-  data = {
-    summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, burn, leftover, affinity, breakdown, pricing,
-    credentials: files, params: p, period,
-  };
-  document.getElementById('key-form').hidden = true;
-  document.getElementById('app').hidden = false;
-  renderAll();
-  renderOptions(options);
-  document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  const health = api('health').then(
+    (h) => { if (current()) renderHealth(h); },
+    (err) => { if (current()) showLoadError(err); },
+  );
+  try {
+    // Let the overview finish before the detail queries compete for SQLite
+    // and HTTP connections. Settle both calls before a queued refresh starts.
+    const primary = await Promise.allSettled([
+      api('summary', p),
+      api('timeseries', { ...p, bucket: period <= 1 ? 'hour' : 'day', group: 'provider' }),
+    ]);
+    if (!current()) return;
+    const failed = primary.find((r) => r.status === 'rejected');
+    if (failed) throw failed.reason;
+    data = { summary: primary[0].value, daily: primary[1].value, previous: null, credentials: [], params: p, period };
+    for (const section of ['drift', 'burn', 'leftover', 'affinity', 'breakdown', 'quality']) sectionState(section, 'Loading…', true);
+    document.getElementById('key-form').hidden = true;
+    document.getElementById('app').hidden = false;
+    renderTotals();
+    renderModelDetail();
+    renderDaily();
+    document.body.classList.remove('loading');
+    document.getElementById('updated').textContent = 'Loading details…';
+
+    const jobs = [
+      { load: () => api('options', range), apply: renderOptions },
+      { load: () => management('/v8/management/credentials').then((c) => c.files || [], () => []), apply: (files) => {
+        data.credentials = files;
+        if (data.burn) renderBurn();
+        if (data.leftover) renderLeftover();
+        if (data.breakdown && data.breakdown.by === 'account') renderBreakdown();
+      } },
+      { load: () => api('summary', { ...p, ...prevRange }), apply: (prev) => {
+        data.previous = recordedThrough(prevRange, prev.data_since) ? prev.totals : null;
+        renderTotals();
+      } },
+      { section: 'drift', load: () => api('drift', { ...p, group }), apply: (v) => { data.drift = v; renderDrift(); } },
+      { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
+      { section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider }), apply: (v) => { data.burn = v; renderBurn(); } },
+      { section: 'leftover', load: () => api('limit-leftover', { ...range, provider: p.provider }), apply: (v) => { data.leftover = v; renderLeftover(); } },
+      { section: 'affinity', load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } },
+      { section: 'quality', load: () => api('pricing', p), apply: (v) => { data.pricing = v; renderQuality(); } },
+    ];
+    let incomplete = false;
+    await mapLimit(jobs, 2, async (job) => {
+      if (!current()) return;
+      try {
+        const result = await job.load();
+        if (!current()) return;
+        if (job.section) sectionState(job.section);
+        job.apply(result);
+      } catch (err) {
+        if (!current()) return;
+        incomplete = true;
+        if (job.section) sectionState(job.section, 'Could not load. Refresh to retry.');
+        showLoadError(err);
+      }
+    });
+    if (current()) document.getElementById('updated').textContent = incomplete
+      ? 'Some details could not be loaded' : 'Updated ' + new Date().toLocaleTimeString();
+  } finally {
+    await health;
+  }
 }
 
 const groupSeq = { drift: 0, breakdown: 0 };
@@ -1583,17 +1644,18 @@ async function refreshGroup(section) {
   const current = () => pageSeq === loadSeq && seq === groupSeq[section] && state.view === 'usage';
   const card = document.getElementById(section);
   const grouping = section === 'drift' ? { group: state.driftGroup } : { by: state.by };
-  card.setAttribute('aria-busy', 'true');
+  sectionState(section, 'Loading…', true);
   document.getElementById('load-error').textContent = '';
   try {
     const result = await api(section, { ...data.params, ...grouping });
     if (!current()) return;
     data[section] = result;
+    sectionState(section);
     if (section === 'drift') renderDrift(); else renderBreakdown();
   } catch (err) {
     if (!current()) return;
-    if (err instanceof AuthError) { forgetKey(); showKeyForm(err.message); return; }
-    document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
+    sectionState(section, 'Could not load. Refresh to retry.');
+    showLoadError(err);
   } finally {
     if (seq === groupSeq[section]) card.setAttribute('aria-busy', 'false');
   }
