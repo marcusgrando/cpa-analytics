@@ -215,7 +215,7 @@ func TestIndexChartsWeeklyLimitValue(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
 		`id="burn"`,
-		`api('limit-burn', { ...rangeParams(), provider: state.provider })`,
+		`api('limit-burn', { ...range, provider: p.provider })`,
 		`p.usd_per_pct`,
 		`management('/v8/management/credentials')`,
 	} {
@@ -288,7 +288,7 @@ func TestIndexChartsWeeklyPoolHistoryAndProjection(t *testing.T) {
 
 func TestIndexShowsQuotaLeftAtReset(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`id="leftover"`, `api('limit-leftover', { ...rangeParams(), provider: state.provider })`, `c.left_usd`} {
+	for _, want := range []string{`id="leftover"`, `api('limit-leftover', { ...range, provider: p.provider })`, `c.left_usd`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}

@@ -135,6 +135,7 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .key-form { max-width: 380px; margin: 64px auto; display: flex; flex-direction: column; gap: 10px; }
 .key-form p { margin: 0; color: var(--ink-2); }
 body.loading main { opacity: 0.6; transition: opacity 0.2s; }
+.card[aria-busy="true"] { opacity: 0.6; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 #limits-body { margin-top: 16px; }
 .limits-provider + .limits-provider { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--grid); }
@@ -1488,14 +1489,10 @@ function fillSelect(id, values, current, allLabel) {
   select.value = current;
 }
 
-async function loadOptions() {
-  const range = rangeParams();
-  const [summary, models, clients] = await Promise.all([
-    api('summary', range), api('breakdown', { ...range, by: 'model' }), api('breakdown', { ...range, by: 'client' }),
-  ]);
-  fillSelect('f-provider', summary.providers.map((p) => p.provider), state.provider, 'All providers');
-  fillSelect('f-model', models.rows.map((r) => r.key), state.model, 'All models');
-  fillSelect('f-client', clients.rows.map((r) => r.key).filter((k) => k !== 'unknown').map((k) => k.split('/')[0]), state.client, 'All clients');
+function renderOptions(options) {
+  fillSelect('f-provider', options.providers, state.provider, 'All providers');
+  fillSelect('f-model', options.models, state.model, 'All models');
+  fillSelect('f-client', options.clients, state.client, 'All clients');
 }
 
 let loadSeq = 0;
@@ -1506,6 +1503,7 @@ async function guarded(work, quiet) {
   try {
     await work(() => seq === loadSeq);
   } catch (err) {
+    if (seq !== loadSeq) return;
     if (err instanceof AuthError) { forgetKey(); showKeyForm(err.message); return; }
     document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
   } finally {
@@ -1513,42 +1511,92 @@ async function guarded(work, quiet) {
   }
 }
 
+let refreshPromise = null;
+let refreshPending = false;
+
 function refresh(quiet) {
   clearTimeout(autoRefresh.timer);
-  return guarded(state.view === 'limits' ? loadLimits : loadUsage, quiet).finally(scheduleAutoRefresh);
+  if (refreshPromise) {
+    // Finish the active batch, then query only the latest selection. The C
+    // ABI cannot cancel SQLite work already running on behalf of a fetch.
+    ++loadSeq;
+    refreshPending = true;
+    return refreshPromise;
+  }
+  refreshPromise = (async () => {
+    do {
+      refreshPending = false;
+      await guarded(state.view === 'limits' ? loadLimits : loadUsage, quiet);
+    } while (refreshPending);
+  })().finally(() => { refreshPromise = null; scheduleAutoRefresh(); });
+  return refreshPromise;
 }
 
 async function loadUsage(current) {
   const p = filterParams();
+  const period = state.period;
+  const range = { from: p.from, to: p.to, tz: p.tz };
   // Health renders even when the data routes fail, since that is when it explains why.
   const health = api('health').then((h) => { if (current()) renderHealth(h); });
-  health.catch(() => {});
   // The previous period is fetched alongside and kept only if recording covered it.
   const prevRange = previousPeriod(p);
   // Credentials only name the accounts, so the chart still draws without them.
   const credentials = management('/v8/management/credentials').then((c) => c.files || [], () => []);
-  const [summary, prev, daily, drift, burn, leftover, affinity, breakdown, pricing] = await Promise.all([
+  // Settle the whole batch before a queued refresh starts, including on error.
+  const results = await Promise.allSettled([
     api('summary', p),
     api('summary', { ...p, ...prevRange }),
     api('timeseries', { ...p, bucket: state.period <= 1 ? 'hour' : 'day', group: 'provider' }),
     api('drift', { ...p, group: state.driftGroup }),
-    api('limit-burn', { ...rangeParams(), provider: state.provider }),
-    api('limit-leftover', { ...rangeParams(), provider: state.provider }),
+    api('limit-burn', { ...range, provider: p.provider }),
+    api('limit-leftover', { ...range, provider: p.provider }),
     api('affinity', p),
     api('breakdown', { ...p, by: state.by }),
     api('pricing', p),
+    api('options', range),
+    credentials,
+    health,
   ]);
-  await health;
   if (!current()) return;
+  const failed = results.find((r) => r.status === 'rejected');
+  if (failed) throw failed.reason;
+  const [summary, prev, daily, drift, burn, leftover, affinity, breakdown, pricing, options, files] = results.map((r) => r.value);
   data = {
     summary, previous: recordedThrough(prevRange, prev.data_since) ? prev.totals : null, daily, drift, burn, leftover, affinity, breakdown, pricing,
-    credentials: await credentials,
+    credentials: files, params: p, period,
   };
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
   renderAll();
+  renderOptions(options);
   document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-  await loadOptions();
+}
+
+const groupSeq = { drift: 0, breakdown: 0 };
+
+async function refreshGroup(section) {
+  const p = data.params;
+  if (refreshPromise || !p || data.period !== state.period || p.provider !== state.provider ||
+      p.model !== state.model || p.client !== state.client || p.api_key !== state.apiKey) return refresh();
+  const pageSeq = loadSeq;
+  const seq = ++groupSeq[section];
+  const current = () => pageSeq === loadSeq && seq === groupSeq[section] && state.view === 'usage';
+  const card = document.getElementById(section);
+  const grouping = section === 'drift' ? { group: state.driftGroup } : { by: state.by };
+  card.setAttribute('aria-busy', 'true');
+  document.getElementById('load-error').textContent = '';
+  try {
+    const result = await api(section, { ...data.params, ...grouping });
+    if (!current()) return;
+    data[section] = result;
+    if (section === 'drift') renderDrift(); else renderBreakdown();
+  } catch (err) {
+    if (!current()) return;
+    if (err instanceof AuthError) { forgetKey(); showKeyForm(err.message); return; }
+    document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
+  } finally {
+    if (seq === groupSeq[section]) card.setAttribute('aria-busy', 'false');
+  }
 }
 
 /* ---------- auto refresh ---------- */
@@ -1619,7 +1667,7 @@ document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('clic
   refresh();
 }));
 document.getElementById('check-limits').addEventListener('click', () => refresh());
-document.getElementById('change-key').addEventListener('click', () => { clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
+document.getElementById('change-key').addEventListener('click', () => { ++loadSeq; refreshPending = false; clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
 document.getElementById('auto-refresh').addEventListener('change', (e) => {
   try { sessionStorage.setItem(AUTO_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }
   scheduleAutoRefresh();
@@ -1647,11 +1695,11 @@ document.querySelectorAll('[data-stat]').forEach((b) => b.addEventListener('clic
 document.getElementById('drift-metric').addEventListener('change', (e) => { state.driftMetric = e.target.value; renderDrift(); });
 document.getElementById('drift-group').addEventListener('change', (e) => {
   state.driftGroup = e.target.value;
-  refresh();
+  refreshGroup('drift');
 });
 document.querySelectorAll('[data-by]').forEach((b) => b.addEventListener('click', () => {
   state.by = b.dataset.by; pressed('#breakdown', 'data-by', state.by);
-  refresh();
+  refreshGroup('breakdown');
 }));
 
 let resizeTimer = 0;

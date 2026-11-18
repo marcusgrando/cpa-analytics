@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,10 +78,68 @@ func TestManagementRegisterListsRoutes(t *testing.T) {
 		}
 		got[r.Path] = true
 	}
-	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity"} {
+	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity", "options"} {
 		if !got[apiBase+name] {
 			t.Errorf("missing route %s in %+v", name, reg.Routes)
 		}
+	}
+}
+
+func TestManagementOptions(t *testing.T) {
+	p, _ := startPlugin(t)
+	from := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	a := usageRow("a", from)
+	a.ResponseModel, a.APIKeyHash = "gpt-5-reported", "key-a"
+	b := a
+	b.RequestID, b.ClientVersion = "b", "0.131.0"
+	c := usageRow("c", from.Add(time.Hour))
+	c.Provider, c.Model, c.ClientName, c.APIKeyHash = "claude", "claude-sonnet", "claude-code", "key-b"
+	c.Failed, c.Generate = true, false
+	unknown := usageRow("unknown", from.Add(time.Hour))
+	unknown.Provider, unknown.Model, unknown.ClientName = "", "", ""
+	old := usageRow("old", from.Add(-time.Millisecond))
+	old.Provider, old.Model, old.ClientName = "old", "old", "old"
+	future := old
+	future.RequestID, future.RequestedAt = "future", to.UnixMilli()
+	insertRows(t, p, a, b, c, unknown, old, future)
+	type options struct {
+		Providers []string `json:"providers"`
+		Models    []string `json:"models"`
+		Clients   []string `json:"clients"`
+	}
+	for _, tc := range []struct {
+		name, param, value string
+		want               options
+	}{
+		{"all rows including failed and non-generating", "", "", options{[]string{"claude", "codex"}, []string{"claude-sonnet", "gpt-5-reported"}, []string{"claude-code", "codex"}}},
+		{"API key isolation", "api_key", "key-a", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}}},
+		{"reported model", "model", "gpt-5-reported", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}}},
+		{"no matches", "provider", "absent", options{[]string{}, []string{}, []string{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := url.Values{"from": {strconv.FormatInt(from.UnixMilli(), 10)}, "to": {strconv.FormatInt(to.UnixMilli(), 10)}}
+			if tc.param != "" {
+				q.Set(tc.param, tc.value)
+			}
+			resp := manage(t, p, "GET", "options", q)
+			var got options
+			if resp.StatusCode != 200 || json.Unmarshal(resp.Body, &got) != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("options: status %d body %s, want %+v", resp.StatusCode, resp.Body, tc.want)
+			}
+		})
+	}
+	resp := manage(t, p, "GET", "options", url.Values{"from": {"invalid"}})
+	if code, _ := errorCode(t, resp); resp.StatusCode != 400 || code != "invalid_parameter" {
+		t.Fatalf("invalid options filter: %d %s", resp.StatusCode, resp.Body)
+	}
+	if resp := manage(t, p, "POST", "options", nil); resp.StatusCode != 405 {
+		t.Fatalf("options accepts writes: %d", resp.StatusCode)
+	}
+	p.store.Close()
+	resp = manage(t, p, "GET", "options", nil)
+	if code, _ := errorCode(t, resp); resp.StatusCode != 503 || code != "storage_unavailable" {
+		t.Fatalf("closed options storage: %d %s", resp.StatusCode, resp.Body)
 	}
 }
 

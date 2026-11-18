@@ -50,6 +50,9 @@ type route struct {
 
 func (p *Plugin) routes() map[string]route {
 	return map[string]route{
+		"options": {"Provider, model and client names for the filters", func(db *sql.DB, f query.Filter, _ *pricing.Table, _ url.Values) (any, error) {
+			return query.Options(db, f)
+		}},
 		"summary": {"Totals, cost by provider, token type and service tier", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.Summary(db, f, t)
 		}},

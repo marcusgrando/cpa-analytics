@@ -108,6 +108,7 @@ check() {
   python3 -c "import json,sys; d=json.load(sys.stdin); ok=$2; print(('ok   ' if ok else 'BAD ') + '$1'); ok or print(json.dumps(d)[:1500]); sys.exit(0 if ok else 1)" || fail "$1"
 }
 mgmt "breakdown?by=client" | check "client is codex/0.130.0 (TraceID join)" '[r["key"] for r in d["rows"]] == ["codex/0.130.0"]'
+mgmt options | check "filter options use recorded names" 'd["models"] == ["stub-model-2026-11-01"] and d["clients"] == ["codex"]'
 mgmt "breakdown?by=model" | check "reported model recorded" '[r["key"] for r in d["rows"]] == ["stub-model-2026-11-01"]'
 mgmt summary | check "tokens normalized" 'd["totals"]["uncached_input"] == 400 and d["totals"]["cache_read"] == 2000 and d["totals"]["reasoning"] == 200'
 for _ in $(seq 1 20); do
@@ -119,8 +120,10 @@ mgmt summary | check "cost priced from the table" 'd["totals"]["cost_usd"] > 0 a
 mgmt limit-burn | check "weekly limit read from response headers" 'len(d["points"]) == 1 and d["points"][0]["weekly_pct"] == 2 and d["points"][0]["auth_index"] != ""'
 mgmt limit-history | check "weekly snapshots listed per account" 'len(d["accounts"]) == 1 and d["accounts"][0]["points"][-1]["weekly_pct"] == 12'
 mgmt "breakdown?by=account" | check "rows grouped by account" 'len(d["rows"]) == 1 and d["rows"][0]["key"] != ""'
+options_code=$(curl -s -o /dev/null -w '%{http_code}' "$API/options")
+[ "$options_code" = 401 ] && echo "ok   options require the key" || fail "options without key returned $options_code"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/summary")
 [ "$code" = 401 ] && echo "ok   management routes require the key" || fail "summary without key returned $code"
-curl -fsS "http://127.0.0.1:$CPA_PORT/v0/resource/plugins/cpa-analytics/dashboard" | grep -q 'id="drift"' \
+curl -fsS "http://127.0.0.1:$CPA_PORT/v0/resource/plugins/cpa-analytics/dashboard" | grep 'id="drift"' > /dev/null \
   && echo "ok   dashboard served" || fail "dashboard not served"
 echo "e2e passed"
