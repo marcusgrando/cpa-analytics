@@ -262,16 +262,16 @@ type Series struct {
 	Points []Point `json:"points"`
 }
 
-var bucketSizes = map[string]int64{"day": dayMillis, "hour": hourMillis}
+var bucketSizes = map[string]int64{"day": dayMillis, "hour": hourMillis, "minute": minuteMillis}
 
 var seriesGroups = map[string]string{"provider": "provider", "model": modelExpr, "client": clientExpr}
 
-// Timeseries returns tokens and cost per bucket (day or hour) and group
+// Timeseries returns tokens and cost per bucket (day, hour or minute) and group
 // (provider, model or client).
 func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string) (Series, error) {
 	size, ok := bucketSizes[bucket]
 	if !ok {
-		return Series{}, &ParamError{Param: "bucket", Reason: "must be day or hour"}
+		return Series{}, &ParamError{Param: "bucket", Reason: "must be day, hour or minute"}
 	}
 	groupExpr, ok := seriesGroups[group]
 	if !ok {

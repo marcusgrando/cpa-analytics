@@ -463,7 +463,7 @@ describe('other providers', () => {
 describe('limits rendering', () => {
   const page = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   const limitsLib = readFileSync(new URL('./limits.js', import.meta.url), 'utf8');
-  const limitsSection = page.split('/* ---------- limits ---------- */')[1].split('/* ---------- right now ---------- */')[0];
+  const limitsSection = page.split('/* ---------- limits ---------- */')[1].split('/* ---------- latency ---------- */')[0];
 
   function renderView(limitsData) {
     const body = { children: [], replaceChildren(...kids) { this.children = kids.filter(Boolean); } };

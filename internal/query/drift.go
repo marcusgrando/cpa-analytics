@@ -50,42 +50,55 @@ type Marker struct {
 // DriftResult answers the drift route.
 type DriftResult struct {
 	Group   string       `json:"group"`
+	Bucket  string       `json:"bucket"`
 	Points  []DriftPoint `json:"points"`
 	Markers []Marker     `json:"markers"`
 }
 
-var driftGroups = map[string]string{"response_model": modelExpr, "client_version": clientExpr, "reasoning_effort": effortExpr}
-
-// markerKinds are always reported, whatever the grouping. Rows that missed
-// the User-Agent join have no client and never produce a client marker.
-var markerKinds = []struct{ kind, expr, skip string }{
-	{"client_version", clientExpr, "client_name = ''"},
-	{"response_model", modelExpr, "(" + modelExpr + ") = ''"},
-	{"reasoning_effort", effortExpr, "reasoning_effort = ''"},
+var driftGroups = map[string]string{
+	"response_model":   modelExpr,
+	"client":           clientNameExpr,
+	"client_version":   clientExpr,
+	"reasoning_effort": effortExpr,
 }
 
-// Drift returns daily medians and p90 per request (see perRequest), grouped
-// by the reported model, the client version or the reasoning effort, plus
-// change markers.
-func Drift(db *sql.DB, f Filter, table *pricing.Table, group string) (DriftResult, error) {
+type markerSpec struct{ kind, expr, skip string }
+
+// groupMarker maps each drift grouping to the single marker kind that belongs
+// to it, so model views never mix in harness versions and vice versa.
+var groupMarker = map[string]markerSpec{
+	"response_model":   {"response_model", modelExpr, "(" + modelExpr + ") = ''"},
+	"client":           {"client_version", clientExpr, "client_name = ''"},
+	"client_version":   {"client_version", clientExpr, "client_name = ''"},
+	"reasoning_effort": {"reasoning_effort", effortExpr, "reasoning_effort = ''"},
+}
+
+// Drift returns per-bucket medians and p90 per request (see perRequest),
+// grouped by reported model, client (harness), client version or reasoning
+// effort, plus change markers matching the active grouping.
+func Drift(db *sql.DB, f Filter, table *pricing.Table, group, bucket string) (DriftResult, error) {
 	groupExpr, ok := driftGroups[group]
 	if !ok {
-		return DriftResult{}, &ParamError{Param: "group", Reason: "must be response_model, client_version or reasoning_effort"}
+		return DriftResult{}, &ParamError{Param: "group", Reason: "must be response_model, client, client_version or reasoning_effort"}
+	}
+	size, ok := bucketSizes[bucket]
+	if !ok {
+		return DriftResult{}, &ParamError{Param: "bucket", Reason: "must be day, hour or minute"}
 	}
 	reqs, err := perRequestPriced(db, f, table, groupExpr)
 	if err != nil {
 		return DriftResult{}, err
 	}
-	type dayKey struct {
+	type bucketKey struct {
 		t   int64
 		key string
 	}
-	buckets := map[dayKey][]inbound{}
+	buckets := map[bucketKey][]inbound{}
 	for _, rq := range reqs {
-		k := dayKey{f.bucketStart(rq.at, dayMillis), rq.key}
+		k := bucketKey{f.bucketStart(rq.at, size), rq.key}
 		buckets[k] = append(buckets[k], rq)
 	}
-	res := DriftResult{Group: group, Points: make([]DriftPoint, 0, len(buckets))}
+	res := DriftResult{Group: group, Bucket: bucket, Points: make([]DriftPoint, 0, len(buckets))}
 	for k, calls := range buckets {
 		res.Points = append(res.Points, driftPoint(k.t, k.key, calls))
 	}
@@ -95,7 +108,7 @@ func Drift(db *sql.DB, f Filter, table *pricing.Table, group string) (DriftResul
 		}
 		return res.Points[i].Key < res.Points[j].Key
 	})
-	if res.Markers, err = markers(db, f); err != nil {
+	if res.Markers, err = markers(db, f, groupMarker[group], size); err != nil {
 		return DriftResult{}, err
 	}
 	return res, nil
@@ -150,11 +163,10 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 	}
 }
 
-// markers returns the first local day each client version, reported model
-// and reasoning effort appears in the range. Values already seen before From
-// get no marker, and neither does the first day the plugin recorded anything,
-// since every value is new on that day.
-func markers(db *sql.DB, f Filter) ([]Marker, error) {
+// markers returns the first local bucket each value of mk appears in the range.
+// Values already seen before From get no marker, and neither does the first day
+// the plugin recorded anything, since every value is new on that day.
+func markers(db *sql.DB, f Filter, mk markerSpec, size int64) ([]Marker, error) {
 	first, err := dataSince(db)
 	if err != nil {
 		return nil, fmt.Errorf("markers: %w", err)
@@ -162,30 +174,29 @@ func markers(db *sql.DB, f Filter) ([]Marker, error) {
 	firstDay := f.bucketStart(first, dayMillis)
 	where, args := f.where(false)
 	out := []Marker{}
-	for _, mk := range markerKinds {
-		q := "SELECT " + mk.expr + ", MIN(requested_at) FROM requests WHERE " + where +
-			" AND generate = 1 AND NOT (" + mk.skip + ") GROUP BY 1 HAVING MIN(requested_at) >= ?"
-		rows, err := db.Query(q, append(args, f.From.UnixMilli())...)
-		if err != nil {
-			return nil, fmt.Errorf("markers %s: %w", mk.kind, err)
+	q := "SELECT " + mk.expr + ", MIN(requested_at) FROM requests WHERE " + where +
+		" AND generate = 1 AND NOT (" + mk.skip + ") GROUP BY 1 HAVING MIN(requested_at) >= ?"
+	rows, err := db.Query(q, append(args, f.From.UnixMilli())...)
+	if err != nil {
+		return nil, fmt.Errorf("markers %s: %w", mk.kind, err)
+	}
+	for rows.Next() {
+		var m Marker
+		var first int64
+		if err := rows.Scan(&m.Value, &first); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("markers %s scan: %w", mk.kind, err)
 		}
-		for rows.Next() {
-			var m Marker
-			var first int64
-			if err := rows.Scan(&m.Value, &first); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("markers %s scan: %w", mk.kind, err)
-			}
-			m.Kind, m.T = mk.kind, f.bucketStart(first, dayMillis)
-			if m.T != firstDay {
-				out = append(out, m)
-			}
+		if f.bucketStart(first, dayMillis) == firstDay {
+			continue
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, fmt.Errorf("markers %s rows: %w", mk.kind, err)
-		}
+		m.Kind, m.T = mk.kind, f.bucketStart(first, size)
+		out = append(out, m)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("markers %s rows: %w", mk.kind, err)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]

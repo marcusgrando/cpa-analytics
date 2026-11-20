@@ -210,10 +210,13 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       </div>
       <label class="usage-only">Period
         <select id="f-period">
-          <option value="1">Last 24 hours</option>
-          <option value="7" selected>Last 7 days</option>
-          <option value="30">Last 30 days</option>
-          <option value="90">Last 90 days</option>
+          <option value="15m">Last 15 minutes</option>
+          <option value="1h">Last 1 hour</option>
+          <option value="6h">Last 6 hours</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
         </select>
       </label>
       <label class="usage-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
@@ -267,25 +270,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         </div>
       </section>
 
-      <section id="realtime" class="card" aria-labelledby="realtime-title">
-        <div class="card-head">
-          <div>
-            <h2 id="realtime-title">Right now</h2>
-            <p class="sub">The last minutes against today's average so far. Uses the filters, not the period.</p>
-          </div>
-          <div class="seg" role="group" aria-label="Window">
-            <button type="button" data-window="15" aria-pressed="true">15 min</button>
-            <button type="button" data-window="30" aria-pressed="false">30 min</button>
-            <button type="button" data-window="60" aria-pressed="false">60 min</button>
-          </div>
-        </div>
-        <p class="section-status notice" role="status" hidden></p>
-        <div class="section-content">
-          <div id="rt-tiles" class="tiles"></div>
-          <p id="rt-note" class="notice"></p>
-        </div>
-      </section>
-
       <section id="model-detail" class="card" hidden aria-labelledby="md-title">
         <h2 id="md-title">Model detail</h2>
         <div id="md-tiles" class="tiles"></div>
@@ -297,12 +281,13 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="drift-title">Per request</h2>
-            <p class="sub">Daily, per upstream call. A vertical line marks the first day of a new client version, model or reasoning effort.</p>
+            <p id="drift-sub" class="sub">Daily, per upstream call. A vertical line marks when a plotted model first appeared.</p>
           </div>
           <div class="controls">
             <label>Group by
               <select id="drift-group">
                 <option value="response_model">Reported model</option>
+                <option value="client">Client (harness)</option>
                 <option value="client_version">Client version</option>
                 <option value="reasoning_effort">Reasoning effort</option>
               </select>
@@ -472,7 +457,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 /* tooltip.js */
 /* sparkline.js */
 /* endlabels.js */
-/* realtime.js */
 /* scatter.js */
 </script>
 <script>
@@ -481,16 +465,28 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 const API = '/v0/management/cpa-analytics/';
 const KEY_STORE = 'cpa-analytics.management-key';
 const SVG_NS = "http://www.w3.org/2000/svg";
-const DAY = 86400000;
+const MINUTE = 60000;
 const HOUR = 3600000;
+const DAY = 86400000;
+const BUCKET_MS = { minute: MINUTE, hour: HOUR, day: DAY };
+const PERIODS = {
+  '15m': { ms: 15 * MINUTE, label: '15 minutes' },
+  '1h':  { ms: HOUR,        label: 'hour' },
+  '6h':  { ms: 6 * HOUR,    label: '6 hours' },
+  '24h': { ms: DAY,         label: '24 hours' },
+  '7d':  { ms: 7 * DAY,     label: '7 days' },
+  '30d': { ms: 30 * DAY,    label: '30 days' },
+  '90d': { ms: 90 * DAY,    label: '90 days' },
+};
+const periodSpec = (p) => PERIODS[p] || PERIODS['7d'];
 const SERIES_SLOTS = 8;
 // END_LABELS caps the lines named at their end. Past four, converging lines crowd them.
 const END_LABELS = 4;
 
 const state = {
-  period: 7, provider: '', model: '', client: '', account: '', apiKey: '',
+  period: '7d', provider: '', model: '', client: '', account: '', apiKey: '',
   view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', by: 'model',
-  rtWindow: 15, reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
+  reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
 };
 const REQUESTS_PAGE = 50;
 let data = {};
@@ -595,7 +591,7 @@ async function request(url, init = {}) {
 
 function rangeParams() {
   const to = Date.now();
-  return { from: to - state.period * DAY, to, tz: -new Date().getTimezoneOffset() };
+  return { from: to - periodSpec(state.period).ms, to, tz: -new Date().getTimezoneOffset() };
 }
 
 function filterParams() {
@@ -785,7 +781,7 @@ function hitColumns(g, xs, onShow) {
 }
 
 function buckets(size) {
-  const { from, to } = rangeParams();
+  const { from, to } = data.params || rangeParams();
   const off = tzMs();
   const start = (t) => t + off - (((t + off) % size) + size) % size - off;
   const out = [];
@@ -869,13 +865,13 @@ function cacheHitOf(b) {
   return input > 0 ? b.cache_read / input : null;
 }
 
-const periodName = () => (state.period <= 1 ? '24 hours' : state.period + ' days');
+const periodName = () => periodSpec(state.period).label;
 
-// Average over the buckets that had traffic, so idle days do not dilute it.
+// Average over the buckets that had traffic, so idle buckets do not dilute it.
 function perActiveBucket(total) {
   const active = new Set(data.daily.points.filter((p) => totalTokens(p) > 0).map((p) => p.t)).size;
   if (!active) return '';
-  return fmtCompact(total / active) + ' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day');
+  return fmtCompact(total / active) + ' per active ' + (BUCKET_MS[data.daily.bucket] ? data.daily.bucket : 'day');
 }
 
 function renderTotals() {
@@ -892,10 +888,10 @@ function renderTotals() {
   driversNode.hidden = !drivers.length;
   driversNode.textContent = drivers.length ? 'Drivers: ' + drivers.map((d) => `${d.label} ${d.change}`).join(', ') : '';
   // Sessions and cache savings are not in the series, so their tiles have no trend.
-  const size = data.daily.bucket === 'hour' ? HOUR : DAY;
+  const size = BUCKET_MS[data.daily.bucket] || DAY;
   const xs = buckets(size);
   const sums = sumBuckets(data.daily.points, xs);
-  const trend = (value, fmt) => ({ values: recordedValues(sums.map(value), xs, size, data.summary.data_since), xs, fmt, fmtX: size === HOUR ? fmtHour : fmtDay });
+  const trend = (value, fmt) => ({ values: recordedValues(sums.map(value), xs, size, data.summary.data_since), xs, fmt, fmtX: size === DAY ? fmtDay : fmtHour });
   drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost');
   const sessionNote = t.median_requests_per_session > 0
     ? `med ${fmtCompact(Math.round(t.median_requests_per_session))} req/session` + (t.median_peak_input_per_session > 0 ? `, ${fmtCompact(Math.round(t.median_peak_input_per_session))} peak in` : '')
@@ -969,8 +965,9 @@ function renderModelDetail() {
 function renderDaily() {
   const container = document.getElementById('daily-chart');
   const series = data.daily;
-  const size = series.bucket === 'hour' ? HOUR : DAY;
-  const fmtX = size === HOUR ? fmtHour : fmtDay;
+  const size = BUCKET_MS[series.bucket] || DAY;
+  const fmtX = size === DAY ? fmtDay : fmtHour;
+  const fmtLabel = (t) => (size === DAY ? fmtDay(t) : fmtDay(t) + ' ' + fmtHour(t));
   const xs = buckets(size);
   const value = (p) => (state.dailyMode === 'cost' ? p.cost_usd : totalTokens(p));
   const fmtY = state.dailyMode === 'cost' ? fmtUSD : fmtCompact;
@@ -1003,20 +1000,27 @@ function renderDaily() {
   hitColumns(g, xs, (i) => {
     const stack = stackAt(xs[i]);
     const total = stack.reduce((s, e) => s + value(e.p), 0);
-    const title = (size === HOUR ? fmtDay(xs[i]) + ' ' + fmtHour(xs[i]) : fmtDay(xs[i])) + ', total ' + fmtY(total);
+    const title = fmtLabel(xs[i]) + ', total ' + fmtY(total);
     return { title, label: title, rows: stack.map((e) => ({ color: colorFor('provider', e.key), value: fmtY(value(e.p)), label: e.key || 'unknown' })) };
   });
   legend(document.getElementById('daily-legend'), keys.map((k) => ({ color: colorFor('provider', k), label: k || 'unknown' })), 'rect');
   document.getElementById('daily-table').replaceChildren(table(
     ['Bucket', 'Provider', 'Records', 'Tokens', 'Cost'],
-    series.points.map((p) => [size === HOUR ? fmtDay(p.t) + ' ' + fmtHour(p.t) : fmtDay(p.t), p.key || 'unknown', fmtInt(p.records), fmtInt(totalTokens(p)), fmtUSD(p.cost_usd)]),
+    series.points.map((p) => [fmtLabel(p.t), p.key || 'unknown', fmtInt(p.records), fmtInt(totalTokens(p)), fmtUSD(p.cost_usd)]),
   ));
 }
 
 const MARKER_KINDS = { client_version: 'client version', response_model: 'reported model', reasoning_effort: 'reasoning effort' };
+const DRIFT_CADENCE = { day: 'Daily', hour: 'Hourly', minute: 'Per minute' };
+const DRIFT_MARKER_NOTE = {
+  response_model: 'A vertical line marks when a plotted model first appeared.',
+  client: 'One line per harness. A vertical line marks a new version of a plotted harness.',
+  client_version: 'A vertical line marks when a plotted client version first appeared.',
+  reasoning_effort: 'A vertical line marks when a reasoning effort first appeared.',
+};
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
 
-// Calls that never streamed have no first-token time, so a day without one
+// Calls that never streamed have no first-token time, so a bucket without one
 // has no TTFT point rather than a zero. Same for output speed without timed output.
 const driftPlotted = (p) => {
   if (state.driftMetric === 'ttft_ms') return p.median.ttft_ms > 0;
@@ -1039,18 +1043,29 @@ function fmtMarkerImpact(impact) {
   return parts.length ? ' — after vs before: ' + parts.join(', ') : '';
 }
 
+function driftMarkerOwner(mk, group) {
+  return group === 'client' ? mk.value.split('/')[0] : mk.value;
+}
+
 function renderDrift() {
   if (!data.drift) return;
   const container = document.getElementById('drift-chart');
   const drift = data.drift;
+  const group = drift.group || state.driftGroup;
+  const bucket = drift.bucket || 'day';
+  const size = BUCKET_MS[bucket] || DAY;
+  const fmtX = size === DAY ? fmtDay : fmtHour;
+  const fmtBucket = (t) => (size === DAY ? fmtDay(t) : fmtDay(t) + ' ' + fmtHour(t));
   const isRate = state.driftMetric === 'cache_hit_rate';
   const isCost = state.driftMetric === 'cost_usd';
   const isSpeed = state.driftMetric === 'tokens_per_sec';
-  // The hit rate is the day's cache reads over its input, not a per-request value.
-  document.getElementById('drift-title').textContent = isRate ? 'Daily cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request';
+  // The hit rate is the bucket's cache reads over its input, not a per-request value.
+  document.getElementById('drift-title').textContent = isRate ? (DRIFT_CADENCE[bucket] || 'Daily') + ' cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request';
+  const sub = document.getElementById('drift-sub');
+  if (sub) sub.textContent = `${DRIFT_CADENCE[bucket] || 'Daily'}, per upstream call. ${DRIFT_MARKER_NOTE[group] || ''}`.trim();
   const isTime = state.driftMetric === 'latency_ms' || state.driftMetric === 'ttft_ms';
   const fmtY = isRate ? fmtPct : isTime ? fmtSeconds : isCost ? fmtUSD : isSpeed ? (v) => fmtInt(v) + ' tok/s' : fmtCompact;
-  const xs = buckets(DAY);
+  const xs = buckets(size);
   const byKey = new Map();
   for (const p of drift.points) {
     if (!byKey.has(p.key)) byKey.set(p.key, []);
@@ -1060,16 +1075,21 @@ function renderDrift() {
   const ranked = [...byKey.entries()].map(([key, pts]) => ({ key, pts, n: pts.reduce((s, p) => s + p.requests, 0) }))
     .sort((a, b) => b.n - a.n);
   const shown = ranked.slice(0, SERIES_SLOTS);
+  const shownKeys = new Set(shown.map((s) => s.key));
+  const wantKind = group === 'client' ? 'client_version' : group;
+  const matchingMarkers = (drift.markers || []).filter((mk) => mk.kind === wantKind);
+  const chartMarkers = matchingMarkers.filter((mk) => shownKeys.has(driftMarkerOwner(mk, group)));
   document.getElementById('drift-note').textContent = ranked.length > shown.length
     ? `${ranked.length - shown.length} smaller groups are hidden. Filter the page to see them.` : '';
   const markersList = document.getElementById('drift-markers');
-  markersList.replaceChildren(...drift.markers.map((mk) => {
-    const impact = fmtMarkerImpact(markerImpact(drift.points, mk, state.driftStat));
-    return el('li', {}, `${fmtDay(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}`,
+  markersList.replaceChildren(...matchingMarkers.map((mk) => {
+    const scope = group === 'client' ? drift.points.filter((p) => p.key === driftMarkerOwner(mk, group)) : drift.points;
+    const impact = fmtMarkerImpact(markerImpact(scope, mk, state.driftStat));
+    return el('li', {}, `${fmtBucket(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}`,
       impact ? el('span', { class: 'marker-impact', text: impact }) : null);
   }));
-  document.getElementById('drift-changes').hidden = !drift.markers.length;
-  document.getElementById('drift-changes-summary').textContent = `Changes (${drift.markers.length})`;
+  document.getElementById('drift-changes').hidden = !matchingMarkers.length;
+  document.getElementById('drift-changes-summary').textContent = `Changes (${matchingMarkers.length})`;
   if (!drift.points.length) {
     container.replaceChildren(el('div', { class: 'empty', text: 'No generating requests in this range' }));
     document.getElementById('drift-legend').replaceChildren();
@@ -1079,20 +1099,21 @@ function renderDrift() {
   const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.filter(driftPlotted).map(driftValue)));
   // End labels need room to the right, so narrow charts keep the legend only.
   const labelRoom = container.clientWidth >= 560 ? Math.min(160, Math.round(container.clientWidth * 0.2)) : 0;
-  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate || isCost ? 0 : 1, 8 + labelRoom);
-  g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by day');
+  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtX, isRate || isCost ? 0 : 1, 8 + labelRoom);
+  g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by ' + bucket);
   const index = new Map(xs.map((t, i) => [t, i]));
-  // Change markers: one hairline per day, values listed above it.
-  const markerDays = new Map();
-  for (const mk of drift.markers) {
+  // Change markers: only for the active dimension and plotted series, so model
+  // charts never mix in harness versions or unplotted one-off models.
+  const markerBuckets = new Map();
+  for (const mk of chartMarkers) {
     if (!index.has(mk.t)) continue;
-    if (!markerDays.has(mk.t)) markerDays.set(mk.t, []);
-    markerDays.get(mk.t).push(mk.value);
+    if (!markerBuckets.has(mk.t)) markerBuckets.set(mk.t, []);
+    markerBuckets.get(mk.t).push(mk.value);
   }
-  // Every day keeps its hairline. A label that would cover the previous one is
-  // dropped, since the list under the chart names every change.
+  // Every marked bucket keeps its hairline. A label that would cover the previous
+  // one is dropped, since the list under the chart names every change.
   const fits = labelSpacer();
-  for (const [t, values] of [...markerDays].sort((a, b) => a[0] - b[0])) {
+  for (const [t, values] of [...markerBuckets].sort((a, b) => a[0] - b[0])) {
     const x = g.x(index.get(t));
     g.svg.append(svgEl('line', { x1: x, x2: x, y1: g.m.top - 4, y2: g.m.top + g.plotH, stroke: 'var(--muted)', 'stroke-width': 1 }));
     const text = values.length > 1 ? values[0] + ' +' + (values.length - 1) : values[0];
@@ -1105,21 +1126,21 @@ function renderDrift() {
   }
   // One group per line, in legend order, so a legend entry can highlight it.
   const lines = shown.map((s) => {
-    const color = colorFor('drift:' + state.driftGroup, s.key);
+    const color = colorFor('drift:' + group, s.key);
     const pts = s.pts.filter((p) => index.has(p.t) && driftPlotted(p)).sort((a, b) => a.t - b.t);
-    const group = svgEl('g', { class: 'series' });
+    const seriesGroup = svgEl('g', { class: 'series' });
     if (pts.length > 1) {
       const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(driftValue(p))).join(' ');
-      group.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
+      seriesGroup.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
     }
     for (const p of pts) {
-      group.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(driftValue(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
+      seriesGroup.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(driftValue(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
     }
-    g.svg.append(group);
-    return { key: s.key, group, last: pts[pts.length - 1] };
+    g.svg.append(seriesGroup);
+    return { key: s.key, group: seriesGroup, last: pts[pts.length - 1] };
   });
   if (labelRoom) {
-    // Only lines that reach the latest plotted day are named, at their end.
+    // Only lines that reach the latest plotted bucket are named, at their end.
     const lastT = Math.max(...lines.filter((l) => l.last).map((l) => l.last.t));
     const ends = lines.filter((l) => l.last && l.last.t === lastT).map((l) => ({ key: l.key, y: g.y(driftValue(l.last)) }));
     const named = new Set(endLabels(ends, END_LABELS, 14));
@@ -1136,13 +1157,13 @@ function renderDrift() {
     const rows = [];
     for (const s of shown) {
       const p = s.pts.find((q) => q.t === t);
-      if (p && driftPlotted(p)) rows.push({ color: colorFor('drift:' + state.driftGroup, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
+      if (p && driftPlotted(p)) rows.push({ color: colorFor('drift:' + group, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
     }
-    const marks = drift.markers.filter((mk) => mk.t === t).map((mk) => ({ value: 'new', label: mk.value }));
-    const title = fmtDay(t) + ', ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
+    const marks = chartMarkers.filter((mk) => mk.t === t).map((mk) => ({ value: 'new', label: mk.value }));
+    const title = fmtBucket(t) + ', ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
     return { title, label: title, rows: rows.concat(marks) };
   });
-  legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + state.driftGroup, s.key), label: s.key })), 'line');
+  legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + group, s.key), label: s.key })), 'line');
   [...document.getElementById('drift-legend').children].forEach((entry, i) => {
     entry.tabIndex = 0;
     const focus = () => { g.svg.classList.add('focusing'); lines[i].group.classList.add('focus'); };
@@ -1153,10 +1174,10 @@ function renderDrift() {
     entry.addEventListener('blur', blur);
   });
   document.getElementById('drift-table').replaceChildren(table(
-    ['Day', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Output total', '$/req', 'Cache hit', 'Latency', 'TTFT', 'tok/s'],
+    [size === DAY ? 'Day' : 'Time', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Output total', '$/req', 'Cache hit', 'Latency', 'TTFT', 'tok/s'],
     drift.points.map((p) => {
       const st = p[state.driftStat];
-      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write),
+      return [fmtBucket(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write),
         fmtInt(st.output), fmtInt(st.reasoning), fmtInt(st.output_total || (st.output + st.reasoning)), st.cost_usd > 0 ? fmtUSD(st.cost_usd) : '-',
         fmtPct(p.cache_hit_rate), fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-',
         st.tokens_per_sec > 0 ? fmtInt(st.tokens_per_sec) : '-'];
@@ -1867,56 +1888,6 @@ function trendChart(container, recorded, projected, now, label, single = false) 
   svg.append(hit);
 }
 
-/* ---------- right now ---------- */
-
-// realtimeParams keeps the page filters and the viewer's timezone, and lets
-// the route pick the window before now and the day so far.
-function realtimeParams() {
-  const { from, to, ...filters } = filterParams();
-  return { ...filters, window: state.rtWindow };
-}
-
-function renderRealtime() {
-  if (!data.realtime) return;
-  const fmtRate = (v) => (v < 10 ? v.toFixed(v < 1 ? 2 : 1) : fmtCompact(Math.round(v)));
-  const REALTIME_TILES = {
-    requests: ['Requests per minute', fmtRate],
-    tokens: ['Tokens per minute', fmtRate],
-    cost: ['Cost per hour', fmtUSD],
-    cache: ['Cache hit rate', fmtPct],
-    ttft: ['Median time to first token', fmtSeconds],
-    latency: ['Median latency', fmtSeconds],
-    failures: ['Failures per minute', fmtRate],
-  };
-  const tiles = realtimeFigures(data.realtime).map((f) => {
-    const [label, fmt] = REALTIME_TILES[f.id];
-    const today = f.today === null ? 'none today' : 'today ' + fmt(f.today);
-    const change = f.change === null ? null : f.unit === 'points' ? pointChange(f.now, f.today) : relativeChange(f.now, f.today);
-    return tile(label, f.now === null ? '-' : fmt(f.now), change ? `${change}, ${today}` : today);
-  });
-  document.getElementById('rt-tiles').replaceChildren(...tiles);
-  const { now } = data.realtime;
-  document.getElementById('rt-note').textContent = now.requests || now.failed ? '' : `No calls in the last ${data.realtime.window_minutes} min.`;
-}
-
-let realtimeSeq = 0;
-
-async function refreshRealtime() {
-  const seq = ++realtimeSeq;
-  sectionState('realtime', '', true);
-  try {
-    const v = await api('realtime', realtimeParams());
-    if (seq !== realtimeSeq) return;
-    data.realtime = v;
-    sectionState('realtime');
-    renderRealtime();
-  } catch (err) {
-    if (seq !== realtimeSeq) return;
-    sectionState('realtime', 'Could not load. Refresh to retry.');
-    showLoadError(err);
-  }
-}
-
 /* ---------- latency ---------- */
 
 function renderLatency() {
@@ -2175,9 +2146,14 @@ async function runUsageJob(job, current) {
   }
 }
 
+function periodBucket(period) {
+  return period === '15m' || period === '1h' ? 'minute' : period === '6h' || period === '24h' ? 'hour' : 'day';
+}
+
 async function loadUsage(current, reuse) {
   const p = filterParams();
   const period = state.period;
+  const bucket = periodBucket(period);
   const prior = reuse && data.period === period && data.params?.tz === p.tz ? data : null;
   // Filter navigation compares the same snapshot. Refresh advances the
   // interval and renews all data, including metadata and closed details.
@@ -2193,7 +2169,7 @@ async function loadUsage(current, reuse) {
   try {
     const primary = await Promise.allSettled([
       api('summary', p),
-      api('timeseries', { ...p, bucket: period <= 1 ? 'hour' : 'day', group: 'provider' }),
+      api('timeseries', { ...p, bucket, group: 'provider' }),
     ]);
     if (!current()) return;
     const failed = primary.find((r) => r.status === 'rejected');
@@ -2201,7 +2177,7 @@ async function loadUsage(current, reuse) {
     data = { summary: primary[0].value, daily: primary[1].value, previous: null, params: p, period,
       options: prior?.options, credentials: prior?.credentials,
       burn: sameLimitScope ? prior.burn : undefined, leftover: sameLimitScope ? prior.leftover : undefined };
-    for (const section of ['realtime', 'drift', 'burn', ...DETAIL_SECTIONS, 'breakdown']) {
+    for (const section of ['drift', 'burn', ...DETAIL_SECTIONS, 'breakdown']) {
       sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
     }
     document.getElementById('key-form').hidden = true;
@@ -2232,8 +2208,7 @@ async function loadUsage(current, reuse) {
       renderTotals();
     } });
     jobs.push(
-      { section: 'realtime', load: () => api('realtime', realtimeParams()), apply: (v) => { data.realtime = v; renderRealtime(); } },
-      { section: 'drift', load: () => api('drift', { ...p, group }), apply: (v) => { data.drift = v; renderDrift(); } },
+      { section: 'drift', load: () => api('drift', { ...p, group, bucket }), apply: (v) => { data.drift = v; renderDrift(); } },
       by === 'errors'
         ? { section: 'breakdown', load: () => api('errors', p), apply: (v) => { data.errors = v; renderBreakdown(); } }
         : { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
@@ -2282,7 +2257,7 @@ async function refreshGroup(section) {
   const card = document.getElementById(section);
   const isErrors = section === 'breakdown' && state.by === 'errors';
   const route = isErrors ? 'errors' : section;
-  const grouping = section === 'drift' ? { group: state.driftGroup } : isErrors ? {} : { by: state.by };
+  const grouping = section === 'drift' ? { group: state.driftGroup, bucket: periodBucket(state.period) } : isErrors ? {} : { by: state.by };
   sectionState(section, 'Loading…', true);
   document.getElementById('load-error').textContent = '';
   try {
@@ -2376,7 +2351,7 @@ document.getElementById('auto-refresh').addEventListener('change', (e) => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && autoRefresh.due) refresh(true);
 });
-document.getElementById('f-period').addEventListener('change', (e) => { state.period = Number(e.target.value); refreshFilters(); });
+document.getElementById('f-period').addEventListener('change', (e) => { state.period = e.target.value; refreshFilters(); });
 for (const name of ['provider', 'model', 'client', 'account']) {
   document.getElementById('f-' + name).addEventListener('change', (e) => { state[name] = e.target.value; refreshFilters(); });
 }
@@ -2397,10 +2372,6 @@ document.getElementById('drift-metric').addEventListener('change', (e) => { stat
 for (const section of DETAIL_SECTIONS) {
   document.getElementById(section).addEventListener('toggle', () => refreshDetail(section));
 }
-document.querySelectorAll('[data-window]').forEach((b) => b.addEventListener('click', () => {
-  state.rtWindow = Number(b.dataset.window); pressed('#realtime', 'data-window', b.dataset.window);
-  refreshRealtime();
-}));
 document.querySelectorAll('[data-req-sort]').forEach((b) => b.addEventListener('click', () => {
   state.reqSort = b.dataset.reqSort; state.reqOffset = 0; pressed('#requests', 'data-req-sort', state.reqSort);
   reloadRequests();

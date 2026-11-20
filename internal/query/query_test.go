@@ -302,9 +302,21 @@ func TestTimeseriesRejectsUnknownBucketAndGroup(t *testing.T) {
 	}
 }
 
+func TestTimeseriesByMinute(t *testing.T) {
+	s := seedDB(t)
+	from := day1.Add(9 * time.Hour)
+	ts, err := Timeseries(s.DB(), Filter{From: from, To: from.Add(15 * time.Minute)}, testPrices(t), "minute", "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts.Bucket != "minute" || len(ts.Points) != 1 || ts.Points[0].T != from.UnixMilli() || ts.Points[0].Requests != 1 {
+		t.Errorf("minute timeseries = %+v", ts)
+	}
+}
+
 func TestDriftMediansPerInboundRequest(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "client_version", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,21 +357,14 @@ func TestDriftMediansPerInboundRequest(t *testing.T) {
 
 func TestDriftMarksFirstSeenValuesInRange(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), rangeFilter(), nil, "response_model")
+	// Model view gets only model markers, never client versions.
+	d, err := Drift(s.DB(), rangeFilter(), nil, "response_model", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Marker{
-		{T: day2.UnixMilli(), Kind: "client_version", Value: "codex/0.130.0"},
-		{T: day3.UnixMilli(), Kind: "response_model", Value: "gpt-5.1"},
-	}
-	if len(d.Markers) != len(want) {
-		t.Fatalf("markers = %+v, want %+v", d.Markers, want)
-	}
-	for i := range want {
-		if d.Markers[i] != want[i] {
-			t.Errorf("marker %d = %+v, want %+v", i, d.Markers[i], want[i])
-		}
+	wantModel := []Marker{{T: day3.UnixMilli(), Kind: "response_model", Value: "gpt-5.1"}}
+	if len(d.Markers) != len(wantModel) || d.Markers[0] != wantModel[0] {
+		t.Fatalf("response_model markers = %+v, want %+v", d.Markers, wantModel)
 	}
 	keys := map[string]bool{}
 	for _, pt := range d.Points {
@@ -368,13 +373,39 @@ func TestDriftMarksFirstSeenValuesInRange(t *testing.T) {
 	if !keys["gpt-5"] || !keys["gpt-5.1"] || len(keys) != 2 {
 		t.Errorf("response_model keys = %v", keys)
 	}
+	// Client (harness) view keeps one continuous series per client name and
+	// marks new versions of clients, never models.
+	dc, err := Drift(s.DB(), rangeFilter(), nil, "client", "day")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClient := []Marker{{T: day2.UnixMilli(), Kind: "client_version", Value: "codex/0.130.0"}}
+	if len(dc.Markers) != len(wantClient) || dc.Markers[0] != wantClient[0] {
+		t.Fatalf("client markers = %+v, want %+v", dc.Markers, wantClient)
+	}
+	if len(dc.Points) != 3 {
+		t.Fatalf("client points = %+v, want 3 daily points for codex", dc.Points)
+	}
+	for _, pt := range dc.Points {
+		if pt.Key != "codex" {
+			t.Errorf("client point key = %q, want codex", pt.Key)
+		}
+	}
+	// Sub-day buckets align both points and markers to the requested bucket.
+	dh, err := Drift(s.DB(), rangeFilter(), nil, "client", "hour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dh.Bucket != "hour" || len(dh.Markers) != 1 || dh.Markers[0].T != day2.Add(9*time.Hour).UnixMilli() {
+		t.Errorf("hourly drift markers = %+v, want 09:00 on day 2", dh.Markers)
+	}
 }
 
 // Everything is new on the first day the plugin recorded, so that day says
 // nothing about a change and gets no marker.
 func TestDriftSkipsMarkersOnTheFirstDayOfData(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), Filter{From: day0, To: day4}, nil, "response_model")
+	d, err := Drift(s.DB(), Filter{From: day0, To: day4}, nil, "response_model", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,17 +414,21 @@ func TestDriftSkipsMarkersOnTheFirstDayOfData(t *testing.T) {
 			t.Errorf("marker on the first day of data: %+v", m)
 		}
 	}
-	if len(d.Markers) != 2 {
-		t.Errorf("markers = %+v, want the day 2 and day 3 changes", d.Markers)
+	if len(d.Markers) != 1 || d.Markers[0].Value != "gpt-5.1" {
+		t.Errorf("markers = %+v, want only day 3 model change", d.Markers)
 	}
 }
 
 func TestDriftRejectsUnknownGroup(t *testing.T) {
 	s := seedDB(t)
-	_, err := Drift(s.DB(), rangeFilter(), nil, "nope")
+	_, err := Drift(s.DB(), rangeFilter(), nil, "nope", "day")
 	var pe *ParamError
 	if !errors.As(err, &pe) || pe.Param != "group" {
 		t.Errorf("err = %v", err)
+	}
+	_, err = Drift(s.DB(), rangeFilter(), nil, "response_model", "week")
+	if !errors.As(err, &pe) || pe.Param != "bucket" {
+		t.Errorf("bucket err = %v", err)
 	}
 }
 
@@ -461,7 +496,7 @@ func TestQueriesFailOnClosedDB(t *testing.T) {
 		t.Error("summary on closed db succeeded")
 	}
 	var pe *ParamError
-	if _, err := Drift(s.DB(), rangeFilter(), nil, "client_version"); err == nil || errors.As(err, &pe) {
+	if _, err := Drift(s.DB(), rangeFilter(), nil, "client_version", "day"); err == nil || errors.As(err, &pe) {
 		t.Errorf("drift err = %v, want a storage error", err)
 	}
 }
@@ -480,7 +515,7 @@ func TestDriftSkipsFailedRequests(t *testing.T) {
 	if err := s.InsertBatch(failed); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +569,7 @@ func TestDriftCountsEachWebSocketTurn(t *testing.T) {
 	if err := s.InsertBatch(turns); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +628,7 @@ func TestDriftMeasuresLatencyAndTTFTPerRequest(t *testing.T) {
 	if err := s.InsertBatch(rows); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +687,7 @@ func TestEmptyRangeAnswersEmptyLists(t *testing.T) {
 	results := map[string]func() (any, error){
 		"summary":    func() (any, error) { return Summary(s.DB(), f, prices) },
 		"timeseries": func() (any, error) { return Timeseries(s.DB(), f, prices, "day", "provider") },
-		"drift":      func() (any, error) { return Drift(s.DB(), f, prices, "response_model") },
+		"drift":      func() (any, error) { return Drift(s.DB(), f, prices, "response_model", "day") },
 		"breakdown":  func() (any, error) { return Breakdown(s.DB(), f, prices, "model") },
 		"models":     func() (any, error) { return Models(s.DB(), f, prices) },
 		"errors":     func() (any, error) { return Errors(s.DB(), f) },
@@ -769,7 +804,7 @@ func TestDriftTokensPerSec(t *testing.T) {
 	if err := s.InsertBatch(rows); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "response_model")
+	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "response_model", "day")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +844,7 @@ func TestCostChargesLongContextRequestsTheirRate(t *testing.T) {
 	if !near(sum.Totals.CostUSD, short+long) {
 		t.Errorf("summary cost = %v, want %v", sum.Totals.CostUSD, short+long)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), table, "response_model")
+	d, err := Drift(s.DB(), rangeFilter(), table, "response_model", "day")
 	if err != nil {
 		t.Fatal(err)
 	}

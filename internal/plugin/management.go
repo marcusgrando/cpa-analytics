@@ -56,11 +56,11 @@ func (p *Plugin) routes() map[string]route {
 		"summary": {"Totals, cost by provider, token type and service tier", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.Summary(db, f, t)
 		}},
-		"timeseries": {"Tokens and cost per day or hour", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+		"timeseries": {"Tokens and cost per day, hour or minute", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Timeseries(db, f, t, paramOr(q, "bucket", "day"), paramOr(q, "group", "provider"))
 		}},
 		"drift": {"Per-request token drift with change markers", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
-			return query.Drift(db, f, t, paramOr(q, "group", "response_model"))
+			return query.Drift(db, f, t, paramOr(q, "group", "response_model"), paramOr(q, "bucket", "day"))
 		}},
 		"breakdown": {"Usage by provider, model, client, user agent, day, API key hash, reasoning effort or account", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Breakdown(db, f, t, paramOr(q, "by", "model"))
@@ -93,13 +93,6 @@ func (p *Plugin) routes() map[string]route {
 				return nil, err
 			}
 			return query.Requests(db, f, t, rq)
-		}},
-		"realtime": {"The last 15, 30 or 60 minutes against the viewer's day so far", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
-			window, err := query.ParseRealtimeWindow(q)
-			if err != nil {
-				return nil, err
-			}
-			return query.Realtime(db, f, t, window, time.Now())
 		}},
 		"latency": {"Time to first token and total latency of a sample of successful calls", func(db *sql.DB, f query.Filter, _ *pricing.Table, _ url.Values) (any, error) {
 			return query.Latency(db, f, query.MaxLatencyPoints)

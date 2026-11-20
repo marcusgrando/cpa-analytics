@@ -110,8 +110,8 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | Route | Extra parameters |
 |---|---|
 | `/v0/management/cpa-analytics/summary` | |
-| `/v0/management/cpa-analytics/timeseries` | `bucket=day\|hour`, `group=provider\|model\|client` |
-| `/v0/management/cpa-analytics/drift` | `group=response_model\|client_version\|reasoning_effort` |
+| `/v0/management/cpa-analytics/timeseries` | `bucket=day\|hour\|minute`, `group=provider\|model\|client` |
+| `/v0/management/cpa-analytics/drift` | `group=response_model\|client\|client_version\|reasoning_effort`, `bucket=day\|hour\|minute` |
 | `/v0/management/cpa-analytics/breakdown` | `by=model\|client\|day\|api_key\|reasoning_effort\|account` |
 | `/v0/management/cpa-analytics/pricing` | |
 | `/v0/management/cpa-analytics/limit-burn` | only `from`, `to`, `tz` and `provider`. A weekly limit covers the whole account, so `model`, `client` and `api_key` are rejected. |
@@ -119,7 +119,6 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | `/v0/management/cpa-analytics/limit-history` | same as `limit-burn` |
 | `/v0/management/cpa-analytics/affinity` | |
 | `/v0/management/cpa-analytics/requests` | `sort=recent\|cost\|latency\|tokens`, `outcome=all\|failed\|ok`, `offset`, `limit` (1 to 200, default 50) |
-| `/v0/management/cpa-analytics/realtime` | `window=15\|30\|60` minutes. Compares that window with the day so far in `tz`, and ignores `from` and `to`. |
 | `/v0/management/cpa-analytics/latency` | |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 

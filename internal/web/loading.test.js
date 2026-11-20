@@ -24,12 +24,12 @@ function dashboard() {
   const calls = [], credentialCalls = [], renders = [], painted = [], classes = new Set();
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
-    timeseries: {}, drift: { points: [] }, realtime: {}, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
+    timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
     breakdown: { rows: [] }, errors: { total: 0, rows: [] }, pricing: {},
     options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'], accounts: ['acc1'] },
   };
   const ctx = vm.createContext({
-    state: { period: 7, provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model' },
+    state: { period: '7d', provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model' },
     data: {}, autoRefresh: { timer: 0 }, AuthError: class AuthError extends Error {},
     document: {
       body: { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) } },
@@ -46,8 +46,7 @@ function dashboard() {
     renderDaily: () => renders.push('daily'), renderModelDetail() {},
     renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {}, renderCostWarning() {},
     renderDrift: () => renders.push('drift'), renderBreakdown: () => renders.push('breakdown'),
-    renderRealtime: () => renders.push('realtime'), renderLatency() {}, renderRequests() {},
-    realtimeParams: () => ({ provider: ctx.state.provider, window: 15 }),
+    renderLatency() {}, renderRequests() {},
     forgetKey: () => { ctx.data = {}; renders.push('forget-key'); }, showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
@@ -60,7 +59,7 @@ test('opening usage does not query collapsed analyses or an incomplete previous 
   const { ctx, calls, node } = dashboard();
   ctx.recordedThrough = () => false;
   await ctx.refresh();
-  expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'realtime', 'drift', 'breakdown', 'limit-burn']);
+  expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'drift', 'breakdown', 'limit-burn']);
   for (const section of ['latency', 'requests', 'affinity', 'leftover', 'quality']) {
     expect(node(section).open).toBe(false);
     expect(node(section).attrs['aria-busy']).toBe('false');
@@ -97,8 +96,7 @@ test('filter navigation reuses options, credentials and account limits within th
   await ctx.refreshFilters();
   ctx.state.apiKey = 'abcdef123456';
   await ctx.refreshFilters();
-  // "Right now" follows the filters, so it reloads with them.
-  expect(calls.every((c) => ['summary', 'timeseries', 'realtime', 'drift', 'breakdown'].includes(c.route))).toBe(true);
+  expect(calls.every((c) => ['summary', 'timeseries', 'drift', 'breakdown'].includes(c.route))).toBe(true);
   expect(credentialCalls).toEqual([]);
   expect(ctx.data.params.from).toBe(100);
   expect(ctx.data.params.to).toBe(200);
@@ -115,7 +113,7 @@ test('refresh and period changes renew metadata and limit results', async () => 
   for (const changePeriod of [false, true]) {
     calls.length = credentialCalls.length = 0;
     ctx.rangeParams = () => ({ from: 300, to: 400, tz: -300 });
-    if (changePeriod) { ctx.state.period = 30; await ctx.refreshFilters(); }
+    if (changePeriod) { ctx.state.period = '30d'; await ctx.refreshFilters(); }
     else await ctx.refresh();
     expect(calls.map((c) => c.route)).toEqual(expect.arrayContaining(['health', 'options', 'limit-burn']));
     expect(credentialCalls.length).toBe(1);
@@ -349,7 +347,7 @@ test('changing a grouping only fetches that section, using the displayed range a
   ctx.state.by = 'account';
   await ctx.refreshGroup('breakdown');
   expect(calls).toEqual([
-    { route: 'drift', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', account: '', api_key: '', group: 'client_version' } },
+    { route: 'drift', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', account: '', api_key: '', group: 'client_version', bucket: 'day' } },
     { route: 'breakdown', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', account: '', api_key: '', by: 'account' } },
   ]);
   expect(renders).toEqual(['drift', 'breakdown']);
@@ -581,15 +579,122 @@ test('authentication failure in a detail stops queued work and requests a key', 
   expect(calls.some((c) => c.route === 'limit-burn')).toBe(false);
 });
 
+test('short periods pick minute and hour buckets for timeseries and drift', async () => {
+  const { ctx, calls } = dashboard();
+  for (const [period, bucket] of [['15m', 'minute'], ['1h', 'minute'], ['6h', 'hour'], ['24h', 'hour'], ['7d', 'day']]) {
+    calls.length = 0;
+    ctx.state.period = period;
+    await ctx.refresh();
+    expect(calls.find((c) => c.route === 'timeseries')?.params.bucket).toBe(bucket);
+    expect(calls.find((c) => c.route === 'drift')?.params.bucket).toBe(bucket);
+  }
+});
+
 test('chart controls and resize are safe before their detail data arrives', () => {
   const ctx = vm.createContext({ data: {} });
   const drift = page.slice(page.indexOf('function renderDrift()'), page.indexOf('function burnAccountName('));
   const burn = page.slice(page.indexOf('function renderBurn()'), page.indexOf('function renderLeftover()'));
-  const views = page.slice(page.indexOf('/* ---------- right now ---------- */'), page.indexOf('/* ---------- loading ---------- */'));
+  const views = page.slice(page.indexOf('/* ---------- latency ---------- */'), page.indexOf('/* ---------- loading ---------- */'));
   vm.runInContext(drift + burn + views, ctx);
   expect(() => ctx.renderDrift()).not.toThrow();
   expect(() => ctx.renderBurn()).not.toThrow();
-  expect(() => ctx.renderRealtime()).not.toThrow();
   expect(() => ctx.renderLatency()).not.toThrow();
   expect(() => ctx.renderRequests()).not.toThrow();
+});
+
+test('drift chart keeps model and harness markers separated and omits unplotted marker clutter', () => {
+  const nodes = new Map();
+  const makeNode = (id, tag = 'div', attrs = {}) => {
+    const n = {
+      id, tag, attrs: { ...attrs }, hidden: false, textContent: '', clientWidth: 800,
+      children: [], classList: { add() {}, remove() {} },
+      append(...kids) { this.children.push(...kids.filter(Boolean)); },
+      replaceChildren(...kids) { this.children = kids.filter(Boolean); },
+      setAttribute(k, v) { this.attrs[k] = v; },
+      getAttribute(k) { return this.attrs[k]; },
+      getComputedTextLength() { return (this.textContent || String(this.attrs.text || '')).length * 6; },
+      addEventListener() {},
+      remove() { this.removed = true; },
+    };
+    if (attrs.text !== undefined) n.textContent = String(attrs.text);
+    return n;
+  };
+  const getNode = (id) => {
+    if (!nodes.has(id)) nodes.set(id, makeNode(id));
+    return nodes.get(id);
+  };
+  const day1 = Date.UTC(2026, 10, 18), day2 = Date.UTC(2026, 10, 19);
+  let capturedTooltipRows = [];
+  const ctx = vm.createContext({
+    MINUTE: 60000, HOUR: 3600000, DAY: 86400000,
+    BUCKET_MS: { minute: 60000, hour: 3600000, day: 86400000 },
+    SERIES_SLOTS: 2, END_LABELS: 4,
+    state: { driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median' },
+    data: { params: { from: day1, to: day2, tz: 0 }, drift: null },
+    document: {
+      getElementById: getNode,
+      querySelector: () => ({ textContent: 'Input incl. cache' }),
+    },
+    el: (tag, attrs = {}, ...kids) => { const n = makeNode('', tag, attrs); n.append(...kids); return n; },
+    svgEl: (tag, attrs = {}) => makeNode('', tag, attrs),
+    buckets: () => [day1, day2],
+    frame: (container) => {
+      const svg = makeNode('svg', 'svg');
+      container.replaceChildren(svg);
+      return { svg, x: (i) => 60 + i * 200, y: () => 100, band: 100, m: { top: 20, right: 20 }, width: 800, plotH: 200 };
+    },
+    labelSpacer: () => () => true,
+    endLabels: (ends) => ends.map((e) => e.key),
+    hitColumns: (_g, xs, onShow) => { capturedTooltipRows = xs.map((_, i) => onShow(i).rows); },
+    legend: () => {},
+    table: () => makeNode('', 'table'),
+    colorFor: () => 'var(--s1)',
+    markerImpact: () => null,
+    fmtDay: (t) => new Date(t).toISOString().slice(0, 10),
+    fmtHour: () => '00:00',
+    fmtCompact: String, fmtInt: String, fmtPct: String, fmtUSD: String, fmtSeconds: String,
+  });
+  const driftCode = page.slice(page.indexOf('const MARKER_KINDS'), page.indexOf('function burnAccountName('));
+  vm.runInContext(driftCode, ctx);
+
+  const pt = (t, key, reqs) => ({
+    t, key, requests: reqs, cache_hit_rate: 0.9,
+    median: { input: 1000, uncached_input: 100, cache_read: 900, cache_write: 0, output: 100, reasoning: 0, output_total: 100, cost_usd: 0.1, latency_ms: 500, ttft_ms: 100, tokens_per_sec: 50 },
+    p90: { input: 2000, uncached_input: 200, cache_read: 1800, cache_write: 0, output: 200, reasoning: 0, output_total: 200, cost_usd: 0.2, latency_ms: 900, ttft_ms: 200, tokens_per_sec: 40 },
+  });
+  // Model view: receives a plotted model marker, an unplotted model marker, and a stray client marker.
+  ctx.data.drift = {
+    group: 'response_model', bucket: 'day',
+    points: [pt(day1, 'model-a', 100), pt(day2, 'model-a', 100), pt(day2, 'model-b', 50), pt(day2, 'model-tiny', 1)],
+    markers: [
+      { t: day2, kind: 'client_version', value: 'claude-code/2.1.329' },
+      { t: day2, kind: 'response_model', value: 'model-b' },
+      { t: day2, kind: 'response_model', value: 'model-tiny' },
+    ],
+  };
+  ctx.renderDrift();
+  const modelMarkerLabels = getNode('drift-chart').children[0].children
+    .filter((c) => c.attrs.class === 'marker-label' && !c.removed)
+    .map((c) => c.textContent);
+  expect(modelMarkerLabels).toEqual(['model-b']);
+  expect(capturedTooltipRows[1].filter((r) => r.value === 'new').map((r) => r.label)).toEqual(['model-b']);
+  expect(getNode('drift-changes-summary').textContent).toBe('Changes (2)');
+
+  // Client (harness) view: shows continuous harness lines and marks upgrades of plotted harnesses only.
+  ctx.state.driftGroup = 'client';
+  ctx.data.drift = {
+    group: 'client', bucket: 'day',
+    points: [pt(day1, 'claude-code', 100), pt(day2, 'claude-code', 100), pt(day1, 'codex', 50), pt(day2, 'codex', 50), pt(day2, 'tiny-sdk', 1)],
+    markers: [
+      { t: day2, kind: 'client_version', value: 'claude-code/2.1.329' },
+      { t: day2, kind: 'client_version', value: 'tiny-sdk/1.0.0' },
+      { t: day2, kind: 'response_model', value: 'model-b' },
+    ],
+  };
+  ctx.renderDrift();
+  const clientMarkerLabels = getNode('drift-chart').children[0].children
+    .filter((c) => c.attrs.class === 'marker-label' && !c.removed)
+    .map((c) => c.textContent);
+  expect(clientMarkerLabels).toEqual(['claude-code/2.1.329']);
+  expect(capturedTooltipRows[1].filter((r) => r.value === 'new').map((r) => r.label)).toEqual(['claude-code/2.1.329']);
 });

@@ -125,7 +125,7 @@ func TestIndexFollowsManagementCenterTheme(t *testing.T) {
 // step drew the labels 0, 1, 1, 2, 2, so count axes step by at least one.
 func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate || isCost ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
+	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtX, isRate || isCost ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -162,7 +162,7 @@ func TestIndexShowsCostPerRequestAndTimings(t *testing.T) {
 // The drift card measures timings too, so its title names the chosen measure.
 func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`<h2 id="drift-title">Per request</h2>`, `textContent = isRate ? 'Daily cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request'`, `const fmtSeconds = (ms) => (ms === 0 ? '0 s'`} {
+	for _, want := range []string{`<h2 id="drift-title">Per request</h2>`, `textContent = isRate ? (DRIFT_CADENCE[bucket] || 'Daily') + ' cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request'`, `const fmtSeconds = (ms) => (ms === 0 ? '0 s'`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -171,7 +171,7 @@ func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 
 func TestIndexShowsProcessedTokensPerActiveDay(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`function tile(label, value, note, change, trend)`, `' per active ' + (data.daily.bucket === 'hour' ? 'hour' : 'day')`} {
+	for _, want := range []string{`function tile(label, value, note, change, trend)`, `' per active ' + (BUCKET_MS[data.daily.bucket] ? data.daily.bucket : 'day')`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -244,7 +244,6 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* tooltip.js */":   "function besideColumn(column, box, viewport, pointerY)",
 		"/* sparkline.js */": "function sparkline(values, height, pad)",
 		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
-		"/* realtime.js */":  "function realtimeFigures({ now, today })",
 		"/* scatter.js */":   "function nearestPoint(points, x, y, radius)",
 	} {
 		if strings.Contains(page, placeholder) {
@@ -445,7 +444,7 @@ func TestIndexFoldsDriftChangesIntoDetails(t *testing.T) {
 	if !strings.Contains(page, want) {
 		t.Errorf("drift change list is not folded into a details element")
 	}
-	if !strings.Contains(page, "`Changes (${drift.markers.length})`") {
+	if !strings.Contains(page, "`Changes (${matchingMarkers.length})`") {
 		t.Errorf("drift changes summary does not count the changes")
 	}
 }
@@ -506,19 +505,25 @@ func TestIndexTiesSparklineTooltipToItsTile(t *testing.T) {
 	}
 }
 
-// "Right now" compares the last minutes with the day so far. It keeps the
-// page filters but not the period, and loads with the rest of the page.
-func TestIndexShowsRightNow(t *testing.T) {
+// Short periods live in the Period filter instead of a separate "Right now"
+// card, and the drift chart keeps model and harness views cleanly separated.
+func TestIndexOffersShortPeriodsAndCleanDriftGroups(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
-		`<section id="realtime" class="card" aria-labelledby="realtime-title">`,
-		`<button type="button" data-window="15" aria-pressed="true">15 min</button>`,
-		"api('realtime', realtimeParams())",
-		"realtimeFigures(data.realtime)",
+		`<option value="15m">Last 15 minutes</option>`,
+		`<option value="1h">Last 1 hour</option>`,
+		`<option value="6h">Last 6 hours</option>`,
+		`<option value="24h">Last 24 hours</option>`,
+		`<option value="7d" selected>Last 7 days</option>`,
+		`<option value="client">Client (harness)</option>`,
+		`const wantKind = group === 'client' ? 'client_version' : group;`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)
 		}
+	}
+	if strings.Contains(page, `id="realtime"`) {
+		t.Error("page still renders the removed Right now section")
 	}
 }
 

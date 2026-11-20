@@ -126,7 +126,7 @@ func TestDriftAndBreakdownByReasoningEffort(t *testing.T) {
 		row("h2", at(day2, 2), "high", 1100),
 		row("n1", at(day2, 3), "", 50),
 	)
-	d, err := Drift(s.DB(), rangeFilter(), nil, "reasoning_effort")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "reasoning_effort", "day")
 	if err != nil {
 		t.Fatal(err)
 	}

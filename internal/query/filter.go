@@ -20,9 +20,10 @@ const (
 // Shared SQL expressions. The reported model wins over the requested one,
 // matching how pricing picks the model.
 const (
-	modelExpr  = "CASE WHEN response_model <> '' THEN response_model ELSE model END"
-	tierExpr   = "CASE WHEN response_service_tier <> '' THEN response_service_tier ELSE effective_service_tier END"
-	clientExpr = "CASE WHEN client_name = '' THEN 'unknown' WHEN client_version = '' THEN client_name ELSE client_name || '/' || client_version END"
+	modelExpr      = "CASE WHEN response_model <> '' THEN response_model ELSE model END"
+	tierExpr       = "CASE WHEN response_service_tier <> '' THEN response_service_tier ELSE effective_service_tier END"
+	clientNameExpr = "CASE WHEN client_name = '' THEN 'unknown' ELSE client_name END"
+	clientExpr     = "CASE WHEN client_name = '' THEN 'unknown' WHEN client_version = '' THEN client_name ELSE client_name || '/' || client_version END"
 	// effortExpr is the reasoning effort CPA sent upstream. "unset" means the
 	// request named none and the model's default applied.
 	effortExpr = "CASE WHEN reasoning_effort = '' THEN 'unset' ELSE reasoning_effort END"
@@ -151,6 +152,7 @@ func (f Filter) bucketSQL(size int64) string {
 }
 
 const (
-	hourMillis = int64(time.Hour / time.Millisecond)
-	dayMillis  = 24 * hourMillis
+	minuteMillis = int64(time.Minute / time.Millisecond)
+	hourMillis   = int64(time.Hour / time.Millisecond)
+	dayMillis    = 24 * hourMillis
 )
