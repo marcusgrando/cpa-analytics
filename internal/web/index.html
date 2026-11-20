@@ -1407,7 +1407,7 @@ async function readAntigravity(account) {
     method: 'POST', data: JSON.stringify(project ? { project } : {}),
   });
   return {
-    windows: parseAntigravityUsage(models),
+    windows: parseAntigravityUsage(models, info ? info.windowMs : 5 * HOUR, Date.now()),
     weight: info ? info.weight : null,
     plan: (info && info.plan) || '',
     credits: info ? info.credits : null,

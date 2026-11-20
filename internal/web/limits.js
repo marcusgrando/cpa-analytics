@@ -85,10 +85,12 @@ function parseCodexUsage(body) {
   return { plan: body.plan_type || '', windows };
 }
 
+// Pro and Ultra refill every five hours until a weekly cap. The free tier
+// refills weekly.
 const ANTIGRAVITY_TIERS = {
-  'g1-ultra-tier': { plan: 'Ultra', weight: 20 },
-  'g1-pro-tier': { plan: 'Pro', weight: 5 },
-  'free-tier': { plan: 'Free', weight: 1 },
+  'g1-ultra-tier': { plan: 'Ultra', weight: 20, windowMs: 5 * LIMIT_HOUR },
+  'g1-pro-tier': { plan: 'Pro', weight: 5, windowMs: 5 * LIMIT_HOUR },
+  'free-tier': { plan: 'Free', weight: 1, windowMs: 7 * LIMIT_DAY },
 };
 
 // parseAntigravityPlan reads the tier and Google One AI credit balance from
@@ -97,7 +99,7 @@ function parseAntigravityPlan(body) {
   const paidId = String((body && body.paidTier && body.paidTier.id) || '').toLowerCase();
   const curId = String((body && body.currentTier && body.currentTier.id) || '').toLowerCase();
   const tierId = paidId || curId;
-  const matched = ANTIGRAVITY_TIERS[tierId] || { plan: (body && body.paidTier && body.paidTier.name) || tierId, weight: null };
+  const matched = ANTIGRAVITY_TIERS[tierId] || { plan: (body && body.paidTier && body.paidTier.name) || tierId, weight: null, windowMs: 5 * LIMIT_HOUR };
   let credits = null;
   const list = body && body.paidTier && Array.isArray(body.paidTier.availableCredits) ? body.paidTier.availableCredits : [];
   for (const c of list) {
@@ -123,10 +125,17 @@ function antigravityModelFamily(id) {
   return { id: 'other', label: 'Other models' };
 }
 
-// parseAntigravityUsage groups per-model quotaInfo from fetchAvailableModels
-// into clean quota pools. When Gemini Pro and Gemini Flash share the same
-// remaining fraction and reset time, they collapse into one Gemini pool.
-function parseAntigravityUsage(body) {
+// Antigravity reports one quota per model family: the fraction left and the
+// next reset, with no weekly figure. A family nobody used reports a reset of
+// now plus the window, so it has not started. A paid family that resets later
+// than its five-hour window is held by the weekly cap.
+const ANTIGRAVITY_WEEKLY_SLACK = 5 * 60000;
+
+// parseAntigravityUsage groups fetchAvailableModels quotaInfo into one window
+// per model family, named by its length. windowMs is the tier's refill window
+// and now is when the response was read. Gemini Pro and Flash collapse into
+// one Gemini window when they share their usage and reset.
+function parseAntigravityUsage(body, windowMs, now) {
   const models = body && body.models && typeof body.models === 'object' ? Object.entries(body.models) : [];
   const byFamily = new Map();
   for (const [id, info] of models) {
@@ -137,10 +146,10 @@ function parseAntigravityUsage(body) {
     const fam = antigravityModelFamily(id);
     if (!fam) continue;
     const used = clampPct((1 - rem) * 100);
-    const resetsAt = parseTime(q.resetTime);
+    const resetsAt = rem >= 1 ? null : parseTime(q.resetTime);
     const cur = byFamily.get(fam.id);
     if (!cur || used > cur.used || (used === cur.used && resetsAt && (!cur.resetsAt || resetsAt < cur.resetsAt))) {
-      byFamily.set(fam.id, limitWindow(fam.id, fam.label, used, resetsAt, 5 * LIMIT_HOUR));
+      byFamily.set(fam.id, { ...fam, used, resetsAt });
     }
   }
   const pro = byFamily.get('gemini-pro');
@@ -148,10 +157,16 @@ function parseAntigravityUsage(body) {
   if (pro && flash && Math.abs(pro.used - flash.used) < 1 && Math.abs((pro.resetsAt || 0) - (flash.resetsAt || 0)) <= 5 * 60000) {
     byFamily.delete('gemini-pro');
     byFamily.delete('gemini-flash');
-    byFamily.set('gemini', limitWindow('gemini', 'Gemini', Math.max(pro.used, flash.used), pro.resetsAt || flash.resetsAt, 5 * LIMIT_HOUR));
+    byFamily.set('gemini', { id: 'gemini', label: 'Gemini', used: Math.max(pro.used, flash.used), resetsAt: pro.resetsAt || flash.resetsAt });
   }
   const order = ['gemini', 'gemini-pro', 'gemini-flash', 'claude-oss', 'other'];
-  const windows = order.filter((k) => byFamily.has(k)).map((k) => byFamily.get(k));
+  const windows = order.filter((k) => byFamily.has(k)).map((k) => {
+    const f = byFamily.get(k);
+    const weekly = windowMs >= 7 * LIMIT_DAY || (f.resetsAt && f.resetsAt - now > windowMs + ANTIGRAVITY_WEEKLY_SLACK);
+    return weekly
+      ? limitWindow('weekly:' + f.id, 'Weekly, ' + f.label, f.used, f.resetsAt, 7 * LIMIT_DAY)
+      : limitWindow('session:' + f.id, Math.round(windowMs / LIMIT_HOUR) + '-hour, ' + f.label, f.used, f.resetsAt, windowMs);
+  });
   if (!windows.length) throw new Error('The usage response has no usage windows.');
   return windows;
 }
@@ -172,7 +187,7 @@ function parseGeminiQuota(body) {
     const used = clampPct((1 - rem) * 100);
     const resetsAt = parseTime(b.resetTime);
     const cur = byFamily.get(fam.id);
-    if (!cur || used > cur.used) byFamily.set(fam.id, limitWindow(fam.id, fam.label, used, resetsAt, LIMIT_DAY));
+    if (!cur || used > cur.used) byFamily.set(fam.id, limitWindow('daily:' + fam.id, 'Daily, ' + fam.label, used, resetsAt, LIMIT_DAY));
   }
   const windows = [...byFamily.values()];
   if (!windows.length) throw new Error('The usage response has no usage windows.');

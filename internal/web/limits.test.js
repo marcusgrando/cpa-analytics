@@ -285,7 +285,55 @@ describe('other providers', () => {
       paidTier: { id: 'g1-pro-tier', availableCredits: [{ creditType: 'GOOGLE_ONE_AI', creditAmount: '125', minimumCreditAmountForUsage: '1' }] },
       cloudaicompanionProject: 'proj-1',
     });
-    expect(p).toEqual({ plan: 'Pro', weight: 5, credits: { amount: 125, min: 1 }, project: 'proj-1' });
+    expect(p).toEqual({ plan: 'Pro', weight: 5, windowMs: 5 * HOUR, credits: { amount: 125, min: 1 }, project: 'proj-1' });
+  });
+
+  test('Antigravity free tier refreshes weekly instead of every five hours', () => {
+    expect(parseAntigravityPlan({ currentTier: { id: 'free-tier' } }).windowMs).toBe(7 * DAY);
+  });
+
+  // Shapes from a live Pro account read at 2026-11-20T17:21:55Z.
+  const AG_NOW = Date.parse('2026-11-20T17:21:55Z');
+
+  test('Antigravity windows are named by their length, like the other providers', () => {
+    const windows = parseAntigravityUsage({
+      models: {
+        'gemini-3-flash': { quotaInfo: { remainingFraction: 0.5254414, resetTime: '2026-11-20T21:47:38Z' } },
+        'gemini-2.5-pro': { quotaInfo: { remainingFraction: 0.5254414, resetTime: '2026-11-20T21:47:38Z' } },
+        'claude-opus-5-5-high': { quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-20T21:43:02Z' } },
+      },
+    }, 5 * HOUR, AG_NOW);
+    expect(windows.map((w) => [w.id, w.label, w.lengthMs])).toEqual([
+      ['session:gemini', '5-hour, Gemini', 5 * HOUR],
+      ['session:claude-oss', '5-hour, Claude & OSS', 5 * HOUR],
+    ]);
+  });
+
+  test('an untouched Antigravity window has not started, since its reset is only now plus five hours', () => {
+    const [w] = parseAntigravityUsage({
+      models: { 'claude-opus-5-5-high': { quotaInfo: { remainingFraction: 1, resetTime: '2026-11-20T22:21:55Z' } } },
+    }, 5 * HOUR, AG_NOW);
+    expect(w).toEqual({ id: 'session:claude-oss', label: '5-hour, Claude & OSS', used: 0, resetsAt: null, lengthMs: 5 * HOUR });
+  });
+
+  test('an Antigravity window that resets after more than five hours is the weekly cap', () => {
+    const [w] = parseAntigravityUsage({
+      models: {
+        'gemini-3-flash': { quotaInfo: { remainingFraction: 0, resetTime: '2026-11-23T09:00:00Z' } },
+        'gemini-2.5-pro': { quotaInfo: { remainingFraction: 0, resetTime: '2026-11-23T09:00:00Z' } },
+      },
+    }, 5 * HOUR, AG_NOW);
+    expect(w).toEqual({ id: 'weekly:gemini', label: 'Weekly, Gemini', used: 100, resetsAt: Date.parse('2026-11-23T09:00:00Z'), lengthMs: 7 * DAY });
+  });
+
+  test('Antigravity free tier windows are weekly', () => {
+    const [w] = parseAntigravityUsage({
+      models: {
+        'gemini-3-flash': { quotaInfo: { remainingFraction: 0.5, resetTime: '2026-11-24T09:00:00Z' } },
+        'gemini-2.5-pro': { quotaInfo: { remainingFraction: 0.5, resetTime: '2026-11-24T09:00:00Z' } },
+      },
+    }, 7 * DAY, AG_NOW);
+    expect([w.id, w.label, w.used]).toEqual(['weekly:gemini', 'Weekly, Gemini', 50]);
   });
 
   test('Antigravity usage collapses identical Gemini buckets and skips tab completions', () => {
@@ -296,8 +344,8 @@ describe('other providers', () => {
         'gemini-3-flash': { quotaInfo: { remainingFraction: 0.64, resetTime: '2026-11-20T16:47:38Z' } },
         'claude-opus-5-5-high': { quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-20T21:43:02Z' } },
       },
-    });
-    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini', 36], ['claude-oss', 10]]);
+    }, 5 * HOUR, Date.parse('2026-11-20T16:45:00Z'));
+    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['session:gemini', 36], ['session:claude-oss', 10]]);
   });
 
   test('Antigravity keeps Gemini Pro and Flash separate when their usage diverges', () => {
@@ -306,8 +354,8 @@ describe('other providers', () => {
         'gemini-4-neon': { quotaInfo: { remainingFraction: 0.2, resetTime: '2026-11-20T16:00:00Z' } },
         'gemini-3-flash': { quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-20T16:00:00Z' } },
       },
-    });
-    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini-pro', 80], ['gemini-flash', 10]]);
+    }, 5 * HOUR, Date.parse('2026-11-20T12:00:00Z'));
+    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['session:gemini-pro', 80], ['session:gemini-flash', 10]]);
   });
 
   test('Gemini CLI quota parses buckets by model family', () => {
@@ -317,7 +365,7 @@ describe('other providers', () => {
         { modelId: 'gemini-2.5-flash', remainingFraction: 0.95, resetTime: '2026-11-21T00:00:00Z' },
       ],
     });
-    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini-pro', 25], ['gemini-flash', 5]]);
+    expect(windows.map((w) => [w.id, w.label, Math.round(w.used)])).toEqual([['daily:gemini-pro', 'Daily, Gemini Pro', 25], ['daily:gemini-flash', 'Daily, Gemini Flash', 5]]);
   });
 
   test('Devin quota reads directly from CPA credential signals', () => {
