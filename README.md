@@ -118,6 +118,9 @@ All routes are `GET`, need the management key (`Authorization: Bearer <key>`), a
 | `/v0/management/cpa-analytics/limit-leftover` | same as `limit-burn` |
 | `/v0/management/cpa-analytics/limit-history` | same as `limit-burn` |
 | `/v0/management/cpa-analytics/affinity` | |
+| `/v0/management/cpa-analytics/requests` | `sort=recent\|cost\|latency\|tokens`, `outcome=all\|failed\|ok`, `offset`, `limit` (1 to 200, default 50) |
+| `/v0/management/cpa-analytics/realtime` | `window=15\|30\|60` minutes. Compares that window with the day so far in `tz`, and ignores `from` and `to`. |
+| `/v0/management/cpa-analytics/latency` | |
 | `/v0/management/cpa-analytics/health` | none, ignores filters |
 
 Shared filters:

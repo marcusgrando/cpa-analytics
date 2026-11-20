@@ -20,7 +20,7 @@ func TestRefresherFetchesAndPersists(t *testing.T) {
 	r.now = func() time.Time { return now }
 	r.Refresh()
 	tbl, at := r.Current()
-	if _, _, ok := tbl.Lookup("gpt-5.5", ""); !ok || !at.Equal(now) {
+	if _, _, ok := tbl.Lookup("gpt-5.5", "", 0); !ok || !at.Equal(now) {
 		t.Fatalf("table not loaded, at=%v", at)
 	}
 	if len(kv[kvKey]) == 0 {
@@ -40,7 +40,7 @@ func TestRefresherFallsBackToStoredCopy(t *testing.T) {
 	second := NewRefresher(func(string) ([]byte, error) { return nil, errors.New("offline") }, kv, "u", time.Hour)
 	second.Refresh()
 	tbl, at := second.Current()
-	if _, _, ok := tbl.Lookup("gpt-5.5", ""); !ok || at.IsZero() {
+	if _, _, ok := tbl.Lookup("gpt-5.5", "", 0); !ok || at.IsZero() {
 		t.Fatal("stored copy not used")
 	}
 	if second.Status().LastError == "" {
@@ -55,7 +55,7 @@ func TestRefresherWithNothingServesEmptyTable(t *testing.T) {
 	if tbl == nil || !at.IsZero() {
 		t.Fatalf("tbl=%v at=%v", tbl, at)
 	}
-	if _, _, ok := tbl.Lookup("gpt-5.5", ""); ok {
+	if _, _, ok := tbl.Lookup("gpt-5.5", "", 0); ok {
 		t.Fatal("empty table priced a model")
 	}
 }
@@ -74,7 +74,7 @@ func TestRefresherKeepsTableWhenFetchReturnsGarbage(t *testing.T) {
 	r.Refresh()
 	r.Refresh()
 	tbl, _ := r.Current()
-	if _, _, ok := tbl.Lookup("gpt-5.5", ""); !ok {
+	if _, _, ok := tbl.Lookup("gpt-5.5", "", 0); !ok {
 		t.Fatal("good table replaced by garbage")
 	}
 	if r.Status().LastError == "" {

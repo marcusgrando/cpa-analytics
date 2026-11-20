@@ -31,6 +31,7 @@ CLIProxyAPI (CPA) analytics plugin: a Go `c-shared` library loaded in-process by
 4. Update `CPA_TAG` in `test/e2e/run.sh` and run `make e2e`. It proves the TraceID join, the inbound headers and the upstream limit headers against the real host.
 5. Check the plugin ABI methods and the `pluginapi` request and response types for changes.
 6. Diff the limit headers CPA reads in `sdk/cliproxy/auth/selector.go` (Claude) and `internal/runtime/executor/helps/codex_quota.go` (Codex), and update `internal/ratelimit` to match. `make e2e` checks that response headers still reach `usage.handle`.
+7. Copy the Antigravity Hub User-Agent the new tag falls back to (`antigravityFallbackVersion` and its changelist in `internal/misc/antigravity_version.go`) into `ANTIGRAVITY_HEADERS` in `internal/web/index.html`.
 
 ## Testing
 

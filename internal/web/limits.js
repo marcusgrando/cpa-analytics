@@ -6,8 +6,9 @@ const LIMIT_HOUR = 3600000;
 const LIMIT_DAY = 24 * LIMIT_HOUR;
 const PACE_TOLERANCE = 5;
 
-// Weights follow the plans' published multiples of the base plan.
-const CODEX_WEIGHTS = { plus: 1, prolite: 5, pro: 20 };
+// Weights follow the plans' published multiples of the base plan. Business
+// (formerly Team), Enterprise and Edu seats count as one Plus each.
+const CODEX_WEIGHTS = { plus: 1, prolite: 5, pro: 20, business: 1, team: 1, enterprise: 1, edu: 1 };
 
 function claudeWeight(profile) {
   const tier = String((profile && profile.organization && profile.organization.rate_limit_tier) || '');
@@ -171,6 +172,35 @@ function parseAntigravityUsage(body, windowMs, now) {
   return windows;
 }
 
+const ANTIGRAVITY_BUCKETS = {
+  '5h': { prefix: 'session', label: '5-hour', lengthMs: 5 * LIMIT_HOUR },
+  weekly: { prefix: 'weekly', label: 'Weekly', lengthMs: 7 * LIMIT_DAY },
+};
+
+// parseAntigravityQuotaSummary reads retrieveUserQuotaSummary: groups of
+// models that share a 5-hour and a weekly limit, each bucket with the fraction
+// left and its reset. A bucket nobody used resets at now plus its window, so
+// it has not started. Unknown windows are skipped.
+function parseAntigravityQuotaSummary(body) {
+  const windows = [];
+  for (const group of (body && Array.isArray(body.groups) ? body.groups : [])) {
+    const label = String((group && group.displayName) || '').replace(/\s+models$/i, '').trim();
+    if (!label) continue;
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const buckets = Array.isArray(group.buckets) ? group.buckets : [];
+    for (const kind of ['5h', 'weekly']) {
+      const b = buckets.find((x) => x && x.window === kind);
+      const rem = b ? Number(b.remainingFraction) : NaN;
+      if (!Number.isFinite(rem)) continue;
+      const spec = ANTIGRAVITY_BUCKETS[kind];
+      windows.push(limitWindow(spec.prefix + ':' + id, spec.label + ', ' + label, clampPct((1 - rem) * 100),
+        rem >= 1 ? null : parseTime(b.resetTime), spec.lengthMs));
+    }
+  }
+  if (!windows.length) throw new Error('The usage response has no usage windows.');
+  return windows;
+}
+
 // parseGeminiQuota parses buckets[] from Gemini CLI's retrieveUserQuota response.
 function parseGeminiQuota(body) {
   const buckets = body && Array.isArray(body.buckets) ? body.buckets : [];
@@ -289,14 +319,20 @@ function summarizeCredentialStatus(account, now) {
   };
 }
 
+// weeklyFor names the weekly window that holds back a session window:
+// "weekly" for "session", and "weekly:<group>" for "session:<group>".
+function weeklyFor(id) {
+  if (id === 'session') return 'weekly';
+  return id.startsWith('session:') ? 'weekly:' + id.slice('session:'.length) : null;
+}
+
 // accountWindows adds what each window gives back and when. With the weekly
 // allowance spent, the session window cannot be used until the week resets.
 function accountWindows(windows, now) {
-  const week = windows.find((w) => w.id === 'weekly');
-  const weekSpent = week && week.used >= 100;
   return windows.map((w) => {
     const future = (t) => t !== null && t > now;
-    if (w.id !== 'session' || !weekSpent) {
+    const week = windows.find((x) => x.id === weeklyFor(w.id));
+    if (!week || week.used < 100) {
       return { ...w, blocked: false, restore: future(w.resetsAt) && w.used > 0 ? { at: w.resetsAt, refill: w.used } : null };
     }
     let restore = null;
@@ -506,7 +542,7 @@ async function mapLimit(items, limit, fn) {
 if (typeof module !== 'undefined') {
   module.exports = {
     claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage,
-    parseAntigravityPlan, parseAntigravityUsage, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
+    parseAntigravityPlan, parseAntigravityUsage, parseAntigravityQuotaSummary, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
     accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
     readingAt, poolHistory, burnRate, projectPool, withLiveReading,
   };

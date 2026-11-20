@@ -257,7 +257,7 @@ func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string
 			}
 		}
 		in.tokens.add(tok)
-		cost, _ := p.price(model, tier, tok)
+		cost, _ := p.price(model, tier, tok.input(), tok)
 		in.costUSD += cost
 	}
 	if err := rows.Err(); err != nil {

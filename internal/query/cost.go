@@ -63,7 +63,10 @@ func ratio(a, b float64) float64 {
 	return a / b
 }
 
-type lookupKey struct{ model, tier string }
+type lookupKey struct {
+	model, tier string
+	band        int64
+}
 
 type lookup struct {
 	rates  pricing.Rates
@@ -81,23 +84,26 @@ func newPricer(table *pricing.Table) *pricer {
 	return &pricer{table: table, cache: map[lookupKey]lookup{}}
 }
 
-func (p *pricer) lookup(model, tier string) lookup {
-	key := lookupKey{model, tier}
+// lookup finds the rates for a request with input tokens of input. Inputs
+// that price alike share a cache entry.
+func (p *pricer) lookup(model, tier string, input int64) lookup {
+	key := lookupKey{model, tier, p.table.Band(input)}
 	if l, ok := p.cache[key]; ok {
 		return l
 	}
 	var l lookup
 	if p.table != nil {
-		l.rates, l.source, l.ok = p.table.Lookup(model, tier)
+		l.rates, l.source, l.ok = p.table.Lookup(model, tier, key.band)
 	}
 	p.cache[key] = l
 	return l
 }
 
-// price returns the cost of t and where each token's price came from.
-// Unknown models and unclassified tokens are unpriced, never free.
-func (p *pricer) price(model, tier string, t Tokens) (float64, CostQuality) {
-	l := p.lookup(model, tier)
+// price returns the cost of t and where each token's price came from. input
+// is the input tokens of one request (or its band), which picks long-context
+// rates. Unknown models and unclassified tokens are unpriced, never free.
+func (p *pricer) price(model, tier string, input int64, t Tokens) (float64, CostQuality) {
+	l := p.lookup(model, tier, input)
 	if !l.ok {
 		return 0, CostQuality{UnpricedTokens: t.total()}
 	}
@@ -112,9 +118,11 @@ func (p *pricer) price(model, tier string, t Tokens) (float64, CostQuality) {
 
 // costRow is one aggregate per key tuple, model and tier.
 type costRow struct {
-	keys    []string
-	model   string
-	tier    string
+	keys  []string
+	model string
+	tier  string
+	// band is the long-context input band the group's rows share.
+	band    int64
 	records int64
 	failed  int64
 	tokens  Tokens
@@ -129,6 +137,9 @@ type costRow struct {
 	cacheSavings float64
 }
 
+// inputExpr is one row's input tokens, which select long-context prices.
+const inputExpr = "uncached_input + cache_read + cache_write"
+
 const tokenSums = "SUM(uncached_input), SUM(cache_read), SUM(cache_write), SUM(output_non_reasoning), SUM(output_reasoning), SUM(unclassified)"
 
 func (t *Tokens) scanTargets() []any {
@@ -142,7 +153,9 @@ func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) (
 	for _, expr := range keyExprs {
 		cols = append(cols, "CAST("+expr+" AS TEXT)")
 	}
-	cols = append(cols, "("+modelExpr+")", "("+tierExpr+")")
+	// Each row's input band decides its long-context price, so rows are summed
+	// per band and each group is priced once.
+	cols = append(cols, "("+modelExpr+")", "("+tierExpr+")", "("+table.BandSQL(inputExpr)+")")
 	groups := make([]string, len(cols))
 	for i := range cols {
 		groups[i] = fmt.Sprint(i + 1)
@@ -163,18 +176,18 @@ func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) (
 		for i := range r.keys {
 			targets = append(targets, &r.keys[i])
 		}
-		targets = append(targets, &r.model, &r.tier, &r.records, &r.failed)
+		targets = append(targets, &r.model, &r.tier, &r.band, &r.records, &r.failed)
 		targets = append(targets, r.tokens.scanTargets()...)
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("aggregate scan: %w", err)
 		}
-		r.price = p.lookup(r.model, r.tier)
-		r.cost, r.quality = p.price(r.model, r.tier, r.tokens)
+		r.price = p.lookup(r.model, r.tier, r.band)
+		r.cost, r.quality = p.price(r.model, r.tier, r.band, r.tokens)
 		if r.price.ok {
 			b := r.tokens.breakdown()
 			r.byType = pricing.CostByType(r.price.rates, b)
 			r.standardCost = r.cost
-			if std := p.lookup(r.model, ""); std.ok {
+			if std := p.lookup(r.model, "", r.band); std.ok {
 				r.standardCost = pricing.Cost(std.rates, b)
 			}
 			r.cacheSavings = float64(r.tokens.CacheRead) * (r.price.rates.Input - r.price.rates.CacheRead)

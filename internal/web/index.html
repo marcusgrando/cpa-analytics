@@ -130,6 +130,13 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .markers { list-style: none; padding: 0; margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
 .notice { color: var(--ink-2); font-size: 12px; margin: 6px 0 0; }
 .error { color: var(--critical); }
+.req-row { cursor: pointer; }
+.req-row:hover, .req-row[aria-expanded="true"] { background: var(--wash); }
+.req-row td:nth-child(2), .req-row td:nth-child(3), .req-row td:nth-child(4) { text-align: left; }
+.req-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 16px; margin: 4px 0 8px; font-size: 12px; text-align: left; white-space: normal; }
+.req-fields dt { color: var(--muted); }
+.req-fields dd { margin: 0; overflow-wrap: anywhere; }
+.pager { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
 .empty { color: var(--muted); padding: 24px 0; margin: 0 auto; max-width: 70ch; text-align: center; }
 .tooltip {
   position: fixed; z-index: 10; pointer-events: none; background: var(--surface); color: var(--ink);
@@ -260,6 +267,25 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         </div>
       </section>
 
+      <section id="realtime" class="card" aria-labelledby="realtime-title">
+        <div class="card-head">
+          <div>
+            <h2 id="realtime-title">Right now</h2>
+            <p class="sub">The last minutes against today's average so far. Uses the filters, not the period.</p>
+          </div>
+          <div class="seg" role="group" aria-label="Window">
+            <button type="button" data-window="15" aria-pressed="true">15 min</button>
+            <button type="button" data-window="30" aria-pressed="false">30 min</button>
+            <button type="button" data-window="60" aria-pressed="false">60 min</button>
+          </div>
+        </div>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="rt-tiles" class="tiles"></div>
+          <p id="rt-note" class="notice"></p>
+        </div>
+      </section>
+
       <section id="model-detail" class="card" hidden aria-labelledby="md-title">
         <h2 id="md-title">Model detail</h2>
         <div id="md-tiles" class="tiles"></div>
@@ -313,6 +339,17 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         </div>
       </section>
 
+      <details id="latency" class="card" aria-labelledby="latency-title">
+        <summary><h2 id="latency-title">Latency</h2></summary>
+        <p class="sub">One dot per successful streamed call, on log scales. Dashed lines mark the 95th percentile.</p>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="latency-chart" class="chart"></div>
+          <div id="latency-legend" class="legend"></div>
+          <p id="latency-note" class="notice"></p>
+        </div>
+      </details>
+
       <section id="daily" class="card" aria-labelledby="daily-title">
         <div class="card-head">
           <div>
@@ -352,6 +389,35 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <div id="breakdown-table" class="table-wrap"></div>
         </div>
       </section>
+
+      <details id="requests" class="card" aria-labelledby="requests-title">
+        <summary><h2 id="requests-title">Requests</h2></summary>
+        <p class="sub">One row per upstream call. Select a row for its details. Request and response content is never stored.</p>
+        <div class="controls">
+          <div class="seg" role="group" aria-label="Sort by">
+            <button type="button" data-req-sort="recent" aria-pressed="true">Newest</button>
+            <button type="button" data-req-sort="cost" aria-pressed="false">Cost</button>
+            <button type="button" data-req-sort="latency" aria-pressed="false">Latency</button>
+            <button type="button" data-req-sort="tokens" aria-pressed="false">Tokens</button>
+          </div>
+          <label>Show
+            <select id="req-outcome">
+              <option value="all" selected>All calls</option>
+              <option value="failed">Failed</option>
+              <option value="ok">Successful</option>
+            </select>
+          </label>
+        </div>
+        <p class="section-status notice" role="status" hidden></p>
+        <div class="section-content">
+          <div id="requests-table" class="table-wrap"></div>
+          <div class="pager">
+            <button id="req-prev" type="button">Previous</button>
+            <span id="req-range"></span>
+            <button id="req-next" type="button">Next</button>
+          </div>
+        </div>
+      </details>
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
@@ -406,6 +472,8 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 /* tooltip.js */
 /* sparkline.js */
 /* endlabels.js */
+/* realtime.js */
+/* scatter.js */
 </script>
 <script>
 'use strict';
@@ -422,7 +490,9 @@ const END_LABELS = 4;
 const state = {
   period: 7, provider: '', model: '', client: '', account: '', apiKey: '',
   view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', by: 'model',
+  rtWindow: 15, reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
 };
+const REQUESTS_PAGE = 50;
 let data = {};
 let managementKey = '';
 
@@ -1348,7 +1418,9 @@ const LIMIT_PROVIDERS = [
   { id: 'kimi', name: 'Kimi' },
 ];
 const CLAUDE_HEADERS = { 'anthropic-beta': 'oauth-2025-04-20' };
-const ANTIGRAVITY_HEADERS = { 'Content-Type': 'application/json', 'User-Agent': 'antigravity/1.15.8 linux/amd64' };
+// The User-Agent CPA v8.0.71 sends as Antigravity Hub. Google leaves newer
+// model groups out of the answer for older clients.
+const ANTIGRAVITY_HEADERS = { 'Content-Type': 'application/json', 'User-Agent': 'antigravity/hub/2.29.0 (aidev_client; os_type=darwin; arch=arm64; cl=1013060670)' };
 const CLAUDE_PLANS = { 20: 'Max 20x', 5: 'Max 5x', 1: 'Pro' };
 const CODEX_PLANS = { plus: 'Plus', prolite: 'Pro Lite', pro: 'Pro' };
 // A plan rarely changes, so each account's profile/tier is read once per page load.
@@ -1403,11 +1475,24 @@ async function readAntigravity(account) {
     }
   }
   const project = (info && info.project) || account.project_id || '';
-  const models = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels', ANTIGRAVITY_HEADERS, {
-    method: 'POST', data: JSON.stringify(project ? { project } : {}),
-  });
+  const body = JSON.stringify(project ? { project } : {});
+  // The quota summary reports each group's 5-hour and weekly limits. Without
+  // it, fetchAvailableModels gives one window per group and the weekly limit
+  // shows only once it is reached.
+  let windows;
+  try {
+    const summary = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary', ANTIGRAVITY_HEADERS, {
+      method: 'POST', data: body,
+    });
+    windows = parseAntigravityQuotaSummary(summary);
+  } catch (_) {
+    const models = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels', ANTIGRAVITY_HEADERS, {
+      method: 'POST', data: body,
+    });
+    windows = parseAntigravityUsage(models, info ? info.windowMs : 5 * HOUR, Date.now());
+  }
   return {
-    windows: parseAntigravityUsage(models, info ? info.windowMs : 5 * HOUR, Date.now()),
+    windows,
     weight: info ? info.weight : null,
     plan: (info && info.plan) || '',
     credits: info ? info.credits : null,
@@ -1734,6 +1819,186 @@ function trendChart(container, recorded, projected, now, label) {
   svg.append(hit);
 }
 
+/* ---------- right now ---------- */
+
+// realtimeParams keeps the page filters and the viewer's timezone, and lets
+// the route pick the window before now and the day so far.
+function realtimeParams() {
+  const { from, to, ...filters } = filterParams();
+  return { ...filters, window: state.rtWindow };
+}
+
+function renderRealtime() {
+  if (!data.realtime) return;
+  const fmtRate = (v) => (v < 10 ? v.toFixed(v < 1 ? 2 : 1) : fmtCompact(Math.round(v)));
+  const REALTIME_TILES = {
+    requests: ['Requests per minute', fmtRate],
+    tokens: ['Tokens per minute', fmtRate],
+    cost: ['Cost per hour', fmtUSD],
+    cache: ['Cache hit rate', fmtPct],
+    ttft: ['Median time to first token', fmtSeconds],
+    latency: ['Median latency', fmtSeconds],
+    failures: ['Failures per minute', fmtRate],
+  };
+  const tiles = realtimeFigures(data.realtime).map((f) => {
+    const [label, fmt] = REALTIME_TILES[f.id];
+    const today = f.today === null ? 'none today' : 'today ' + fmt(f.today);
+    const change = f.change === null ? null : f.unit === 'points' ? pointChange(f.now, f.today) : relativeChange(f.now, f.today);
+    return tile(label, f.now === null ? '-' : fmt(f.now), change ? `${change}, ${today}` : today);
+  });
+  document.getElementById('rt-tiles').replaceChildren(...tiles);
+  const { now } = data.realtime;
+  document.getElementById('rt-note').textContent = now.requests || now.failed ? '' : `No calls in the last ${data.realtime.window_minutes} min.`;
+}
+
+let realtimeSeq = 0;
+
+async function refreshRealtime() {
+  const seq = ++realtimeSeq;
+  sectionState('realtime', '', true);
+  try {
+    const v = await api('realtime', realtimeParams());
+    if (seq !== realtimeSeq) return;
+    data.realtime = v;
+    sectionState('realtime');
+    renderRealtime();
+  } catch (err) {
+    if (seq !== realtimeSeq) return;
+    sectionState('realtime', 'Could not load. Refresh to retry.');
+    showLoadError(err);
+  }
+}
+
+/* ---------- latency ---------- */
+
+function renderLatency() {
+  const lat = data.latency;
+  if (!lat) return;
+  const container = document.getElementById('latency-chart');
+  const note = document.getElementById('latency-note');
+  const legendEl = document.getElementById('latency-legend');
+  if (!lat.points.length) {
+    container.replaceChildren(el('div', { class: 'empty', text: 'No streamed call reported a first token in this range.' }));
+    legendEl.replaceChildren();
+    note.textContent = '';
+    return;
+  }
+  const width = Math.max(280, container.clientWidth);
+  const height = 300;
+  const m = { top: 12, right: 12, bottom: 36, left: 56 };
+  const xDomain = logDomain(Math.min(...lat.points.map((pt) => pt.ttft_ms)), Math.max(...lat.points.map((pt) => pt.ttft_ms)));
+  const yDomain = logDomain(Math.min(...lat.points.map((pt) => pt.latency_ms)), Math.max(...lat.points.map((pt) => pt.latency_ms)));
+  const sx = (v) => m.left + (Math.log10(v / xDomain[0]) / Math.log10(xDomain[1] / xDomain[0])) * (width - m.left - m.right);
+  const sy = (v) => height - m.bottom - (Math.log10(v / yDomain[0]) / Math.log10(yDomain[1] / yDomain[0])) * (height - m.top - m.bottom);
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': 'Time to first token against total latency, one dot per call' });
+  for (const t of logTicks(yDomain[0], yDomain[1])) {
+    svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: sy(t), y2: sy(t), stroke: 'var(--grid)', 'stroke-width': 1 }));
+    svg.append(svgEl('text', { x: m.left - 6, y: sy(t) + 4, 'text-anchor': 'end', text: fmtSeconds(t) }));
+  }
+  // Attached before the x labels so they can be measured.
+  container.replaceChildren(svg);
+  const fits = labelSpacer();
+  for (const t of logTicks(xDomain[0], xDomain[1])) {
+    svg.append(svgEl('line', { x1: sx(t), x2: sx(t), y1: m.top, y2: height - m.bottom, stroke: 'var(--grid)', 'stroke-width': 1 }));
+    const label = svgEl('text', { x: sx(t), y: height - m.bottom + 14, 'text-anchor': 'middle', text: fmtSeconds(t) });
+    svg.append(label);
+    const half = label.getComputedTextLength() / 2;
+    if (!fits(sx(t) - half, sx(t) + half)) label.remove();
+  }
+  svg.append(svgEl('text', { x: width - m.right, y: height - 4, 'text-anchor': 'end', text: 'Time to first token' }));
+  svg.append(svgEl('text', { x: m.left, y: m.top - 2, text: 'Total latency' }));
+  const p95x = sx(Math.max(xDomain[0], lat.p95_ttft_ms));
+  const p95y = sy(Math.max(yDomain[0], lat.p95_latency_ms));
+  svg.append(svgEl('line', { x1: p95x, x2: p95x, y1: m.top, y2: height - m.bottom, stroke: 'var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
+  svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: p95y, y2: p95y, stroke: 'var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
+  const screen = lat.points.map((pt) => ({ x: sx(pt.ttft_ms), y: sy(pt.latency_ms) }));
+  const dots = svgEl('g', { 'aria-hidden': 'true' });
+  lat.points.forEach((pt, i) => {
+    dots.append(svgEl('circle', { cx: screen[i].x, cy: screen[i].y, r: 2.5, style: `fill:${colorFor('provider', pt.provider)};fill-opacity:0.6` }));
+  });
+  const ring = svgEl('circle', { r: 5, fill: 'none', 'stroke-width': 1.5, style: 'stroke:var(--ink)', visibility: 'hidden' });
+  svg.append(dots, ring);
+  svg.addEventListener('pointermove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const i = nearestPoint(screen, (e.clientX - box.left) * width / box.width, (e.clientY - box.top) * height / box.height, 12);
+    if (i < 0) { ring.setAttribute('visibility', 'hidden'); hideTooltip(); return; }
+    const pt = lat.points[i];
+    ring.setAttribute('cx', screen[i].x);
+    ring.setAttribute('cy', screen[i].y);
+    ring.setAttribute('visibility', 'visible');
+    showTooltip(e, fmtStamp(pt.at), [
+      { value: fmtSeconds(pt.ttft_ms), label: 'to first token' },
+      { value: fmtSeconds(pt.latency_ms), label: 'in total' },
+      { value: pt.model, label: pt.provider },
+    ]);
+  });
+  svg.addEventListener('pointerleave', () => { ring.setAttribute('visibility', 'hidden'); hideTooltip(); });
+  const providers = [...new Set(lat.points.map((pt) => pt.provider))];
+  legend(legendEl, providers.map((name) => ({ color: colorFor('provider', name), label: name || 'unknown' })));
+  const sampled = lat.points.length < lat.total ? `${fmtInt(lat.points.length)} of ${fmtInt(lat.total)} calls shown, evenly sampled. ` : '';
+  note.textContent = sampled + `Median ${fmtSeconds(lat.p50_ttft_ms)} to first token and ${fmtSeconds(lat.p50_latency_ms)} in total. ` +
+    `95th percentile ${fmtSeconds(lat.p95_ttft_ms)} and ${fmtSeconds(lat.p95_latency_ms)}.` +
+    (lat.no_ttft ? ` ${fmtInt(lat.no_ttft)} calls reported no first token and are not shown.` : '');
+}
+
+/* ---------- requests ---------- */
+
+function requestDetail(c) {
+  const pairs = [
+    ['Call', c.id], ['Provider', c.provider], ['Requested model', c.requested_model], ['Reported model', c.models.join(', ')],
+    ['Client', c.client], ['User-Agent', c.user_agent], ['API key hash', c.api_key_hash],
+    ['Account', c.account ? accountWithProvider(c.account) : ''], ['Session', c.session_id],
+    ['Reasoning effort', c.reasoning_effort || 'unset'], ['Service tier', c.service_tier || 'standard'],
+    ['Streamed', c.stream ? 'yes' : 'no'], ['HTTP status', c.status_code || ''],
+    ['Time to first token', c.ttft_ms ? fmtSeconds(c.ttft_ms) : ''], ['Latency', c.latency_ms ? fmtSeconds(c.latency_ms) : ''],
+    ['Uncached input', fmtInt(c.uncached_input)], ['Cache read', fmtInt(c.cache_read)], ['Cache write', fmtInt(c.cache_write)],
+    ['Output', fmtInt(c.output)], ['Reasoning', fmtInt(c.reasoning)], ['Unclassified', c.unclassified ? fmtInt(c.unclassified) : ''],
+    ['Cost', fmtUSD(c.cost_usd)], ['Unpriced tokens', c.unpriced_tokens ? fmtInt(c.unpriced_tokens) : ''],
+    ['Usage records', c.records > 1 ? fmtInt(c.records) : ''],
+  ].filter(([, v]) => v !== '');
+  return el('dl', { class: 'req-fields' }, ...pairs.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: String(v) })]));
+}
+
+function renderRequests() {
+  const res = data.requests;
+  if (!res) return;
+  const wrap = document.getElementById('requests-table');
+  const shown = res.calls.length;
+  document.getElementById('req-range').textContent = res.total ? `${fmtInt(state.reqOffset + 1)} to ${fmtInt(state.reqOffset + shown)} of ${fmtInt(res.total)}` : '';
+  document.getElementById('req-prev').disabled = state.reqOffset === 0;
+  document.getElementById('req-next').disabled = state.reqOffset + shown >= res.total;
+  if (!shown) {
+    wrap.replaceChildren(el('div', { class: 'empty', text: res.total ? 'No calls on this page.' : 'No calls in this range.' }));
+    return;
+  }
+  const headers = ['Time', 'Model', 'Client', 'Account', 'Input', 'Output', 'Cost', 'Latency', 'Status'];
+  const body = el('tbody');
+  for (const c of res.calls) {
+    const cells = [
+      fmtStamp(c.at), c.models.join(' + ') || c.requested_model, c.client, c.account ? accountWithProvider(c.account) : '-',
+      fmtCompact(c.uncached_input + c.cache_read + c.cache_write), fmtCompact(c.output + c.reasoning),
+      c.unpriced_tokens && !c.cost_usd ? 'unpriced' : fmtUSD(c.cost_usd), c.latency_ms ? fmtSeconds(c.latency_ms) : '-',
+      c.failed ? `Failed ${c.status_code || ''}`.trim() : String(c.status_code || 'OK'),
+    ];
+    const row = el('tr', { class: 'req-row', tabindex: 0, 'aria-expanded': 'false' }, ...cells.map((v) => el('td', { text: v })));
+    const detail = el('tr', { class: 'req-detail', hidden: '' }, el('td', { colspan: headers.length }, requestDetail(c)));
+    const toggle = () => {
+      const open = detail.hidden;
+      detail.hidden = !open;
+      row.setAttribute('aria-expanded', String(open));
+    };
+    row.addEventListener('click', toggle);
+    row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    body.append(row, detail);
+  }
+  wrap.replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, ...headers.map((h) => el('th', { scope: 'col', text: h })))), body));
+}
+
+function reloadRequests() {
+  data.requests = null;
+  refreshDetail('requests');
+}
+
 /* ---------- loading ---------- */
 
 function fillSelect(id, values, current, allLabel, labelOf = (v) => v) {
@@ -1784,6 +2049,7 @@ let refreshReuse = false;
 let detailPromise = null;
 
 function refreshFilters() {
+  state.reqOffset = 0;
   return refresh(false, true);
 }
 
@@ -1822,7 +2088,7 @@ function sectionState(section, message = '', busy = false) {
   status.hidden = !message;
 }
 
-const DETAIL_SECTIONS = ['leftover', 'affinity', 'quality'];
+const DETAIL_SECTIONS = ['latency', 'requests', 'leftover', 'affinity', 'quality'];
 
 function detailJob(section) {
   const p = data.params;
@@ -1833,6 +2099,11 @@ function detailJob(section) {
       apply: (v) => { data.leftover = v; renderLeftover(); } };
     case 'affinity': return { section, ready: () => Boolean(data.affinity),
       load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } };
+    case 'latency': return { section, ready: () => Boolean(data.latency),
+      load: () => api('latency', p), apply: (v) => { data.latency = v; renderLatency(); } };
+    case 'requests': return { section, ready: () => Boolean(data.requests),
+      load: () => api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE }),
+      apply: (v) => { data.requests = v; renderRequests(); } };
     case 'quality': return { section, ready: () => Boolean(data.pricing),
       load: () => api('pricing', p), apply: (v) => { data.pricing = v; renderQuality(); } };
   }
@@ -1882,7 +2153,7 @@ async function loadUsage(current, reuse) {
     data = { summary: primary[0].value, daily: primary[1].value, previous: null, params: p, period,
       options: prior?.options, credentials: prior?.credentials,
       burn: sameLimitScope ? prior.burn : undefined, leftover: sameLimitScope ? prior.leftover : undefined };
-    for (const section of ['drift', 'burn', 'leftover', 'affinity', 'breakdown', 'quality']) {
+    for (const section of ['realtime', 'drift', 'burn', ...DETAIL_SECTIONS, 'breakdown']) {
       sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
     }
     document.getElementById('key-form').hidden = true;
@@ -1913,6 +2184,7 @@ async function loadUsage(current, reuse) {
       renderTotals();
     } });
     jobs.push(
+      { section: 'realtime', load: () => api('realtime', realtimeParams()), apply: (v) => { data.realtime = v; renderRealtime(); } },
       { section: 'drift', load: () => api('drift', { ...p, group }), apply: (v) => { data.drift = v; renderDrift(); } },
       by === 'errors'
         ? { section: 'breakdown', load: () => api('errors', p), apply: (v) => { data.errors = v; renderBreakdown(); } }
@@ -2077,6 +2349,17 @@ document.getElementById('drift-metric').addEventListener('change', (e) => { stat
 for (const section of DETAIL_SECTIONS) {
   document.getElementById(section).addEventListener('toggle', () => refreshDetail(section));
 }
+document.querySelectorAll('[data-window]').forEach((b) => b.addEventListener('click', () => {
+  state.rtWindow = Number(b.dataset.window); pressed('#realtime', 'data-window', b.dataset.window);
+  refreshRealtime();
+}));
+document.querySelectorAll('[data-req-sort]').forEach((b) => b.addEventListener('click', () => {
+  state.reqSort = b.dataset.reqSort; state.reqOffset = 0; pressed('#requests', 'data-req-sort', state.reqSort);
+  reloadRequests();
+}));
+document.getElementById('req-outcome').addEventListener('change', (e) => { state.reqOutcome = e.target.value; state.reqOffset = 0; reloadRequests(); });
+document.getElementById('req-prev').addEventListener('click', () => { state.reqOffset = Math.max(0, state.reqOffset - REQUESTS_PAGE); reloadRequests(); });
+document.getElementById('req-next').addEventListener('click', () => { state.reqOffset += REQUESTS_PAGE; reloadRequests(); });
 document.getElementById('drift-group').addEventListener('change', (e) => {
   state.driftGroup = e.target.value;
   refreshGroup('drift');
@@ -2090,7 +2373,7 @@ let resizeTimer = 0;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (data.summary) { renderDrift(); renderBurn(); renderDaily(); }
+    if (data.summary) { renderDrift(); renderBurn(); renderDaily(); renderLatency(); }
     if (limitsData) drawTrends();
   }, 100);
 }).observe(document.querySelector('.wrap'));

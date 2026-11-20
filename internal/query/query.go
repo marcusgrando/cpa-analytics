@@ -173,8 +173,8 @@ func fillSessionAndRequestMedians(db *sql.DB, where string, args []any, totals *
 	}
 	defer rows.Close()
 	type sessStats struct {
-		reqs    int64
-		peakIn  int64
+		reqs   int64
+		peakIn int64
 	}
 	sessions := map[string]*sessStats{}
 	var reqInputs, reqOutputs []float64

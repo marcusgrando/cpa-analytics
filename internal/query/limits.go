@@ -142,7 +142,7 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 		if cur != nil && acct != cur.account {
 			flush()
 		}
-		cost, quality := p.price(model, tier, tokens)
+		cost, quality := p.price(model, tier, tokens.input(), tokens)
 		spanCost += cost
 		spanUnpr += quality.UnpricedTokens
 		if !pct.Valid || !reset.Valid {

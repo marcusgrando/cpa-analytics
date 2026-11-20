@@ -24,7 +24,7 @@ function dashboard() {
   const calls = [], credentialCalls = [], renders = [], painted = [], classes = new Set();
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
-    timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
+    timeseries: {}, drift: { points: [] }, realtime: {}, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
     breakdown: { rows: [] }, errors: { total: 0, rows: [] }, pricing: {},
     options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'], accounts: ['acc1'] },
   };
@@ -46,6 +46,8 @@ function dashboard() {
     renderDaily: () => renders.push('daily'), renderModelDetail() {},
     renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {}, renderCostWarning() {},
     renderDrift: () => renders.push('drift'), renderBreakdown: () => renders.push('breakdown'),
+    renderRealtime: () => renders.push('realtime'), renderLatency() {}, renderRequests() {},
+    realtimeParams: () => ({ provider: ctx.state.provider, window: 15 }),
     forgetKey: () => { ctx.data = {}; renders.push('forget-key'); }, showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
@@ -58,8 +60,8 @@ test('opening usage does not query collapsed analyses or an incomplete previous 
   const { ctx, calls, node } = dashboard();
   ctx.recordedThrough = () => false;
   await ctx.refresh();
-  expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'drift', 'breakdown', 'limit-burn']);
-  for (const section of ['affinity', 'leftover', 'quality']) {
+  expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'realtime', 'drift', 'breakdown', 'limit-burn']);
+  for (const section of ['latency', 'requests', 'affinity', 'leftover', 'quality']) {
     expect(node(section).open).toBe(false);
     expect(node(section).attrs['aria-busy']).toBe('false');
   }
@@ -95,7 +97,8 @@ test('filter navigation reuses options, credentials and account limits within th
   await ctx.refreshFilters();
   ctx.state.apiKey = 'abcdef123456';
   await ctx.refreshFilters();
-  expect(calls.every((c) => ['summary', 'timeseries', 'drift', 'breakdown'].includes(c.route))).toBe(true);
+  // "Right now" follows the filters, so it reloads with them.
+  expect(calls.every((c) => ['summary', 'timeseries', 'realtime', 'drift', 'breakdown'].includes(c.route))).toBe(true);
   expect(credentialCalls).toEqual([]);
   expect(ctx.data.params.from).toBe(100);
   expect(ctx.data.params.to).toBe(200);
@@ -582,7 +585,11 @@ test('chart controls and resize are safe before their detail data arrives', () =
   const ctx = vm.createContext({ data: {} });
   const drift = page.slice(page.indexOf('function renderDrift()'), page.indexOf('function burnAccountName('));
   const burn = page.slice(page.indexOf('function renderBurn()'), page.indexOf('function renderLeftover()'));
-  vm.runInContext(drift + burn, ctx);
+  const views = page.slice(page.indexOf('/* ---------- right now ---------- */'), page.indexOf('/* ---------- loading ---------- */'));
+  vm.runInContext(drift + burn + views, ctx);
   expect(() => ctx.renderDrift()).not.toThrow();
   expect(() => ctx.renderBurn()).not.toThrow();
+  expect(() => ctx.renderRealtime()).not.toThrow();
+  expect(() => ctx.renderLatency()).not.toThrow();
+  expect(() => ctx.renderRequests()).not.toThrow();
 });

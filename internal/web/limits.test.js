@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage,
-  parseAntigravityPlan, parseAntigravityUsage, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
+  parseAntigravityPlan, parseAntigravityUsage, parseAntigravityQuotaSummary, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
   accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
 } from './limits.js';
 
@@ -55,7 +55,9 @@ describe('plan weights', () => {
     expect(codexWeight('plus')).toBe(1);
     expect(codexWeight('prolite')).toBe(5);
     expect(codexWeight('pro')).toBe(20);
-    expect(codexWeight('team')).toBeNull();
+    // Business (formerly Team), Enterprise and Edu seats get Plus-level limits.
+    for (const seat of ['business', 'team', 'enterprise', 'edu']) expect(codexWeight(seat)).toBe(1);
+    expect(codexWeight('free')).toBeNull();
     expect(codexWeight(undefined)).toBeNull();
   });
 });
@@ -356,6 +358,52 @@ describe('other providers', () => {
       },
     }, 5 * HOUR, Date.parse('2026-11-20T12:00:00Z'));
     expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['session:gemini-pro', 80], ['session:gemini-flash', 10]]);
+  });
+
+  // retrieveUserQuotaSummary as a live Pro account returned it at 2026-11-20T18:59:53Z.
+  const AG_SUMMARY = { groups: [
+    { displayName: 'Gemini Models', buckets: [
+      { bucketId: 'gemini-weekly', window: 'weekly', resetTime: '2026-11-27T11:47:38Z', remainingFraction: 0.7600026 },
+      { bucketId: 'gemini-5h', window: '5h', resetTime: '2026-11-20T21:47:38Z', remainingFraction: 0.5472385 },
+    ] },
+    { displayName: 'Claude and GPT models', buckets: [
+      { bucketId: '3p-weekly', window: 'weekly', resetTime: '2026-11-27T18:59:53Z', remainingFraction: 1 },
+      { bucketId: '3p-5h', window: '5h', resetTime: '2026-11-20T23:59:53Z', remainingFraction: 1 },
+    ] },
+    { displayName: 'Gemini 4 Argon', buckets: [
+      { bucketId: 'gemini-argon-wtu-weekly', window: 'weekly', resetTime: '2026-11-27T13:09:09Z', remainingFraction: 0.99835056 },
+    ] },
+  ] };
+
+  test('Antigravity quota summary gives each group its 5-hour and weekly windows', () => {
+    const windows = parseAntigravityQuotaSummary(AG_SUMMARY);
+    expect(windows.map((w) => [w.id, w.label, Math.round(w.used * 10) / 10, w.resetsAt, w.lengthMs])).toEqual([
+      ['session:gemini', '5-hour, Gemini', 45.3, Date.parse('2026-11-20T21:47:38Z'), 5 * HOUR],
+      ['weekly:gemini', 'Weekly, Gemini', 24, Date.parse('2026-11-27T11:47:38Z'), 7 * DAY],
+      ['session:claude-and-gpt', '5-hour, Claude and GPT', 0, null, 5 * HOUR],
+      ['weekly:claude-and-gpt', 'Weekly, Claude and GPT', 0, null, 7 * DAY],
+      ['weekly:gemini-4-argon', 'Weekly, Gemini 4 Argon', 0.2, Date.parse('2026-11-27T13:09:09Z'), 7 * DAY],
+    ]);
+  });
+
+  test('an Antigravity quota summary without groups fails so the page falls back to fetchAvailableModels', () => {
+    expect(() => parseAntigravityQuotaSummary({ groups: [] })).toThrow('no usage windows');
+    expect(() => parseAntigravityQuotaSummary({})).toThrow('no usage windows');
+  });
+
+  test('a spent Antigravity weekly limit blocks the 5-hour window of its own group only', () => {
+    const now = Date.parse('2026-11-20T19:00:00Z');
+    const windows = [
+      { id: 'session:gemini', label: '5-hour, Gemini', used: 30, resetsAt: now + HOUR, lengthMs: 5 * HOUR },
+      { id: 'weekly:gemini', label: 'Weekly, Gemini', used: 100, resetsAt: now + 3 * DAY, lengthMs: 7 * DAY },
+      { id: 'session:claude-and-gpt', label: '5-hour, Claude and GPT', used: 10, resetsAt: now + HOUR, lengthMs: 5 * HOUR },
+      { id: 'weekly:claude-and-gpt', label: 'Weekly, Claude and GPT', used: 20, resetsAt: now + 3 * DAY, lengthMs: 7 * DAY },
+    ];
+    const out = accountWindows(windows, now);
+    expect(out.map((w) => [w.id, w.blocked, w.used])).toEqual([
+      ['session:gemini', true, 100], ['weekly:gemini', false, 100], ['session:claude-and-gpt', false, 10], ['weekly:claude-and-gpt', false, 20],
+    ]);
+    expect(out[0].restore).toEqual({ at: now + 3 * DAY, refill: 100 });
   });
 
   test('Gemini CLI quota parses buckets by model family', () => {

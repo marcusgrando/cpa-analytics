@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/marcusgrando/cpa-analytics/internal/accounting"
@@ -37,13 +39,29 @@ type modelRate struct {
 	standard Rates
 	// tiers holds the prices of pricedTiers the model has.
 	tiers map[string]Rates
+	// long holds the rates a request pays once its input passes a threshold,
+	// highest threshold first.
+	long []longRate
+}
+
+// longRate is LiteLLM's "_above_<N>k_tokens" pricing: a request whose input
+// tokens (uncached, cache read and cache write) exceed above pays these rates
+// for all its tokens.
+type longRate struct {
+	above    int64
+	standard Rates
+	tiers    map[string]Rates
 }
 
 // Table is an immutable price table.
 type Table struct {
 	rates     map[string]modelRate
 	overrides map[string]Rates
+	// thresholds are every long-context threshold in the table, highest first.
+	thresholds []int64
 }
+
+var longContextKey = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
 
 // firstPartyProviders are LiteLLM prefixes for the model makers' own APIs.
 // Their price wins over a cloud's or reseller's for a bare model name.
@@ -83,19 +101,91 @@ func ParseLiteLLM(raw []byte) (*Table, error) {
 		if key == "" {
 			continue
 		}
-		mr := modelRate{standard: standard}
-		for _, tier := range pricedTiers {
-			if r, ok := readRates(entry, "_"+tier, &standard); ok {
-				if mr.tiers == nil {
-					mr.tiers = map[string]Rates{}
-				}
-				mr.tiers[tier] = r
-			}
-		}
-		rates[key] = mr
+		rates[key] = modelRate{standard: standard, tiers: readTiers(entry, "", standard), long: readLong(entry, standard)}
 	}
 	addBareAliases(rates)
-	return &Table{rates: rates}, nil
+	return &Table{rates: rates, thresholds: thresholds(rates)}, nil
+}
+
+// readTiers reads the pricedTiers rates for the price keys ending in suffix.
+func readTiers(entry map[string]any, suffix string, standard Rates) map[string]Rates {
+	var tiers map[string]Rates
+	for _, tier := range pricedTiers {
+		if r, ok := readRates(entry, suffix+"_"+tier, &standard); ok {
+			if tiers == nil {
+				tiers = map[string]Rates{}
+			}
+			tiers[tier] = r
+		}
+	}
+	return tiers
+}
+
+func readLong(entry map[string]any, standard Rates) []longRate {
+	var long []longRate
+	for name := range entry {
+		m := longContextKey.FindStringSubmatch(name)
+		if m == nil {
+			continue
+		}
+		k, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		suffix := "_above_" + m[1] + "k_tokens"
+		r, ok := readRates(entry, suffix, &standard)
+		if !ok {
+			continue
+		}
+		long = append(long, longRate{above: k * 1000, standard: r, tiers: readTiers(entry, suffix, r)})
+	}
+	sort.Slice(long, func(i, j int) bool { return long[i].above > long[j].above })
+	return long
+}
+
+func thresholds(rates map[string]modelRate) []int64 {
+	seen := map[int64]bool{}
+	var out []int64
+	for _, mr := range rates {
+		for _, l := range mr.long {
+			if !seen[l.above] {
+				seen[l.above] = true
+				out = append(out, l.above)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] > out[j] })
+	return out
+}
+
+// Band returns the smallest input size that prices the same as input under
+// every model's long-context thresholds, so rows can be grouped by band and
+// priced once per group. It is 0 below every threshold.
+func (t *Table) Band(input int64) int64 {
+	if t == nil {
+		return 0
+	}
+	for _, above := range t.thresholds {
+		if input > above {
+			return above + 1
+		}
+	}
+	return 0
+}
+
+// BandSQL is Band as a SQL expression over inputExpr. The thresholds are
+// integers parsed from the price table, never caller input.
+func (t *Table) BandSQL(inputExpr string) string {
+	if t == nil || len(t.thresholds) == 0 {
+		return "0"
+	}
+	var b strings.Builder
+	b.WriteString("CASE")
+	for _, above := range t.thresholds {
+		fmt.Fprintf(&b, " WHEN (%s) > %d THEN %d", inputExpr, above, above+1)
+	}
+	b.WriteString(" ELSE 0 END")
+	return b.String()
 }
 
 func addBareAliases(rates map[string]modelRate) {
@@ -132,8 +222,13 @@ func addBareAliases(rates map[string]modelRate) {
 }
 
 func sameRate(a, b modelRate) bool {
-	if a.standard != b.standard {
+	if a.standard != b.standard || len(a.long) != len(b.long) {
 		return false
+	}
+	for i := range a.long {
+		if a.long[i].above != b.long[i].above || a.long[i].standard != b.long[i].standard {
+			return false
+		}
 	}
 	for tier, ra := range a.tiers {
 		if rb, ok := b.tiers[tier]; ok && ra != rb {
@@ -179,7 +274,7 @@ func number(v any) (float64, bool) {
 
 // WithOverrides returns a table where overrides (USD per 1M tokens) win over LiteLLM.
 func WithOverrides(t *Table, overrides map[string]PriceOverride) *Table {
-	out := &Table{rates: t.rates, overrides: make(map[string]Rates, len(overrides))}
+	out := &Table{rates: t.rates, thresholds: t.thresholds, overrides: make(map[string]Rates, len(overrides))}
 	for model, o := range overrides {
 		out.overrides[normalize(model)] = Rates{
 			Input:      o.Input / 1e6,
@@ -203,8 +298,10 @@ func (t *Table) Len() int { return len(t.rates) }
 
 // Lookup finds the rates for a model name as CPA or the upstream reports it.
 // The priority and flex tiers use LiteLLM's prices for them when the model
-// has them, and the standard prices otherwise.
-func (t *Table) Lookup(model, tier string) (Rates, Source, bool) {
+// has them, and the standard prices otherwise. input is the request's input
+// tokens, which select the long-context rates past their threshold.
+// Overrides have no long-context rates.
+func (t *Table) Lookup(model, tier string, input int64) (Rates, Source, bool) {
 	key := stripVariant(normalize(model))
 	bare := bareName(key)
 	if bare == "" || unpriceable[bare] {
@@ -220,7 +317,16 @@ func (t *Table) Lookup(model, tier string) (Rates, Source, bool) {
 		if !ok {
 			continue
 		}
-		if r, ok := mr.tiers[strings.ToLower(strings.TrimSpace(tier))]; ok {
+		tier = strings.ToLower(strings.TrimSpace(tier))
+		for _, l := range mr.long {
+			if input > l.above {
+				if r, ok := l.tiers[tier]; ok {
+					return r, SourceLiteLLM, true
+				}
+				return l.standard, SourceLiteLLM, true
+			}
+		}
+		if r, ok := mr.tiers[tier]; ok {
 			return r, SourceLiteLLM, true
 		}
 		return mr.standard, SourceLiteLLM, true

@@ -10,9 +10,9 @@ import (
 var page []byte
 
 // The Limits math, the period comparison, the provider colors, the tooltip
-// placement, the sparklines and the line end labels live in plain scripts so
-// bun can test them. The page
-// stays a single static file, so each is inlined at its placeholder.
+// placement, the sparklines, the line end labels, the "Right now" figures and
+// the latency scatter scales live in plain scripts so bun can test them. The
+// page stays a single static file, so each is inlined at its placeholder.
 var (
 	//go:embed limits.js
 	limitsScript []byte
@@ -26,6 +26,10 @@ var (
 	sparklineScript []byte
 	//go:embed endlabels.js
 	endLabelsScript []byte
+	//go:embed realtime.js
+	realtimeScript []byte
+	//go:embed scatter.js
+	scatterScript []byte
 )
 
 var index = inline(page, map[string][]byte{
@@ -35,6 +39,8 @@ var index = inline(page, map[string][]byte{
 	"/* tooltip.js */":   tooltipScript,
 	"/* sparkline.js */": sparklineScript,
 	"/* endlabels.js */": endLabelsScript,
+	"/* realtime.js */":  realtimeScript,
+	"/* scatter.js */":   scatterScript,
 })
 
 func inline(page []byte, scripts map[string][]byte) []byte {

@@ -777,3 +777,43 @@ func TestDriftTokensPerSec(t *testing.T) {
 		t.Fatalf("tps = %+v, want median 75", d.Points)
 	}
 }
+
+// LiteLLM prices some models higher once a request's input passes a
+// threshold. Each request is priced by its own input, so one long request
+// does not reprice the short ones it is summed with.
+func TestCostChargesLongContextRequestsTheirRate(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "long.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	row := func(id string, at time.Time, uncached int64) store.Row {
+		return store.Row{RequestID: id, TraceID: id, RequestedAt: at.UnixMilli(), Provider: "gemini", Model: "gemini-3-pro",
+			ResponseModel: "gemini-3-pro", Generate: true, UncachedInput: uncached, OutputNonReasoning: 1000}
+	}
+	if err := s.InsertBatch([]store.Row{row("short", day1.Add(time.Hour), 150_000), row("long", day1.Add(2*time.Hour), 250_000)}); err != nil {
+		t.Fatal(err)
+	}
+	table, err := pricing.ParseLiteLLM([]byte(`{"gemini/gemini-3-pro": {"input_cost_per_token": 2e-06, "output_cost_per_token": 1.2e-05,
+		"input_cost_per_token_above_200k_tokens": 4e-06, "output_cost_per_token_above_200k_tokens": 1.8e-05}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	short := 150_000*2e-6 + 1000*1.2e-5
+	long := 250_000*4e-6 + 1000*1.8e-5
+
+	sum, err := Summary(s.DB(), rangeFilter(), table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !near(sum.Totals.CostUSD, short+long) {
+		t.Errorf("summary cost = %v, want %v", sum.Totals.CostUSD, short+long)
+	}
+	d, err := Drift(s.DB(), rangeFilter(), table, "response_model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Points) != 1 || !near(d.Points[0].Median.CostUSD, (short+long)/2) {
+		t.Errorf("drift points = %+v, want median cost %v", d.Points, (short+long)/2)
+	}
+}

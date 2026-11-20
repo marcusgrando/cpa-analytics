@@ -27,7 +27,7 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
 func TestLookupResolvesNameVariants(t *testing.T) {
 	tbl := sampleTable(t)
 	for _, name := range []string{"claude-opus-4-8", "Claude-Opus-4-8", "anthropic/claude-opus-4-8", "claude-opus-4-8-20260101", "claude-opus-4-8[1m]", "claude-opus-4-8(high)"} {
-		r, src, ok := tbl.Lookup(name, "")
+		r, src, ok := tbl.Lookup(name, "", 0)
 		if !ok || src != SourceLiteLLM || !near(r.Input, 5e-06) || !near(r.CacheRead, 5e-07) || !near(r.CacheWrite, 6.25e-06) {
 			t.Errorf("Lookup(%q) = %+v %q %v", name, r, src, ok)
 		}
@@ -35,29 +35,29 @@ func TestLookupResolvesNameVariants(t *testing.T) {
 }
 
 func TestLookupPrefersFirstPartyForBareName(t *testing.T) {
-	r, _, ok := sampleTable(t).Lookup("gpt-5.6-sol", "")
+	r, _, ok := sampleTable(t).Lookup("gpt-5.6-sol", "", 0)
 	if !ok || !near(r.Input, 2e-06) {
 		t.Fatalf("got %+v %v", r, ok)
 	}
 }
 
 func TestLookupConflictingResellersStayUnpriced(t *testing.T) {
-	if r, _, ok := sampleTable(t).Lookup("glm-9", ""); ok {
+	if r, _, ok := sampleTable(t).Lookup("glm-9", "", 0); ok {
 		t.Fatalf("ambiguous bare name priced: %+v", r)
 	}
 }
 
 func TestLookupPriorityTier(t *testing.T) {
 	tbl := sampleTable(t)
-	std, _, _ := tbl.Lookup("gpt-5.5", "default")
-	pri, _, ok := tbl.Lookup("gpt-5.5", "priority")
+	std, _, _ := tbl.Lookup("gpt-5.5", "default", 0)
+	pri, _, ok := tbl.Lookup("gpt-5.5", "priority", 0)
 	if !ok || !near(std.Input, 1.25e-06) || !near(pri.Input, 2.5e-06) || !near(pri.Output, 2e-05) || !near(pri.CacheRead, 2.5e-07) {
 		t.Fatalf("std %+v pri %+v", std, pri)
 	}
 }
 
 func TestLookupMissingCacheRatesFallBackToInput(t *testing.T) {
-	r, _, ok := sampleTable(t).Lookup("vertex_ai/claude-opus-4-8", "")
+	r, _, ok := sampleTable(t).Lookup("vertex_ai/claude-opus-4-8", "", 0)
 	if !ok || !near(r.CacheRead, 5.5e-06) || !near(r.CacheWrite, 5.5e-06) {
 		t.Fatalf("got %+v", r)
 	}
@@ -66,7 +66,7 @@ func TestLookupMissingCacheRatesFallBackToInput(t *testing.T) {
 func TestLookupUnknownAndUnpriceable(t *testing.T) {
 	tbl := sampleTable(t)
 	for _, name := range []string{"gpt-9-unknown", "opus", "", "image-only-model", "bad-entry", "sample_spec"} {
-		if r, _, ok := tbl.Lookup(name, ""); ok {
+		if r, _, ok := tbl.Lookup(name, "", 0); ok {
 			t.Errorf("Lookup(%q) priced: %+v", name, r)
 		}
 	}
@@ -77,11 +77,11 @@ func TestOverridesWin(t *testing.T) {
 		"claude-opus-4-8": {Input: 1, Output: 2, CacheRead: ptr(0.1), CacheWrite: ptr(1.25)},
 		"my-local-model":  {Input: 0.5, Output: 1},
 	})
-	r, src, ok := tbl.Lookup("claude-opus-4-8", "")
+	r, src, ok := tbl.Lookup("claude-opus-4-8", "", 0)
 	if !ok || src != SourceOverride || !near(r.Input, 1e-06) || !near(r.CacheWrite, 1.25e-06) {
 		t.Fatalf("got %+v %q", r, src)
 	}
-	r, _, ok = tbl.Lookup("my-local-model", "")
+	r, _, ok = tbl.Lookup("my-local-model", "", 0)
 	if !ok || !near(r.CacheRead, 0.5e-06) {
 		t.Fatalf("override without cache rates should fall back to input: %+v", r)
 	}
@@ -108,7 +108,7 @@ func TestOverrideKeepsExplicitZeroCachePrice(t *testing.T) {
 	if err := yaml.Unmarshal([]byte("free-cache:\n  input: 2\n  output: 4\n  cache_read: 0\n  cache_write: 0\n"), &overrides); err != nil {
 		t.Fatal(err)
 	}
-	r, _, ok := WithOverrides(&Table{}, overrides).Lookup("free-cache", "")
+	r, _, ok := WithOverrides(&Table{}, overrides).Lookup("free-cache", "", 0)
 	if !ok || r.CacheRead != 0 || r.CacheWrite != 0 || !near(r.Input, 2e-06) {
 		t.Fatalf("explicit zero cache prices = %+v, want 0", r)
 	}
@@ -118,7 +118,7 @@ func ptr(v float64) *float64 { return &v }
 
 // OpenAI's flex tier is billed at about half the standard price.
 func TestLookupFlexTier(t *testing.T) {
-	r, _, ok := sampleTable(t).Lookup("gpt-5.5", "flex")
+	r, _, ok := sampleTable(t).Lookup("gpt-5.5", "flex", 0)
 	if !ok || !near(r.Input, 6.25e-07) || !near(r.Output, 5e-06) || !near(r.CacheRead, 6.25e-08) {
 		t.Fatalf("flex = %+v %v", r, ok)
 	}
@@ -134,5 +134,67 @@ func TestCostByTypeAddsUpToCost(t *testing.T) {
 	}
 	if !near(got.Total(), Cost(r, b)) {
 		t.Errorf("parts sum to %v, Cost is %v", got.Total(), Cost(r, b))
+	}
+}
+
+// longContextTable prices a model that charges more once a request's input
+// passes 200k tokens, as LiteLLM lists Gemini Pro and Claude's 1M context.
+func longContextTable(t *testing.T) *Table {
+	t.Helper()
+	tbl, err := ParseLiteLLM([]byte(`{
+		"gemini/gemini-3-pro": {"input_cost_per_token": 2e-06, "output_cost_per_token": 1.2e-05, "cache_read_input_token_cost": 2e-07,
+			"input_cost_per_token_above_200k_tokens": 4e-06, "output_cost_per_token_above_200k_tokens": 1.8e-05,
+			"cache_read_input_token_cost_above_200k_tokens": 4e-07},
+		"openai/gpt-6": {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 1.5e-05, "cache_read_input_token_cost": 2.5e-07,
+			"input_cost_per_token_priority": 5e-06, "output_cost_per_token_priority": 3e-05,
+			"input_cost_per_token_above_272k_tokens": 5e-06, "output_cost_per_token_above_272k_tokens": 2.25e-05,
+			"input_cost_per_token_above_272k_tokens_priority": 1e-05, "output_cost_per_token_above_272k_tokens_priority": 4.5e-05}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tbl
+}
+
+func TestLookupChargesLongContextRatesAboveTheThreshold(t *testing.T) {
+	tbl := longContextTable(t)
+	at, _, _ := tbl.Lookup("gemini-3-pro", "", 200_000)
+	above, _, _ := tbl.Lookup("gemini-3-pro", "", 200_001)
+	if !near(at.Input, 2e-06) || !near(at.Output, 1.2e-05) || !near(at.CacheRead, 2e-07) {
+		t.Errorf("at 200k = %+v, want the standard rates", at)
+	}
+	if !near(above.Input, 4e-06) || !near(above.Output, 1.8e-05) || !near(above.CacheRead, 4e-07) {
+		t.Errorf("above 200k = %+v, want the long-context rates", above)
+	}
+}
+
+func TestLookupLongContextKeepsTheServiceTier(t *testing.T) {
+	tbl := longContextTable(t)
+	pri, _, _ := tbl.Lookup("gpt-6", "priority", 300_000)
+	std, _, _ := tbl.Lookup("gpt-6", "", 300_000)
+	if !near(pri.Input, 1e-05) || !near(pri.Output, 4.5e-05) || !near(std.Input, 5e-06) {
+		t.Errorf("priority above 272k = %+v, standard above 272k = %+v", pri, std)
+	}
+	// Without a cache read price for the long band, it keeps the standard ratio to input.
+	if !near(std.CacheRead, 5e-07) {
+		t.Errorf("cache read above 272k = %v, want 5e-07", std.CacheRead)
+	}
+}
+
+// Band maps an input size to the smallest input that prices the same, so a
+// query can group rows by band and price each group once.
+func TestBandGroupsInputsThatPriceAlike(t *testing.T) {
+	tbl := longContextTable(t)
+	for input, want := range map[int64]int64{0: 0, 200_000: 0, 200_001: 200_001, 272_000: 200_001, 272_001: 272_001, 1_000_000: 272_001} {
+		if got := tbl.Band(input); got != want {
+			t.Errorf("Band(%d) = %d, want %d", input, got, want)
+		}
+	}
+	want := "CASE WHEN (x) > 272000 THEN 272001 WHEN (x) > 200000 THEN 200001 ELSE 0 END"
+	if got := tbl.BandSQL("x"); got != want {
+		t.Errorf("BandSQL = %q, want %q", got, want)
+	}
+	if got := sampleTable(t).BandSQL("x"); got != "0" {
+		t.Errorf("BandSQL without long-context prices = %q, want 0", got)
 	}
 }

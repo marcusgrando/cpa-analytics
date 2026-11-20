@@ -40,7 +40,7 @@ type AffinityResult struct {
 // kept the credential have none.
 func Affinity(db *sql.DB, f Filter, table *pricing.Table) (AffinityResult, error) {
 	where, args := f.where(true)
-	rows, err := db.Query(`SELECT provider, session_id, (`+modelExpr+`) AS m, (`+tierExpr+`), auth_index, MIN(requested_at) AS at, SUM(cache_write)
+	rows, err := db.Query(`SELECT provider, session_id, (`+modelExpr+`) AS m, (`+tierExpr+`), auth_index, MIN(requested_at) AS at, SUM(cache_write), SUM(`+inputExpr+`)
 		FROM requests WHERE generate = 1 AND failed = 0 AND session_id <> '' AND auth_index <> '' AND `+where+`
 		GROUP BY provider, session_id, m, `+callExpr+`, auth_index
 		ORDER BY provider, session_id, m, at`, args...)
@@ -69,9 +69,9 @@ func Affinity(db *sql.DB, f Filter, table *pricing.Table) (AffinityResult, error
 	for rows.Next() {
 		var (
 			provider, session, model, tier, account string
-			at, cacheWrite                          int64
+			at, cacheWrite, input                   int64
 		)
-		if err := rows.Scan(&provider, &session, &model, &tier, &account, &at, &cacheWrite); err != nil {
+		if err := rows.Scan(&provider, &session, &model, &tier, &account, &at, &cacheWrite, &input); err != nil {
 			return AffinityResult{}, fmt.Errorf("affinity scan: %w", err)
 		}
 		key := provider + "\x1f" + session + "\x1f" + model
@@ -85,7 +85,7 @@ func Affinity(db *sql.DB, f Filter, table *pricing.Table) (AffinityResult, error
 			row = &AffinityRow{Provider: provider}
 			byProvider[provider] = row
 		}
-		cost, _ := p.price(model, tier, Tokens{CacheWrite: cacheWrite})
+		cost, _ := p.price(model, tier, input, Tokens{CacheWrite: cacheWrite})
 		row.Calls++
 		row.CacheWrite += cacheWrite
 		row.CacheWriteUSD += cost

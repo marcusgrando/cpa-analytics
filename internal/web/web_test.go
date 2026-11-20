@@ -27,6 +27,7 @@ func TestIndexMakesNoExternalRequests(t *testing.T) {
 		"https://chatgpt.com/backend-api/wham/usage",
 		"https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 		"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+		"https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 		"https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
 		"https://api.kimi.com/coding/v1/usages",
 	} {
@@ -243,6 +244,8 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* tooltip.js */":   "function besideColumn(column, box, viewport, pointerY)",
 		"/* sparkline.js */": "function sparkline(values, height, pad)",
 		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
+		"/* realtime.js */":  "function realtimeFigures({ now, today })",
+		"/* scatter.js */":   "function nearestPoint(points, x, y, radius)",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)
@@ -496,6 +499,54 @@ func TestIndexTiesSparklineTooltipToItsTile(t *testing.T) {
 		"el('span', { class: 'spark-cursor' })",
 		"drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost')",
 		"recordedValues(sums.map(value), xs, size, data.summary.data_since)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+// "Right now" compares the last minutes with the day so far. It keeps the
+// page filters but not the period, and loads with the rest of the page.
+func TestIndexShowsRightNow(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`<section id="realtime" class="card" aria-labelledby="realtime-title">`,
+		`<button type="button" data-window="15" aria-pressed="true">15 min</button>`,
+		"api('realtime', realtimeParams())",
+		"realtimeFigures(data.realtime)",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+// The request log loads when opened, one page at a time, and a row opens its
+// details in place.
+func TestIndexListsRequests(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`<details id="requests" class="card" aria-labelledby="requests-title">`,
+		"api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE })",
+		"row.setAttribute('aria-expanded', String(open))",
+		"const DETAIL_SECTIONS = ['latency', 'requests', 'leftover', 'affinity', 'quality'];",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+// The latency scatter plots time to first token against total latency on log
+// scales, colored by provider.
+func TestIndexPlotsLatency(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`<details id="latency" class="card" aria-labelledby="latency-title">`,
+		"api('latency', p)",
+		"logTicks(xDomain[0], xDomain[1])",
+		"colorFor('provider', pt.provider)",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)

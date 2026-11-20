@@ -87,6 +87,23 @@ func (p *Plugin) routes() map[string]route {
 		"affinity": {"Account switches within sessions, and the cache they wrote again", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.Affinity(db, f, t)
 		}},
+		"requests": {"One page of upstream calls with their metadata, tokens and cost", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+			rq, err := query.ParseRequestsQuery(q)
+			if err != nil {
+				return nil, err
+			}
+			return query.Requests(db, f, t, rq)
+		}},
+		"realtime": {"The last 15, 30 or 60 minutes against the viewer's day so far", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+			window, err := query.ParseRealtimeWindow(q)
+			if err != nil {
+				return nil, err
+			}
+			return query.Realtime(db, f, t, window, time.Now())
+		}},
+		"latency": {"Time to first token and total latency of a sample of successful calls", func(db *sql.DB, f query.Filter, _ *pricing.Table, _ url.Values) (any, error) {
+			return query.Latency(db, f, query.MaxLatencyPoints)
+		}},
 		"health": {"Plugin storage, writer, join and pricing health", nil},
 	}
 }
