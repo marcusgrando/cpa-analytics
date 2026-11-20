@@ -234,7 +234,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
     <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
       <h2 id="limits-title">Subscription limits</h2>
-      <p class="sub">The top bar pools every account, weighted by plan. Each row below is one account against its own limit. The tick marks an even pace.</p>
+      <p class="sub">With multiple accounts, the top bar pools them weighted by plan and each row below is one account against its own limit. The tick marks an even pace.</p>
       <div id="limits-body"></div>
     </section>
 
@@ -1631,8 +1631,45 @@ function accountRow(m, share, r, now) {
     el('div', { class: 'acct-value' }, status));
 }
 
-function renderPool(pool, byAccount, now, readings) {
+function renderPool(pool, byAccount, now, readings, nameSingle = false) {
   const pace = PACE[pool.pace];
+  const single = pool.members.length === 1;
+  if (single) {
+    const m = pool.members[0];
+    const r = byAccount.get(m.account);
+    const name = accountName(r.account);
+    const resets = (t) => (t && t > now ? `Resets in ${fmtDuration(t - now)} (${fmtWhen(t)})` : '');
+    let color = 'var(--tone1)';
+    const head = [el('strong', { text: pool.label })];
+    if (nameSingle) head.push(el('span', { text: [name, r.plan].filter(Boolean).join(', ') }));
+    let barLabel;
+    if (m.blocked) {
+      color = 'var(--other)';
+      head.push(el('span', { text: 'Blocked by the weekly limit' + (m.restore ? `, back in ${fmtDuration(m.restore.at - now)} (${fmtWhen(m.restore.at)})` : '') }));
+      barLabel = `${pool.label}: blocked by the weekly limit`;
+    } else if (m.used >= LIMIT_REACHED) {
+      color = 'var(--critical)';
+      head.push(
+        el('span', { text: fmtShare(m.used) + ' used' }),
+        el('span', { class: 'status' }, el('span', { class: 'dot', style: 'background:var(--critical)' }), 'Limit reached'),
+        resets(m.resetsAt) ? el('span', { text: resets(m.resetsAt) }) : null,
+      );
+      barLabel = `${pool.label}: ${fmtShare(m.used)} used, limit reached`;
+    } else {
+      const resetText = resets(m.resetsAt) || (m.used === 0 ? 'Not started' : '');
+      head.push(
+        el('span', { text: fmtShare(m.used) + ' used' }),
+        pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
+          el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
+        resetText ? el('span', { text: resetText }) : null,
+      );
+      barLabel = `${pool.label}: ${fmtShare(m.used)} used, ${fmtShare(pool.expected)} of the window elapsed`;
+    }
+    return el('div', { class: 'pool' },
+      el('div', { class: 'pool-head' }, ...head),
+      meter(m.used, m.blocked ? 0 : pool.expected, { big: true, color, label: barLabel }),
+      pool.id === 'weekly' && readings ? weeklyTrend(pool, byAccount, readings, now) : null);
+  }
   const next = pool.restores[0];
   return el('div', { class: 'pool' },
     el('div', { class: 'pool-head' },
@@ -1686,14 +1723,19 @@ function renderLimits() {
     const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
     const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
     const weighted = list.length > 0 && list[0].weighted;
-    const sub = `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
+    const only = ok.length === 1 ? ok[0] : null;
+    const sub = only
+      ? (results.length === 1
+        ? [accountName(only.account), only.plan].filter(Boolean).join(', ')
+        : [`1 of ${results.length} accounts read`, accountName(only.account), only.plan].filter(Boolean).join(', '))
+      : `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
     const creditNote = ok.filter((r) => r.credits).map((r) => `${accountName(r.account)} ${fmtInt(r.credits.amount)} AI credits`);
     const cooldownNotes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
       .filter(({ st }) => st.cooldowns.length > 0)
       .map(({ r, st }) => `${accountName(r.account)}: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : ''));
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now, (provider.id === 'claude' || provider.id === 'codex') ? limitsData.history && limitsData.history.accounts : null)),
+      ...list.map((p) => renderPool(p, byAccount, now, (provider.id === 'claude' || provider.id === 'codex') ? limitsData.history && limitsData.history.accounts : null, ok.length > 1)),
       ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
       creditNote.length ? el('p', { class: 'notice', text: 'Google One AI credits: ' + creditNote.join(', ') }) : null,
       cooldownNotes.length ? el('p', { class: 'notice', text: 'CPA cooldowns: ' + cooldownNotes.join('; ') }) : null,
@@ -1743,26 +1785,32 @@ function weeklyTrend(pool, byAccount, readings, now) {
   })), now, TREND_AHEAD, TREND_STEP);
   const weights = weightsOf(pool.members);
   const total = weights.reduce((sum, w) => sum + w, 0);
+  const single = pool.members.length === 1;
   // A pool rate in points of the pool per hour, or null when no account has two readings.
   const poolRate = (list) => (list.some((r) => r !== null) ? list.reduce((sum, r, i) => sum + weights[i] * (r || 0), 0) / total : null);
-  const fmtRate = (r) => (r === null ? 'not enough readings' : r.toFixed(1) + '% of the pool per hour');
+  const fmtRate = (r) => (r === null ? 'not enough readings' : r.toFixed(1) + (single ? '% per hour' : '% of the pool per hour'));
   const nameOf = (account) => accountName(byAccount.get(account).account);
   const first = projection.firstFull;
-  const stats = el('div', { class: 'trend-stats' },
-    el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
-    el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
-    el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
-    el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : fmtWhen(projection.poolFull) })));
+  const stats = single
+    ? el('div', { class: 'trend-stats' },
+      el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
+      el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
+      el('span', {}, 'At limit: ', el('strong', { text: first ? (first.at <= now ? 'now' : `in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'not in the next 7 days' })))
+    : el('div', { class: 'trend-stats' },
+      el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
+      el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
+      el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
+      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : fmtWhen(projection.poolFull) })));
   const chart = el('div', { class: 'chart trend' });
-  pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label));
+  pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label, single));
   return el('div', {}, stats, chart,
     el('div', { class: 'legend' },
       el('span', {}, el('span', { class: 'key-line', style: 'background:var(--tone1)' }), 'Recorded'),
-      el('span', {}, el('span', { class: 'key-line dashed' }), `Projected at each account's last 24 h rate`)));
+      el('span', {}, el('span', { class: 'key-line dashed' }), single ? 'Projected at last 24 h rate' : `Projected at each account's last 24 h rate`)));
 }
 
 // trendChart draws pool usage over time: recorded up to now, projected after.
-function trendChart(container, recorded, projected, now, label) {
+function trendChart(container, recorded, projected, now, label, single = false) {
   if (!container.isConnected) return;
   const width = Math.max(280, container.clientWidth);
   const height = 180;
@@ -1771,7 +1819,7 @@ function trendChart(container, recorded, projected, now, label) {
   const to = projected[projected.length - 1].t;
   const x = (t) => m.left + ((t - from) / (to - from)) * (width - m.left - m.right);
   const y = (v) => m.top + (1 - v / 100) * (height - m.top - m.bottom);
-  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': `${label} pool usage, recorded for 7 days and projected for 7 days` });
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': `${label} ${single ? 'usage' : 'pool usage'}, recorded for 7 days and projected for 7 days` });
   for (const v of [0, 50, 100]) {
     svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.append(svgEl('text', { x: m.left - 6, y: y(v) + 4, 'text-anchor': 'end', text: v + '%' }));
@@ -1813,7 +1861,7 @@ function trendChart(container, recorded, projected, now, label) {
     dot.setAttribute('cx', x(p.t));
     dot.setAttribute('cy', y(p.used));
     dot.setAttribute('visibility', 'visible');
-    showTooltip(e, fmtStamp(p.t), [{ value: fmtShare(p.used), label: p.t > now ? 'of the pool used, projected' : 'of the pool used' }]);
+    showTooltip(e, fmtStamp(p.t), [{ value: fmtShare(p.used), label: single ? (p.t > now ? 'used, projected' : 'used') : (p.t > now ? 'of the pool used, projected' : 'of the pool used') }]);
   });
   hit.addEventListener('pointerleave', () => { dot.setAttribute('visibility', 'hidden'); hideTooltip(); });
   svg.append(hit);

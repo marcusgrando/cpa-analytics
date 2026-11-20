@@ -2,6 +2,8 @@
 // Fixtures follow the shapes CPA's api-call returned from the live endpoints
 // on 2026-11-15, trimmed to the fields the page reads.
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import {
   claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage,
   parseAntigravityPlan, parseAntigravityUsage, parseAntigravityQuotaSummary, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
@@ -455,5 +457,159 @@ describe('other providers', () => {
     expect(st.cooldowns.length).toBe(1);
     expect(st.recentSuccess).toBe(15);
     expect(st.recentFailed).toBe(3);
+  });
+});
+
+describe('limits rendering', () => {
+  const page = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const limitsLib = readFileSync(new URL('./limits.js', import.meta.url), 'utf8');
+  const limitsSection = page.split('/* ---------- limits ---------- */')[1].split('/* ---------- right now ---------- */')[0];
+
+  function renderView(limitsData) {
+    const body = { children: [], replaceChildren(...kids) { this.children = kids.filter(Boolean); } };
+    const makeEl = (tag, attrs = {}, ...children) => {
+      const node = {
+        tag,
+        attrs: { ...attrs },
+        className: attrs.class || '',
+        children: [],
+        append(...kids) { this.children.push(...kids.filter((k) => k !== null && k !== undefined && k !== false)); },
+      };
+      if (attrs.text !== undefined) node.children.push(String(attrs.text));
+      node.append(...children);
+      return node;
+    };
+    const ctx = vm.createContext({
+      HOUR, DAY,
+      el: makeEl,
+      fmtInt: (n) => String(Math.round(n)),
+      document: { getElementById: (id) => (id === 'limits-body' ? body : { hidden: false, textContent: '' }) },
+      AuthError: class AuthError extends Error {},
+      api: async () => null,
+      management: async () => ({ files: [] }),
+    });
+    vm.runInContext(limitsLib + '\n' + limitsSection + '\nglobalThis.__render = (d) => { limitsData = d; renderLimits(); };', ctx);
+    ctx.__render(limitsData);
+    return body.children;
+  }
+
+  const walk = (nodes, pred, out = []) => {
+    for (const n of nodes) {
+      if (!n || typeof n !== 'object') continue;
+      if (pred(n)) out.push(n);
+      if (Array.isArray(n.children)) walk(n.children, pred, out);
+    }
+    return out;
+  };
+  const textOf = (node) => {
+    if (typeof node === 'string') return node;
+    if (!node || !Array.isArray(node.children)) return '';
+    return node.children.map(textOf).join(' ');
+  };
+  const hasClass = (node, cls) => String(node.className || '').split(/\s+/).includes(cls);
+
+  test('single-account provider omits duplicate account rows and puts identity in subtitle', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: {
+        accounts: [{
+          auth_index: 'c1',
+          points: [
+            { t: now - 24 * HOUR, weekly_pct: 70, weekly_reset: now + 4 * DAY },
+            { t: now - 3 * HOUR, weekly_pct: 90, weekly_reset: now + 4 * DAY },
+          ],
+        }],
+      },
+      results: [{
+        account: { auth_index: 'c1', provider: 'codex', email: 'eu@example.com' },
+        plan: 'Pro Lite',
+        weight: 5,
+        windows: [{ id: 'weekly', label: 'Weekly', used: 93, resetsAt: now + 4 * DAY, lengthMs: 7 * DAY }],
+      }],
+    });
+    expect(sections.length).toBe(1);
+    expect(walk(sections, (n) => hasClass(n, 'acct')).length).toBe(0);
+    expect(walk(sections, (n) => hasClass(n, 'meter')).length).toBe(1);
+    const sub = walk(sections, (n) => hasClass(n, 'sub'))[0];
+    expect(textOf(sub)).toBe('eu@example.com, Pro Lite');
+    const head = walk(sections, (n) => hasClass(n, 'pool-head'))[0];
+    expect(textOf(head)).toContain('93% used');
+    expect(textOf(head)).toContain('Resets in');
+    expect(textOf(head)).not.toContain('of the pool');
+    const stats = walk(sections, (n) => hasClass(n, 'trend-stats'))[0];
+    expect(textOf(stats)).toContain('At limit:');
+    expect(textOf(stats)).not.toContain('First at limit:');
+    expect(textOf(stats)).not.toContain('Whole pool at limit:');
+    expect(textOf(stats)).not.toContain('of the pool per hour');
+  });
+
+  test('single-account blocked, limit-reached and not-started states render on the single bar', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: null,
+      results: [{
+        account: { auth_index: 'a1', provider: 'antigravity', email: 'user@example.com' },
+        plan: 'Pro',
+        weight: 5,
+        windows: [
+          { id: 'session:gemini', label: '5-hour, Gemini', used: 20, resetsAt: now + HOUR, lengthMs: 5 * HOUR },
+          { id: 'weekly:gemini', label: 'Weekly, Gemini', used: 100, resetsAt: now + 2 * DAY, lengthMs: 7 * DAY },
+          { id: 'session:other', label: '5-hour, Other', used: 0, resetsAt: null, lengthMs: 5 * HOUR },
+        ],
+      }],
+    });
+    expect(walk(sections, (n) => hasClass(n, 'acct')).length).toBe(0);
+    const poolsRendered = walk(sections, (n) => hasClass(n, 'pool'));
+    expect(poolsRendered.length).toBe(3);
+    // Blocked 5-hour window uses var(--other) and explains why it is blocked.
+    const blockedFill = walk([poolsRendered[0]], (n) => hasClass(n, 'fill'))[0];
+    expect(blockedFill.attrs.style).toContain('var(--other)');
+    expect(textOf(poolsRendered[0])).toContain('Blocked by the weekly limit');
+    // Exhausted weekly window uses var(--critical) and shows Limit reached.
+    const spentFill = walk([poolsRendered[1]], (n) => hasClass(n, 'fill'))[0];
+    expect(spentFill.attrs.style).toContain('var(--critical)');
+    expect(textOf(poolsRendered[1])).toContain('Limit reached');
+    // Untouched window shows Not started.
+    expect(textOf(poolsRendered[2])).toContain('Not started');
+  });
+
+  test('multi-account provider keeps account rows for shared windows and names lone-account windows', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: null,
+      results: [
+        {
+          account: { auth_index: 'u1', provider: 'claude', email: 'first@example.com' },
+          plan: 'Max 20x',
+          weight: 20,
+          windows: [
+            { id: 'weekly', label: 'Weekly', used: 40, resetsAt: now + 3 * DAY, lengthMs: 7 * DAY },
+            { id: 'weekly:Fable', label: 'Weekly, Fable', used: 25, resetsAt: now + 3 * DAY, lengthMs: 7 * DAY },
+          ],
+        },
+        {
+          account: { auth_index: 'u2', provider: 'claude', email: 'second@example.com' },
+          plan: 'Max 5x',
+          weight: 5,
+          windows: [
+            { id: 'weekly', label: 'Weekly', used: 80, resetsAt: now + 2 * DAY, lengthMs: 7 * DAY },
+          ],
+        },
+      ],
+    });
+    const poolsRendered = walk(sections, (n) => hasClass(n, 'pool'));
+    expect(poolsRendered.length).toBe(2);
+    // Shared Weekly window has the pool bar plus 2 per-account rows.
+    expect(walk([poolsRendered[0]], (n) => hasClass(n, 'acct')).length).toBe(2);
+    expect(textOf(poolsRendered[0])).toContain('of the pool used');
+    // Single-member scoped window omits duplicate .acct row and names its owner.
+    expect(walk([poolsRendered[1]], (n) => hasClass(n, 'acct')).length).toBe(0);
+    expect(textOf(poolsRendered[1])).toContain('first@example.com, Max 20x');
   });
 });

@@ -553,3 +553,17 @@ func TestIndexPlotsLatency(t *testing.T) {
 		}
 	}
 }
+
+// When a window has only one account, the Limits view renders one bar instead
+// of duplicating the same meter in an account row beneath the pool bar.
+func TestIndexOmitsDuplicateBarForSingleAccountLimit(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		"const single = pool.members.length === 1;",
+		"el('span', {}, 'At limit: '",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
