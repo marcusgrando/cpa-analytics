@@ -25,10 +25,11 @@ function dashboard() {
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
     timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
-    breakdown: { rows: [] }, pricing: {}, options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'] },
+    breakdown: { rows: [] }, errors: { total: 0, rows: [] }, pricing: {},
+    options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'], accounts: ['acc1'] },
   };
   const ctx = vm.createContext({
-    state: { period: 7, provider: '', model: '', client: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model' },
+    state: { period: 7, provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model' },
     data: {}, autoRefresh: { timer: 0 }, AuthError: class AuthError extends Error {},
     document: {
       body: { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) } },
@@ -48,7 +49,7 @@ function dashboard() {
     forgetKey: () => { ctx.data = {}; renders.push('forget-key'); }, showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
-  ctx.filterParams = () => ({ ...ctx.rangeParams(), provider: ctx.state.provider, model: ctx.state.model, client: ctx.state.client, api_key: ctx.state.apiKey });
+  ctx.filterParams = () => ({ ...ctx.rangeParams(), provider: ctx.state.provider, model: ctx.state.model, client: ctx.state.client, account: ctx.state.account, api_key: ctx.state.apiKey });
   vm.runInContext(loading + wiring, ctx);
   return { ctx, calls, credentialCalls, renders, painted, node, classes, responses };
 }
@@ -196,12 +197,14 @@ test('forgetting a key clears usage metadata, account profiles and visible healt
   ctx.data = { credentials: [{ label: 'previous account' }], options: { clients: ['previous client'] } };
   ctx.limitsData = { results: ['previous limit'] };
   ctx.claudeProfiles = new Map([['previous account', {}]]);
+  ctx.antigravityPlans = new Map([['previous account', {}]]);
   node('health').children = ['previous error'];
   vm.runInContext(page.slice(page.indexOf('function forgetKey()'), page.indexOf('function showKeyForm(')), ctx);
   ctx.forgetKey();
   expect(ctx.data).toEqual({});
   expect(ctx.limitsData).toBeNull();
   expect(ctx.claudeProfiles.size).toBe(0);
+  expect(ctx.antigravityPlans.size).toBe(0);
   expect(node('health').children).toEqual([]);
 });
 
@@ -343,10 +346,22 @@ test('changing a grouping only fetches that section, using the displayed range a
   ctx.state.by = 'account';
   await ctx.refreshGroup('breakdown');
   expect(calls).toEqual([
-    { route: 'drift', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', api_key: '', group: 'client_version' } },
-    { route: 'breakdown', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', api_key: '', by: 'account' } },
+    { route: 'drift', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', account: '', api_key: '', group: 'client_version' } },
+    { route: 'breakdown', params: { from: 100, to: 200, tz: -300, provider: 'codex', model: '', client: '', account: '', api_key: '', by: 'account' } },
   ]);
   expect(renders).toEqual(['drift', 'breakdown']);
+});
+
+test('switching breakdown to errors queries the errors route using the displayed range', async () => {
+  const { ctx, calls, renders } = dashboard();
+  await ctx.refresh();
+  calls.length = renders.length = 0;
+  ctx.state.by = 'errors';
+  await ctx.refreshGroup('breakdown');
+  expect(calls).toEqual([
+    { route: 'errors', params: { from: 100, to: 200, tz: -300, provider: '', model: '', client: '', account: '', api_key: '' } },
+  ]);
+  expect(renders).toEqual(['breakdown']);
 });
 
 test('the drift grouping control uses the partial load', async () => {

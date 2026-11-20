@@ -28,6 +28,12 @@ type Totals struct {
 	// CacheSavingsUSD is what the cache reads would have cost as uncached input.
 	CacheSavingsUSD float64    `json:"cache_savings_usd"`
 	CostByTier      []TierCost `json:"cost_by_tier"`
+	// Session depth and per-request medians help separate "longer sessions"
+	// from "heavier prompts or more verbose responses".
+	MedianRequestsPerSession  float64 `json:"median_requests_per_session"`
+	MedianPeakInputPerSession float64 `json:"median_peak_input_per_session"`
+	MedianInputPerRequest     float64 `json:"median_input_per_request"`
+	MedianOutputPerRequest    float64 `json:"median_output_per_request"`
 }
 
 // TierCost is the cost of one service tier, as the upstream reported it or
@@ -147,7 +153,67 @@ func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) 
 	if err := providerSessions(db, where, args, res.Providers); err != nil {
 		return SummaryResult{}, err
 	}
+	if err := fillSessionAndRequestMedians(db, where, args, &res.Totals); err != nil {
+		return SummaryResult{}, err
+	}
 	return res, nil
+}
+
+// fillSessionAndRequestMedians computes per-request input/output medians and
+// session depth medians (requests per session and peak prompt input per session)
+// over successful generating calls.
+func fillSessionAndRequestMedians(db *sql.DB, where string, args []any, totals *Totals) error {
+	rows, err := db.Query(`SELECT MAX(session_id),
+		SUM(uncached_input + cache_read + cache_write),
+		SUM(output_non_reasoning + output_reasoning)
+		FROM requests WHERE `+where+` AND generate = 1 AND failed = 0
+		GROUP BY `+callExpr, args...)
+	if err != nil {
+		return fmt.Errorf("summary medians: %w", err)
+	}
+	defer rows.Close()
+	type sessStats struct {
+		reqs    int64
+		peakIn  int64
+	}
+	sessions := map[string]*sessStats{}
+	var reqInputs, reqOutputs []float64
+	for rows.Next() {
+		var sid string
+		var inTok, outTok int64
+		if err := rows.Scan(&sid, &inTok, &outTok); err != nil {
+			return fmt.Errorf("summary medians scan: %w", err)
+		}
+		reqInputs = append(reqInputs, float64(inTok))
+		reqOutputs = append(reqOutputs, float64(outTok))
+		if sid != "" {
+			st := sessions[sid]
+			if st == nil {
+				st = &sessStats{}
+				sessions[sid] = st
+			}
+			st.reqs++
+			if inTok > st.peakIn {
+				st.peakIn = inTok
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("summary medians rows: %w", err)
+	}
+	totals.MedianInputPerRequest = percentile(reqInputs, 0.5)
+	totals.MedianOutputPerRequest = percentile(reqOutputs, 0.5)
+	if len(sessions) > 0 {
+		sessReqs := make([]float64, 0, len(sessions))
+		sessPeakIn := make([]float64, 0, len(sessions))
+		for _, st := range sessions {
+			sessReqs = append(sessReqs, float64(st.reqs))
+			sessPeakIn = append(sessPeakIn, float64(st.peakIn))
+		}
+		totals.MedianRequestsPerSession = percentile(sessReqs, 0.5)
+		totals.MedianPeakInputPerSession = percentile(sessPeakIn, 0.5)
+	}
+	return nil
 }
 
 // providerSessions fills Sessions on each provider share. A session that
@@ -274,13 +340,15 @@ func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string
 	return s, nil
 }
 
-// BreakdownRow is one model, client version, day, API key hash or reasoning effort.
+// BreakdownRow is one provider, model, client version, day, API key hash,
+// reasoning effort, account or raw user agent.
 type BreakdownRow struct {
 	Key string `json:"key"`
 	// Provider is set only when grouping by model.
 	Provider string `json:"provider,omitempty"`
 	Records  int64  `json:"records"`
 	Requests int64  `json:"requests"`
+	Failed   int64  `json:"failed"`
 	Tokens
 	CostUSD        float64 `json:"cost_usd"`
 	CostShare      float64 `json:"cost_share"`
@@ -309,10 +377,14 @@ const providerModelSep = "\x1f"
 func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (BreakdownResult, error) {
 	var keyExpr string
 	switch by {
+	case "provider":
+		keyExpr = "provider"
 	case "model":
 		keyExpr = "provider || char(31) || (" + modelExpr + ")"
 	case "client":
 		keyExpr = clientExpr
+	case "user_agent":
+		keyExpr = "CASE WHEN user_agent = '' THEN 'unknown' ELSE user_agent END"
 	case "day":
 		keyExpr = f.bucketSQL(dayMillis)
 	case "api_key":
@@ -322,7 +394,7 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 	case "account":
 		keyExpr = "auth_index"
 	default:
-		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be model, client, day, api_key, reasoning_effort or account"}
+		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be provider, model, client, user_agent, day, api_key, reasoning_effort or account"}
 	}
 	rows, err := aggregate(db, f, table, keyExpr)
 	if err != nil {
@@ -343,6 +415,7 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 			byKey[r.keys[0]] = br
 		}
 		br.Records += r.records
+		br.Failed += r.failed
 		br.Tokens.add(r.tokens)
 		br.CostUSD += r.cost
 		br.UnpricedTokens += r.quality.UnpricedTokens

@@ -78,7 +78,7 @@ func TestManagementRegisterListsRoutes(t *testing.T) {
 		}
 		got[r.Path] = true
 	}
-	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity", "options"} {
+	for _, name := range []string{"summary", "timeseries", "drift", "breakdown", "errors", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity", "options"} {
 		if !got[apiBase+name] {
 			t.Errorf("missing route %s in %+v", name, reg.Routes)
 		}
@@ -90,16 +90,16 @@ func TestManagementOptions(t *testing.T) {
 	from := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24 * time.Hour)
 	a := usageRow("a", from)
-	a.ResponseModel, a.APIKeyHash = "gpt-5-reported", "key-a"
+	a.ResponseModel, a.APIKeyHash, a.AuthIndex = "gpt-5-reported", "key-a", "acc-a"
 	b := a
 	b.RequestID, b.ClientVersion = "b", "0.131.0"
 	c := usageRow("c", from.Add(time.Hour))
-	c.Provider, c.Model, c.ClientName, c.APIKeyHash = "claude", "claude-sonnet", "claude-code", "key-b"
+	c.Provider, c.Model, c.ClientName, c.APIKeyHash, c.AuthIndex = "claude", "claude-sonnet", "claude-code", "key-b", "acc-b"
 	c.Failed, c.Generate = true, false
 	unknown := usageRow("unknown", from.Add(time.Hour))
-	unknown.Provider, unknown.Model, unknown.ClientName = "", "", ""
+	unknown.Provider, unknown.Model, unknown.ClientName, unknown.AuthIndex = "", "", "", ""
 	old := usageRow("old", from.Add(-time.Millisecond))
-	old.Provider, old.Model, old.ClientName = "old", "old", "old"
+	old.Provider, old.Model, old.ClientName, old.AuthIndex = "old", "old", "old", "old"
 	future := old
 	future.RequestID, future.RequestedAt = "future", to.UnixMilli()
 	insertRows(t, p, a, b, c, unknown, old, future)
@@ -107,15 +107,16 @@ func TestManagementOptions(t *testing.T) {
 		Providers []string `json:"providers"`
 		Models    []string `json:"models"`
 		Clients   []string `json:"clients"`
+		Accounts  []string `json:"accounts"`
 	}
 	for _, tc := range []struct {
 		name, param, value string
 		want               options
 	}{
-		{"all rows including failed and non-generating", "", "", options{[]string{"claude", "codex"}, []string{"claude-sonnet", "gpt-5-reported"}, []string{"claude-code", "codex"}}},
-		{"API key isolation", "api_key", "key-a", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}}},
-		{"reported model", "model", "gpt-5-reported", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}}},
-		{"no matches", "provider", "absent", options{[]string{}, []string{}, []string{}}},
+		{"all rows including failed and non-generating", "", "", options{[]string{"claude", "codex"}, []string{"claude-sonnet", "gpt-5-reported"}, []string{"claude-code", "codex"}, []string{"acc-a", "acc-b"}}},
+		{"API key isolation", "api_key", "key-a", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}, []string{"acc-a"}}},
+		{"reported model", "model", "gpt-5-reported", options{[]string{"codex"}, []string{"gpt-5-reported"}, []string{"codex"}, []string{"acc-a"}}},
+		{"no matches", "provider", "absent", options{[]string{}, []string{}, []string{}, []string{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := url.Values{"from": {strconv.FormatInt(from.UnixMilli(), 10)}, "to": {strconv.FormatInt(to.UnixMilli(), 10)}}
@@ -168,7 +169,7 @@ func TestManagementSummaryReturnsJSON(t *testing.T) {
 func TestManagementRoutesAnswer(t *testing.T) {
 	p, _ := startPlugin(t)
 	insertRows(t, p, usageRow("a", time.Now().Add(-time.Hour)))
-	for _, route := range []string{"timeseries", "drift", "breakdown", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity"} {
+	for _, route := range []string{"timeseries", "drift", "breakdown", "errors", "health", "pricing", "limit-burn", "limit-history", "limit-leftover", "affinity"} {
 		resp := manage(t, p, "GET", route, nil)
 		if resp.StatusCode != 200 || !json.Valid(resp.Body) {
 			t.Errorf("%s: status %d body %s", route, resp.StatusCode, resp.Body)

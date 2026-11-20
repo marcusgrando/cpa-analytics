@@ -3,7 +3,9 @@
 // on 2026-11-15, trimmed to the fields the page reads.
 import { describe, expect, test } from 'bun:test';
 import {
-  claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
+  claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage,
+  parseAntigravityPlan, parseAntigravityUsage, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
+  accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
 } from './limits.js';
 
 const HOUR = 3600000;
@@ -273,5 +275,89 @@ describe('Claude extra usage', () => {
   test('extra_usage is read when spend is missing', () => {
     const body = { extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 1234.0, currency: 'USD', decimal_places: 2 } };
     expect(parseClaudeSpend(body)).toEqual({ used: 12.34, limit: 500, currency: 'USD' });
+  });
+});
+
+describe('other providers', () => {
+  test('Antigravity plan reads paidTier and Google One AI credits', () => {
+    const p = parseAntigravityPlan({
+      currentTier: { id: 'free-tier' },
+      paidTier: { id: 'g1-pro-tier', availableCredits: [{ creditType: 'GOOGLE_ONE_AI', creditAmount: '125', minimumCreditAmountForUsage: '1' }] },
+      cloudaicompanionProject: 'proj-1',
+    });
+    expect(p).toEqual({ plan: 'Pro', weight: 5, credits: { amount: 125, min: 1 }, project: 'proj-1' });
+  });
+
+  test('Antigravity usage collapses identical Gemini buckets and skips tab completions', () => {
+    const windows = parseAntigravityUsage({
+      models: {
+        'tab_flash_lite_preview': { quotaInfo: { remainingFraction: 1 } },
+        'gemini-2.5-pro': { quotaInfo: { remainingFraction: 0.64, resetTime: '2026-11-20T16:47:38Z' } },
+        'gemini-3-flash': { quotaInfo: { remainingFraction: 0.64, resetTime: '2026-11-20T16:47:38Z' } },
+        'claude-opus-5-5-high': { quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-20T21:43:02Z' } },
+      },
+    });
+    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini', 36], ['claude-oss', 10]]);
+  });
+
+  test('Antigravity keeps Gemini Pro and Flash separate when their usage diverges', () => {
+    const windows = parseAntigravityUsage({
+      models: {
+        'gemini-4-neon': { quotaInfo: { remainingFraction: 0.2, resetTime: '2026-11-20T16:00:00Z' } },
+        'gemini-3-flash': { quotaInfo: { remainingFraction: 0.9, resetTime: '2026-11-20T16:00:00Z' } },
+      },
+    });
+    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini-pro', 80], ['gemini-flash', 10]]);
+  });
+
+  test('Gemini CLI quota parses buckets by model family', () => {
+    const windows = parseGeminiQuota({
+      buckets: [
+        { modelId: 'gemini-2.5-pro', remainingFraction: 0.75, resetTime: '2026-11-21T00:00:00Z' },
+        { modelId: 'gemini-2.5-flash', remainingFraction: 0.95, resetTime: '2026-11-21T00:00:00Z' },
+      ],
+    });
+    expect(windows.map((w) => [w.id, Math.round(w.used)])).toEqual([['gemini-pro', 25], ['gemini-flash', 5]]);
+  });
+
+  test('Devin quota reads directly from CPA credential signals', () => {
+    const res = parseDevinSignals({
+      quota: {
+        signals: {
+          plan: 'core',
+          daily_quota_remaining_percent: '60%',
+          weekly_quota_remaining_percent: '25%',
+          daily_quota_reset_at: '2026-11-21T00:00:00Z',
+          weekly_quota_reset_at: '2026-11-25T00:00:00Z',
+        },
+      },
+    });
+    expect(res.plan).toBe('core');
+    expect(res.windows.map((w) => [w.id, w.used])).toEqual([['daily', 40], ['weekly', 75]]);
+  });
+
+  test('Kimi usage parses weekly and short windows', () => {
+    const windows = parseKimiUsage({
+      usage: { limit: 100, used: 30, resetTime: '2026-11-25T00:00:00Z' },
+      limits: [{ window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' }, detail: { limit: 100, remaining: 85, resetTime: '2026-11-20T20:00:00Z' } }],
+    });
+    expect(windows.map((w) => [w.id, w.label, w.used])).toEqual([['weekly', 'Weekly', 30], ['session', '5-hour', 15]]);
+  });
+
+  test('credential status summarizes active cooldowns, blocks and recent counts', () => {
+    const st = summarizeCredentialStatus({
+      status: 'error',
+      status_message: 'credential_quota',
+      quota_blocked: true,
+      cooldowns: [
+        { scope: 'credential', reason: 'credential_quota', retry_at: '2026-11-16T00:00:00Z' },
+        { scope: 'model', model_key: 'old', reason: 'quota', retry_at: '2026-11-14T00:00:00Z' },
+      ],
+      recent_requests: [{ success: 10, failed: 2 }, { success: 5, failed: 1 }],
+    }, now);
+    expect(st.state).toBe('quota_blocked');
+    expect(st.cooldowns.length).toBe(1);
+    expect(st.recentSuccess).toBe(15);
+    expect(st.recentFailed).toBe(3);
   });
 });

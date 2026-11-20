@@ -116,6 +116,7 @@ type costRow struct {
 	model   string
 	tier    string
 	records int64
+	failed  int64
 	tokens  Tokens
 	cost    float64
 	quality CostQuality
@@ -147,7 +148,7 @@ func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) (
 		groups[i] = fmt.Sprint(i + 1)
 	}
 	where, args := f.where(true)
-	q := "SELECT " + strings.Join(cols, ", ") + ", COUNT(*), " + tokenSums +
+	q := "SELECT " + strings.Join(cols, ", ") + ", COUNT(*), COALESCE(SUM(failed), 0), " + tokenSums +
 		" FROM requests WHERE " + where + " GROUP BY " + strings.Join(groups, ", ")
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -158,11 +159,11 @@ func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) (
 	var out []costRow
 	for rows.Next() {
 		r := costRow{keys: make([]string, len(keyExprs))}
-		targets := make([]any, 0, len(keyExprs)+9)
+		targets := make([]any, 0, len(keyExprs)+10)
 		for i := range r.keys {
 			targets = append(targets, &r.keys[i])
 		}
-		targets = append(targets, &r.model, &r.tier, &r.records)
+		targets = append(targets, &r.model, &r.tier, &r.records, &r.failed)
 		targets = append(targets, r.tokens.scanTargets()...)
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("aggregate scan: %w", err)

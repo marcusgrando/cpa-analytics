@@ -2,26 +2,31 @@
 import { describe, expect, test } from 'bun:test';
 import { accountStyles, providerPalette } from './colors.js';
 
-test('Claude, Codex and Gemini always wear their brand colors', () => {
+test('known CPA providers always wear their assigned colors', () => {
   const color = providerPalette();
-  expect(color('xai')).toBe('var(--provider-next)');
+  expect(color('xai')).toBe('var(--provider-xai)');
+  expect(color('antigravity')).toBe('var(--provider-antigravity)');
+  expect(color('kimi')).toBe('var(--provider-kimi)');
+  expect(color('meta')).toBe('var(--provider-meta)');
+  expect(color('devin')).toBe('var(--provider-devin)');
   expect(color('gemini')).toBe('var(--provider-gemini)');
+  expect(color('gemini-cli')).toBe('var(--provider-gemini)');
   expect(color('codex')).toBe('var(--provider-codex)');
   expect(color('claude')).toBe('var(--provider-claude)');
 });
 
-test('the first other provider takes the spare color and the rest share the overflow gray', () => {
+test('the first unknown provider takes the spare color and the rest share the overflow gray', () => {
   const color = providerPalette();
-  expect(color('kimi')).toBe('var(--provider-next)');
-  expect(color('xai')).toBe('var(--other)');
-  expect(color('meta')).toBe('var(--other)');
+  expect(color('openrouter')).toBe('var(--provider-next)');
+  expect(color('deepseek')).toBe('var(--other)');
+  expect(color('qwen')).toBe('var(--other)');
 });
 
 test('a provider keeps its color on every call', () => {
   const color = providerPalette();
-  color('kimi');
-  color('xai');
-  expect(color('kimi')).toBe('var(--provider-next)');
+  color('openrouter');
+  color('deepseek');
+  expect(color('openrouter')).toBe('var(--provider-next)');
 });
 
 describe('account styles', () => {

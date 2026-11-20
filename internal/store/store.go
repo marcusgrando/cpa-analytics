@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcusgrando/cpa-analytics/internal/accounting"
+	"github.com/marcusgrando/cpa-analytics/internal/client"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	_ "modernc.org/sqlite"
 )
 
@@ -145,6 +148,126 @@ func migrate(db *sql.DB) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %s: %w", version, err)
+		}
+	}
+	if err := runGoMigration(db, "004_reparse_clients", reparseClients); err != nil {
+		return err
+	}
+	if err := runGoMigration(db, "005_meta_devin_accounting", reclassifyMetaDevin); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runGoMigration(db *sql.DB, version string, fn func(*sql.Tx) error) error {
+	var exists int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
+		return fmt.Errorf("check migration %s: %w", version, err)
+	}
+	if exists > 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", version, err)
+	}
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("apply migration %s: %w", version, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("record migration %s: %w", version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", version, err)
+	}
+	return nil
+}
+
+// reparseClients rebuilds client_name and client_version from the stored raw
+// user_agent so previously collapsed "other" agents regain their real names and
+// versions across historical rows.
+func reparseClients(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT DISTINCT user_agent FROM requests WHERE user_agent <> ''`)
+	if err != nil {
+		return err
+	}
+	var agents []string
+	for rows.Next() {
+		var ua string
+		if err := rows.Scan(&ua); err != nil {
+			rows.Close()
+			return err
+		}
+		agents = append(agents, ua)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(agents) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`UPDATE requests SET client_name = ?, client_version = ? WHERE user_agent = ? AND (client_name <> ? OR client_version <> ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, ua := range agents {
+		name, version := client.Parse(ua)
+		if _, err := stmt.Exec(name, version, ua, name, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reclassifyMetaDevin rebuilds token buckets for historical meta and devin rows
+// that were stored as unclassified before accounting recognized those providers.
+func reclassifyMetaDevin(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, provider, executor_type, input_tokens, output_tokens, reasoning_tokens, cached_tokens, cache_read_tokens, cache_creation_tokens, total_tokens
+		FROM requests WHERE accounting_quality = 'unclassified'
+		AND (lower(provider || ' ' || executor_type) LIKE '%meta%' OR lower(provider || ' ' || executor_type) LIKE '%devin%')`)
+	if err != nil {
+		return err
+	}
+	type item struct {
+		id                 int64
+		provider, executor string
+		detail             pluginapi.UsageDetail
+	}
+	var pending []item
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.id, &it.provider, &it.executor, &it.detail.InputTokens, &it.detail.OutputTokens,
+			&it.detail.ReasoningTokens, &it.detail.CachedTokens, &it.detail.CacheReadTokens, &it.detail.CacheCreationTokens, &it.detail.TotalTokens); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`UPDATE requests SET uncached_input = ?, cache_read = ?, cache_write = ?, output_non_reasoning = ?, output_reasoning = ?, unclassified = ?, accounting_quality = ? WHERE id = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, it := range pending {
+		b := accounting.Normalize(it.provider, it.executor, it.detail)
+		if b.Quality == accounting.QualityUnclassified {
+			continue
+		}
+		if _, err := stmt.Exec(b.Uncached, b.CacheRead, b.CacheWrite, b.OutputNonReasoning, b.Reasoning, b.Unclassified, b.Quality, it.id); err != nil {
+			return err
 		}
 	}
 	return nil

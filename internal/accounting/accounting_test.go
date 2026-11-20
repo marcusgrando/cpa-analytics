@@ -40,6 +40,16 @@ func TestNormalize(t *testing.T) {
 			want:   Breakdown{Uncached: 400, CacheRead: 100, OutputNonReasoning: 40, Reasoning: 60, Total: 600, Quality: QualityComplete},
 		},
 		{
+			name: "devin separate reasoning", provider: "devin", executor: "DevinExecutor",
+			detail: pluginapi.UsageDetail{InputTokens: 500, CacheReadTokens: 100, CacheCreationTokens: 50, OutputTokens: 40, ReasoningTokens: 60, TotalTokens: 600},
+			want:   Breakdown{Uncached: 350, CacheRead: 100, CacheWrite: 50, OutputNonReasoning: 40, Reasoning: 60, Total: 600, Quality: QualityComplete},
+		},
+		{
+			name: "meta subset", provider: "meta", executor: "MetaExecutor",
+			detail: pluginapi.UsageDetail{InputTokens: 1000, CacheReadTokens: 700, OutputTokens: 200, ReasoningTokens: 50, TotalTokens: 1200},
+			want:   Breakdown{Uncached: 300, CacheRead: 700, OutputNonReasoning: 150, Reasoning: 50, Total: 1200, Quality: QualityComplete},
+		},
+		{
 			name: "openai compatible executor wins over claude in name", provider: "claude-proxy", executor: "OpenAICompatExecutor",
 			detail: pluginapi.UsageDetail{InputTokens: 100, CacheReadTokens: 40, OutputTokens: 10},
 			want:   Breakdown{Uncached: 60, CacheRead: 40, OutputNonReasoning: 10, Total: 110, Quality: QualityComplete},

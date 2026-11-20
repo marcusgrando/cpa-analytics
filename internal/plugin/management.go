@@ -59,11 +59,14 @@ func (p *Plugin) routes() map[string]route {
 		"timeseries": {"Tokens and cost per day or hour", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Timeseries(db, f, t, paramOr(q, "bucket", "day"), paramOr(q, "group", "provider"))
 		}},
-		"drift": {"Per-request token drift with change markers", func(db *sql.DB, f query.Filter, _ *pricing.Table, q url.Values) (any, error) {
-			return query.Drift(db, f, paramOr(q, "group", "response_model"))
+		"drift": {"Per-request token drift with change markers", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+			return query.Drift(db, f, t, paramOr(q, "group", "response_model"))
 		}},
-		"breakdown": {"Usage by provider and model, client, day, API key hash, reasoning effort or account", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
+		"breakdown": {"Usage by provider, model, client, user agent, day, API key hash, reasoning effort or account", func(db *sql.DB, f query.Filter, t *pricing.Table, q url.Values) (any, error) {
 			return query.Breakdown(db, f, t, paramOr(q, "by", "model"))
+		}},
+		"errors": {"Failed records by provider, model, account and HTTP status", func(db *sql.DB, f query.Filter, _ *pricing.Table, _ url.Values) (any, error) {
+			return query.Errors(db, f)
 		}},
 		"pricing": {"Price table status, unpriced and overridden models", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			models, err := query.Models(db, f, t)

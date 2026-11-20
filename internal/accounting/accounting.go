@@ -210,12 +210,12 @@ func semanticsFor(provider, executorType string) semantics {
 	if strings.Contains(value, "claude") || strings.Contains(value, "anthropic") {
 		return semanticsIndependent
 	}
-	for _, marker := range []string{"gemini", "aistudio", "antigravity", "vertex", "interaction"} {
+	for _, marker := range []string{"gemini", "aistudio", "antigravity", "vertex", "interaction", "devin"} {
 		if strings.Contains(value, marker) {
 			return semanticsSeparateReasoning
 		}
 	}
-	for _, marker := range []string{"openai", "codex", "xai", "grok", "kimi", "qwen", "deepseek", "openrouter"} {
+	for _, marker := range []string{"openai", "codex", "xai", "grok", "kimi", "qwen", "deepseek", "openrouter", "meta"} {
 		if strings.Contains(value, marker) {
 			return semanticsSubset
 		}

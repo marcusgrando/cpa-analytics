@@ -8,6 +8,14 @@ const BRAND_COLORS = {
   claude: 'var(--provider-claude)',
   codex: 'var(--provider-codex)',
   gemini: 'var(--provider-gemini)',
+  'gemini-cli': 'var(--provider-gemini)',
+  vertex: 'var(--provider-gemini)',
+  aistudio: 'var(--provider-gemini)',
+  antigravity: 'var(--provider-antigravity)',
+  xai: 'var(--provider-xai)',
+  kimi: 'var(--provider-kimi)',
+  meta: 'var(--provider-meta)',
+  devin: 'var(--provider-devin)',
 };
 
 // providerPalette returns a function that gives each provider a stable color.

@@ -21,7 +21,15 @@ func TestIndexHasEveryView(t *testing.T) {
 // to CPA's api-call, which makes the request server-side with the credential.
 func TestIndexMakesNoExternalRequests(t *testing.T) {
 	page := strings.ReplaceAll(string(Index()), `"http://www.w3.org/2000/svg"`, "")
-	for _, upstream := range []string{"https://api.anthropic.com/api/oauth/usage", "https://api.anthropic.com/api/oauth/profile", "https://chatgpt.com/backend-api/wham/usage"} {
+	for _, upstream := range []string{
+		"https://api.anthropic.com/api/oauth/usage",
+		"https://api.anthropic.com/api/oauth/profile",
+		"https://chatgpt.com/backend-api/wham/usage",
+		"https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+		"https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+		"https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+		"https://api.kimi.com/coding/v1/usages",
+	} {
 		page = strings.ReplaceAll(page, "upstreamCall(account, '"+upstream+"'", "")
 	}
 	if m := regexp.MustCompile(`(?i)https?://|//[a-z0-9-]+\.[a-z]`).FindString(page); m != "" {
@@ -116,7 +124,7 @@ func TestIndexFollowsManagementCenterTheme(t *testing.T) {
 // step drew the labels 0, 1, 1, 2, 2, so count axes step by at least one.
 func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
+	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtDay, isRate || isCost ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -153,7 +161,7 @@ func TestIndexShowsCostPerRequestAndTimings(t *testing.T) {
 // The drift card measures timings too, so its title names the chosen measure.
 func TestIndexDriftTitleFollowsMeasure(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`<h2 id="drift-title">Per request</h2>`, `textContent = isRate ? 'Daily cache hit rate' : driftMetricLabel() + ' per request'`, `const fmtSeconds = (ms) => (ms === 0 ? '0 s'`} {
+	for _, want := range []string{`<h2 id="drift-title">Per request</h2>`, `textContent = isRate ? 'Daily cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request'`, `const fmtSeconds = (ms) => (ms === 0 ? '0 s'`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -215,7 +223,7 @@ func TestIndexChartsWeeklyLimitValue(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
 		`id="burn"`,
-		`api('limit-burn', { ...range, provider: p.provider })`,
+		`api('limit-burn', { ...range, provider: p.provider, account: p.account })`,
 		`p.usd_per_pct`,
 		`management('/v8/management/credentials')`,
 	} {
@@ -288,7 +296,7 @@ func TestIndexChartsWeeklyPoolHistoryAndProjection(t *testing.T) {
 
 func TestIndexShowsQuotaLeftAtReset(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`id="leftover"`, `api('limit-leftover', { ...range, provider: p.provider })`, `c.left_usd`} {
+	for _, want := range []string{`id="leftover"`, `api('limit-leftover', { ...range, provider: p.provider, account: p.account })`, `c.left_usd`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -316,8 +324,34 @@ func TestIndexOffersAccountBreakdown(t *testing.T) {
 func TestIndexNamesAccountsWithTheirProvider(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
-		`if (b.by === 'account') return key ? accountWithProvider(key) : 'not recorded';`,
+		`text: accountWithProvider(key)`,
 		`label: accountWithProvider(a)`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestIndexCoversAllProvidersAndBehaviorDiagnostics(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`id="f-account"`,
+		`id="t-drivers"`,
+		`id="account-warning"`,
+		`<option value="output_total">`,
+		`<option value="cost_usd">`,
+		`<option value="tokens_per_sec">`,
+		`data-by="provider"`,
+		`data-by="user_agent"`,
+		`data-by="errors"`,
+		`readAntigravity`,
+		`readGemini`,
+		`readDevin`,
+		`readKimi`,
+		`renderStatusRow`,
+		`markerImpact(`,
+		`changeDrivers(`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)

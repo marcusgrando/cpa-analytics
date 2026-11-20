@@ -106,13 +106,13 @@ func TestParseFilterDefaultsToLastSevenDays(t *testing.T) {
 
 func TestParseFilterReadsParams(t *testing.T) {
 	q := url.Values{"from": {"1000"}, "to": {"2000"}, "provider": {"codex"}, "model": {"gpt-5"},
-		"client": {"codex"}, "api_key": {"abc123"}, "tz": {"-180"}}
+		"client": {"codex"}, "account": {"acc1"}, "api_key": {"abc123"}, "tz": {"-180"}}
 	f, err := ParseFilter(q, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Filter{From: time.UnixMilli(1000), To: time.UnixMilli(2000), Provider: "codex", Model: "gpt-5",
-		Client: "codex", APIKeyHash: "abc123", TZOffsetMinutes: -180}
+		Client: "codex", Account: "acc1", APIKeyHash: "abc123", TZOffsetMinutes: -180}
 	if f != want {
 		t.Errorf("filter = %+v, want %+v", f, want)
 	}
@@ -304,7 +304,7 @@ func TestTimeseriesRejectsUnknownBucketAndGroup(t *testing.T) {
 
 func TestDriftMediansPerInboundRequest(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "client_version")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,14 +321,20 @@ func TestDriftMediansPerInboundRequest(t *testing.T) {
 		t.Errorf("day1 = %+v", p1)
 	}
 	// Input is the whole prompt: t1 has 4000, t2 has 2000 across its two rows.
-	if p1.Median.Input != 3000 || p1.P90.Input != 3800 {
-		t.Errorf("day1 input median/p90 = %v/%v, want 3000/3800", p1.Median.Input, p1.P90.Input)
+	// OutputTotal is output + reasoning: t1 has 300, t2 has 100 -> median 200.
+	if p1.Median.Input != 3000 || p1.P90.Input != 3800 || p1.Median.OutputTotal != 200 {
+		t.Errorf("day1 input/output_total = %+v", p1.Median)
+	}
+	wantT1Cost := 1000*gpt5Input + 3000*gpt5CacheRead + 300*gpt5Output
+	wantT2Cost := 1000*gpt5Input + 1000*gpt5CacheRead + 100*gpt5Output
+	if !near(p1.Median.CostUSD, (wantT1Cost+wantT2Cost)/2) {
+		t.Errorf("day1 median cost = %v, want %v", p1.Median.CostUSD, (wantT1Cost+wantT2Cost)/2)
 	}
 	if !near(p1.CacheHitRate, 4000.0/6000.0) {
 		t.Errorf("day1 cache hit rate = %v", p1.CacheHitRate)
 	}
 	p2 := points["11-11 codex/0.130.0"]
-	if p2.Requests != 3 || p2.Median.UncachedInput != 3000 || p2.P90.UncachedInput != 3800 || p2.Median.Output != 400 || p2.Median.Reasoning != 0 {
+	if p2.Requests != 3 || p2.Median.UncachedInput != 3000 || p2.P90.UncachedInput != 3800 || p2.Median.Output != 400 || p2.Median.Reasoning != 0 || p2.Median.OutputTotal != 500 {
 		t.Errorf("day2 = %+v", p2)
 	}
 	p3 := points["11-12 codex/0.130.0"]
@@ -339,7 +345,7 @@ func TestDriftMediansPerInboundRequest(t *testing.T) {
 
 func TestDriftMarksFirstSeenValuesInRange(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), rangeFilter(), "response_model")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "response_model")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +374,7 @@ func TestDriftMarksFirstSeenValuesInRange(t *testing.T) {
 // nothing about a change and gets no marker.
 func TestDriftSkipsMarkersOnTheFirstDayOfData(t *testing.T) {
 	s := seedDB(t)
-	d, err := Drift(s.DB(), Filter{From: day0, To: day4}, "response_model")
+	d, err := Drift(s.DB(), Filter{From: day0, To: day4}, nil, "response_model")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +390,7 @@ func TestDriftSkipsMarkersOnTheFirstDayOfData(t *testing.T) {
 
 func TestDriftRejectsUnknownGroup(t *testing.T) {
 	s := seedDB(t)
-	_, err := Drift(s.DB(), rangeFilter(), "nope")
+	_, err := Drift(s.DB(), rangeFilter(), nil, "nope")
 	var pe *ParamError
 	if !errors.As(err, &pe) || pe.Param != "group" {
 		t.Errorf("err = %v", err)
@@ -455,7 +461,7 @@ func TestQueriesFailOnClosedDB(t *testing.T) {
 		t.Error("summary on closed db succeeded")
 	}
 	var pe *ParamError
-	if _, err := Drift(s.DB(), rangeFilter(), "client_version"); err == nil || errors.As(err, &pe) {
+	if _, err := Drift(s.DB(), rangeFilter(), nil, "client_version"); err == nil || errors.As(err, &pe) {
 		t.Errorf("drift err = %v, want a storage error", err)
 	}
 }
@@ -474,7 +480,7 @@ func TestDriftSkipsFailedRequests(t *testing.T) {
 	if err := s.InsertBatch(failed); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +534,7 @@ func TestDriftCountsEachWebSocketTurn(t *testing.T) {
 	if err := s.InsertBatch(turns); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +593,7 @@ func TestDriftMeasuresLatencyAndTTFTPerRequest(t *testing.T) {
 	if err := s.InsertBatch(rows); err != nil {
 		t.Fatal(err)
 	}
-	d, err := Drift(s.DB(), rangeFilter(), "client_version")
+	d, err := Drift(s.DB(), rangeFilter(), nil, "client_version")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,9 +652,10 @@ func TestEmptyRangeAnswersEmptyLists(t *testing.T) {
 	results := map[string]func() (any, error){
 		"summary":    func() (any, error) { return Summary(s.DB(), f, prices) },
 		"timeseries": func() (any, error) { return Timeseries(s.DB(), f, prices, "day", "provider") },
-		"drift":      func() (any, error) { return Drift(s.DB(), f, "response_model") },
+		"drift":      func() (any, error) { return Drift(s.DB(), f, prices, "response_model") },
 		"breakdown":  func() (any, error) { return Breakdown(s.DB(), f, prices, "model") },
 		"models":     func() (any, error) { return Models(s.DB(), f, prices) },
+		"errors":     func() (any, error) { return Errors(s.DB(), f) },
 	}
 	for name, run := range results {
 		v, err := run()
@@ -698,5 +705,75 @@ func TestBreakdownByAccount(t *testing.T) {
 	}
 	if b.Rows[0].Key != "acc1" {
 		t.Errorf("first row = %q, want the costliest account", b.Rows[0].Key)
+	}
+}
+
+func TestErrorsBreakdownAndProviderAndUserAgent(t *testing.T) {
+	s := seedDB(t)
+	extra := []store.Row{
+		{RequestID: "e1", RequestedAt: day2.Add(time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", AuthIndex: "acc1", Failed: true, StatusCode: 429, UserAgent: "codex_app_server/0.170.0"},
+		{RequestID: "e2", RequestedAt: day2.Add(2 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", AuthIndex: "acc1", Failed: true, StatusCode: 429, UserAgent: "codex_app_server/0.170.0"},
+		{RequestID: "e3", RequestedAt: day2.Add(3 * time.Hour).UnixMilli(), Provider: "claude", Model: "claude-opus", AuthIndex: "acc2", Failed: true, StatusCode: 502, UserAgent: "claude-cli/2.1.0"},
+	}
+	if err := s.InsertBatch(extra); err != nil {
+		t.Fatal(err)
+	}
+	errs, err := Errors(s.DB(), rangeFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs.Total != 3 || len(errs.Rows) != 2 || errs.Rows[0].StatusCode != 429 || errs.Rows[0].Count != 2 || !near(errs.Rows[0].Share, 2.0/3.0) {
+		t.Fatalf("errors = %+v", errs)
+	}
+	bp, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byProv := map[string]BreakdownRow{}
+	for _, r := range bp.Rows {
+		byProv[r.Key] = r
+	}
+	if byProv["codex"].Failed != 2 || byProv["claude"].Failed != 1 {
+		t.Errorf("provider failed counts = %+v", byProv)
+	}
+	bua, err := Breakdown(s.DB(), rangeFilter(), testPrices(t), "user_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bua.Rows) < 2 {
+		t.Errorf("user_agent rows = %+v", bua.Rows)
+	}
+	// Session depth and per-request medians in Summary.
+	sum, err := Summary(s.DB(), rangeFilter(), testPrices(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// s1 has 2 reqs (peak 4000), s2 has 3 reqs (peak 8000) -> median req/sess = 2.5, median peak = 6000.
+	if sum.Totals.MedianRequestsPerSession != 2.5 || sum.Totals.MedianPeakInputPerSession != 6000 {
+		t.Errorf("session medians = req %.1f peak %.1f, want 2.5 / 6000", sum.Totals.MedianRequestsPerSession, sum.Totals.MedianPeakInputPerSession)
+	}
+}
+
+func TestDriftTokensPerSec(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "tps.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows := []store.Row{
+		// 200 output+reasoning over (3000 - 1000) = 2s -> 100 tok/s
+		{RequestID: "a", TraceID: "ta", RequestedAt: day1.Add(time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, OutputNonReasoning: 150, OutputReasoning: 50, LatencyMs: 3000, TTFTMs: 1000},
+		// 100 output over 2000ms (no ttft) -> 50 tok/s
+		{RequestID: "b", TraceID: "tb", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "codex", Model: "gpt-5", Generate: true, OutputNonReasoning: 100, LatencyMs: 2000, TTFTMs: 0},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Drift(s.DB(), rangeFilter(), testPrices(t), "response_model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Points) != 1 || !near(d.Points[0].Median.TokensPerSec, 75) {
+		t.Fatalf("tps = %+v, want median 75", d.Points)
 	}
 }

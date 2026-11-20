@@ -172,3 +172,56 @@ func TestMigrationReclassifiesClaudeThinkingRows(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrationReparsesClientsAndReclassifiesMetaDevin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "b.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []Row{
+		{RequestID: "ua1", RequestedAt: 1, Provider: "codex", UserAgent: "codex_app_server/0.170.0 (Linux)", ClientName: "other", ClientVersion: ""},
+		{RequestID: "ua2", RequestedAt: 2, Provider: "antigravity", UserAgent: "antigravity/1.15.8 linux/amd64", ClientName: "other", ClientVersion: ""},
+		{RequestID: "meta1", RequestedAt: 3, Provider: "meta", ExecutorType: "MetaExecutor", InputTokens: 500, CacheReadTokens: 300, OutputTokens: 100, ReasoningTokens: 20, TotalTokens: 600, Unclassified: 600, AccountingQuality: "unclassified"},
+		{RequestID: "devin1", RequestedAt: 4, Provider: "devin", ExecutorType: "DevinExecutor", InputTokens: 400, CacheReadTokens: 100, OutputTokens: 50, ReasoningTokens: 30, TotalTokens: 480, Unclassified: 480, AccountingQuality: "unclassified"},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`DELETE FROM schema_migrations WHERE version IN ('004_reparse_clients', '005_meta_devin_accounting')`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var cn, cv string
+	if err := s.DB().QueryRow(`SELECT client_name, client_version FROM requests WHERE request_id = 'ua1'`).Scan(&cn, &cv); err != nil {
+		t.Fatal(err)
+	}
+	if cn != "codex" || cv != "0.170.0" {
+		t.Errorf("ua1 = %q/%q, want codex/0.170.0", cn, cv)
+	}
+	if err := s.DB().QueryRow(`SELECT client_name, client_version FROM requests WHERE request_id = 'ua2'`).Scan(&cn, &cv); err != nil {
+		t.Fatal(err)
+	}
+	if cn != "antigravity" || cv != "1.15.8" {
+		t.Errorf("ua2 = %q/%q, want antigravity/1.15.8", cn, cv)
+	}
+	var uncached, cacheRead, outNR, outR, unclass int64
+	var qual string
+	if err := s.DB().QueryRow(`SELECT uncached_input, cache_read, output_non_reasoning, output_reasoning, unclassified, accounting_quality FROM requests WHERE request_id = 'meta1'`).Scan(&uncached, &cacheRead, &outNR, &outR, &unclass, &qual); err != nil {
+		t.Fatal(err)
+	}
+	if uncached != 200 || cacheRead != 300 || outNR != 80 || outR != 20 || unclass != 0 || qual != "complete" {
+		t.Errorf("meta1 = %d/%d/%d/%d/%d %q", uncached, cacheRead, outNR, outR, unclass, qual)
+	}
+	if err := s.DB().QueryRow(`SELECT uncached_input, cache_read, output_non_reasoning, output_reasoning, unclassified, accounting_quality FROM requests WHERE request_id = 'devin1'`).Scan(&uncached, &cacheRead, &outNR, &outR, &unclass, &qual); err != nil {
+		t.Fatal(err)
+	}
+	if uncached != 300 || cacheRead != 100 || outNR != 50 || outR != 30 || unclass != 0 || qual != "complete" {
+		t.Errorf("devin1 = %d/%d/%d/%d/%d %q", uncached, cacheRead, outNR, outR, unclass, qual)
+	}
+}

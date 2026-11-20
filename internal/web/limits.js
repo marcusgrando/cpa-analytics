@@ -85,6 +85,195 @@ function parseCodexUsage(body) {
   return { plan: body.plan_type || '', windows };
 }
 
+const ANTIGRAVITY_TIERS = {
+  'g1-ultra-tier': { plan: 'Ultra', weight: 20 },
+  'g1-pro-tier': { plan: 'Pro', weight: 5 },
+  'free-tier': { plan: 'Free', weight: 1 },
+};
+
+// parseAntigravityPlan reads the tier and Google One AI credit balance from
+// Antigravity's loadCodeAssist response.
+function parseAntigravityPlan(body) {
+  const paidId = String((body && body.paidTier && body.paidTier.id) || '').toLowerCase();
+  const curId = String((body && body.currentTier && body.currentTier.id) || '').toLowerCase();
+  const tierId = paidId || curId;
+  const matched = ANTIGRAVITY_TIERS[tierId] || { plan: (body && body.paidTier && body.paidTier.name) || tierId, weight: null };
+  let credits = null;
+  const list = body && body.paidTier && Array.isArray(body.paidTier.availableCredits) ? body.paidTier.availableCredits : [];
+  for (const c of list) {
+    if (!c || String(c.creditType || '').toUpperCase() !== 'GOOGLE_ONE_AI') continue;
+    const amount = Number(c.creditAmount);
+    if (Number.isFinite(amount)) credits = { amount, min: Number(c.minimumCreditAmountForUsage) || 0 };
+  }
+  const project = String((body && body.cloudaicompanionProject) || '');
+  return { ...matched, credits, project };
+}
+
+function clampPct(v) {
+  return Math.min(100, Math.max(0, Number(v) || 0));
+}
+
+function antigravityModelFamily(id) {
+  const lower = String(id || '').toLowerCase();
+  if (lower.startsWith('tab_')) return null;
+  if (lower.includes('claude') || lower.includes('gpt-oss')) return { id: 'claude-oss', label: 'Claude & OSS' };
+  if (lower.includes('gemini')) {
+    return lower.includes('flash') ? { id: 'gemini-flash', label: 'Gemini Flash' } : { id: 'gemini-pro', label: 'Gemini Pro' };
+  }
+  return { id: 'other', label: 'Other models' };
+}
+
+// parseAntigravityUsage groups per-model quotaInfo from fetchAvailableModels
+// into clean quota pools. When Gemini Pro and Gemini Flash share the same
+// remaining fraction and reset time, they collapse into one Gemini pool.
+function parseAntigravityUsage(body) {
+  const models = body && body.models && typeof body.models === 'object' ? Object.entries(body.models) : [];
+  const byFamily = new Map();
+  for (const [id, info] of models) {
+    const q = info && info.quotaInfo;
+    if (!q || q.remainingFraction === undefined || q.remainingFraction === null) continue;
+    const rem = Number(q.remainingFraction);
+    if (!Number.isFinite(rem)) continue;
+    const fam = antigravityModelFamily(id);
+    if (!fam) continue;
+    const used = clampPct((1 - rem) * 100);
+    const resetsAt = parseTime(q.resetTime);
+    const cur = byFamily.get(fam.id);
+    if (!cur || used > cur.used || (used === cur.used && resetsAt && (!cur.resetsAt || resetsAt < cur.resetsAt))) {
+      byFamily.set(fam.id, limitWindow(fam.id, fam.label, used, resetsAt, 5 * LIMIT_HOUR));
+    }
+  }
+  const pro = byFamily.get('gemini-pro');
+  const flash = byFamily.get('gemini-flash');
+  if (pro && flash && Math.abs(pro.used - flash.used) < 1 && Math.abs((pro.resetsAt || 0) - (flash.resetsAt || 0)) <= 5 * 60000) {
+    byFamily.delete('gemini-pro');
+    byFamily.delete('gemini-flash');
+    byFamily.set('gemini', limitWindow('gemini', 'Gemini', Math.max(pro.used, flash.used), pro.resetsAt || flash.resetsAt, 5 * LIMIT_HOUR));
+  }
+  const order = ['gemini', 'gemini-pro', 'gemini-flash', 'claude-oss', 'other'];
+  const windows = order.filter((k) => byFamily.has(k)).map((k) => byFamily.get(k));
+  if (!windows.length) throw new Error('The usage response has no usage windows.');
+  return windows;
+}
+
+// parseGeminiQuota parses buckets[] from Gemini CLI's retrieveUserQuota response.
+function parseGeminiQuota(body) {
+  const buckets = body && Array.isArray(body.buckets) ? body.buckets : [];
+  const byFamily = new Map();
+  for (const b of buckets) {
+    if (!b || b.remainingFraction === undefined || b.remainingFraction === null) continue;
+    const rem = Number(b.remainingFraction);
+    if (!Number.isFinite(rem)) continue;
+    const id = String(b.modelId || '');
+    const lower = id.toLowerCase();
+    const fam = lower.includes('flash') ? { id: 'gemini-flash', label: 'Gemini Flash' }
+      : lower.includes('pro') ? { id: 'gemini-pro', label: 'Gemini Pro' }
+      : { id: 'gemini', label: id || 'Gemini' };
+    const used = clampPct((1 - rem) * 100);
+    const resetsAt = parseTime(b.resetTime);
+    const cur = byFamily.get(fam.id);
+    if (!cur || used > cur.used) byFamily.set(fam.id, limitWindow(fam.id, fam.label, used, resetsAt, LIMIT_DAY));
+  }
+  const windows = [...byFamily.values()];
+  if (!windows.length) throw new Error('The usage response has no usage windows.');
+  return windows;
+}
+
+function parsePctSignal(raw) {
+  const n = parseFloat(String(raw || '').replace('%', '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+// parseDevinSignals reads Devin's daily and weekly quota directly from CPA's
+// credential quota.signals, needing no extra upstream call.
+function parseDevinSignals(account) {
+  const signals = (account && account.quota && account.quota.signals) || {};
+  const windows = [];
+  const dailyRem = parsePctSignal(signals.daily_quota_remaining_percent);
+  if (dailyRem !== null) windows.push(limitWindow('daily', 'Daily', clampPct(100 - dailyRem), parseTime(signals.daily_quota_reset_at), LIMIT_DAY));
+  const weeklyRem = parsePctSignal(signals.weekly_quota_remaining_percent);
+  if (weeklyRem !== null) windows.push(limitWindow('weekly', 'Weekly', clampPct(100 - weeklyRem), parseTime(signals.weekly_quota_reset_at), 7 * LIMIT_DAY));
+  return { plan: signals.plan || '', windows };
+}
+
+function kimiWindowLengthMs(w) {
+  const d = Number(w && w.duration);
+  if (!(d > 0)) return 0;
+  const unit = String((w && w.timeUnit) || '').toUpperCase();
+  if (unit.includes('MINUTE')) return d * 60000;
+  if (unit.includes('HOUR')) return d * LIMIT_HOUR;
+  if (unit.includes('DAY')) return d * LIMIT_DAY;
+  if (unit.includes('WEEK')) return d * 7 * LIMIT_DAY;
+  return d * 1000;
+}
+
+function kimiDetailPct(detail) {
+  if (!detail) return null;
+  const limit = Number(detail.limit);
+  if (!(limit > 0)) return null;
+  if (detail.used !== undefined && detail.used !== null) {
+    const u = Number(detail.used);
+    if (Number.isFinite(u)) return clampPct((u / limit) * 100);
+  }
+  if (detail.remaining !== undefined && detail.remaining !== null) {
+    const r = Number(detail.remaining);
+    if (Number.isFinite(r)) return clampPct(((limit - r) / limit) * 100);
+  }
+  return null;
+}
+
+// parseKimiUsage parses Kimi Coding's /coding/v1/usages response.
+function parseKimiUsage(body) {
+  const windows = [];
+  if (body && body.usage) {
+    const pct = kimiDetailPct(body.usage);
+    if (pct !== null) windows.push(limitWindow('weekly', 'Weekly', pct, parseTime(body.usage.resetTime), 7 * LIMIT_DAY));
+  }
+  if (body && Array.isArray(body.limits)) {
+    for (const item of body.limits) {
+      const pct = kimiDetailPct(item && item.detail);
+      if (pct === null) continue;
+      const lengthMs = kimiWindowLengthMs(item.window);
+      const resetsAt = parseTime(item.detail.resetTime);
+      const id = lengthMs >= 7 * LIMIT_DAY ? 'weekly' : lengthMs > 0 ? 'session' : 'limit';
+      const label = lengthMs >= 7 * LIMIT_DAY ? 'Weekly' : lengthMs >= LIMIT_HOUR ? Math.round(lengthMs / LIMIT_HOUR) + '-hour' : 'Window';
+      if (!windows.some((w) => w.id === id)) windows.push(limitWindow(id, label, pct, resetsAt, lengthMs || 5 * LIMIT_HOUR));
+    }
+  }
+  if (!windows.length) throw new Error('The usage response has no usage windows.');
+  return windows;
+}
+
+// summarizeCredentialStatus extracts CPA-side health, active cooldowns and
+// recent traffic counts for any credential regardless of provider.
+function summarizeCredentialStatus(account, now) {
+  const cooldowns = (Array.isArray(account && account.cooldowns) ? account.cooldowns : [])
+    .map((c) => ({
+      scope: c.scope || 'credential',
+      model: c.model_key || '',
+      reason: c.reason || '',
+      retryAt: parseTime(c.retry_at),
+    }))
+    .filter((c) => !c.retryAt || c.retryAt > now)
+    .sort((a, b) => (a.retryAt || Infinity) - (b.retryAt || Infinity));
+  const recent = Array.isArray(account && account.recent_requests) ? account.recent_requests : [];
+  const recentSuccess = recent.reduce((s, r) => s + (Number(r.success) || 0), 0);
+  const recentFailed = recent.reduce((s, r) => s + (Number(r.failed) || 0), 0);
+  const state = account && account.requires_sign_in ? 'sign_in'
+    : account && account.quota_blocked ? 'quota_blocked'
+    : account && account.status === 'error' ? 'error'
+    : cooldowns.length > 0 ? 'cooldown'
+    : 'active';
+  return {
+    state,
+    status: (account && account.status) || '',
+    message: (account && account.status_message) || '',
+    cooldowns,
+    recentSuccess,
+    recentFailed,
+  };
+}
+
 // accountWindows adds what each window gives back and when. With the weekly
 // allowance spent, the session window cannot be used until the week resets.
 function accountWindows(windows, now) {
@@ -301,7 +490,9 @@ async function mapLimit(items, limit, fn) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage, accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
+    claudeWeight, codexWeight, parseClaudeUsage, parseCodexUsage,
+    parseAntigravityPlan, parseAntigravityUsage, parseGeminiQuota, parseDevinSignals, parseKimiUsage, summarizeCredentialStatus,
+    accountWindows, poolWindow, pools, accountProblem, mapLimit, fmtDuration, parseClaudeSpend,
     readingAt, poolHistory, burnRate, projectPool, withLiveReading,
   };
 }

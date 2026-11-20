@@ -41,6 +41,7 @@ type Filter struct {
 	// Model matches the reported model, or the requested one when none was reported.
 	Model      string
 	Client     string
+	Account    string
 	APIKeyHash string
 	// TZOffsetMinutes is the viewer's offset east of UTC. Day and hour buckets follow it.
 	TZOffsetMinutes int
@@ -56,13 +57,14 @@ func (e *ParamError) Error() string {
 	return fmt.Sprintf("invalid parameter %q: %s", e.Param, e.Reason)
 }
 
-// ParseFilter reads from, to (unix ms), provider, model, client, api_key and
+// ParseFilter reads from, to (unix ms), provider, model, client, account, api_key and
 // tz (minutes east of UTC). The range defaults to the 7 days before now.
 func ParseFilter(q url.Values, now time.Time) (Filter, error) {
 	f := Filter{
 		Provider:   q.Get("provider"),
 		Model:      q.Get("model"),
 		Client:     q.Get("client"),
+		Account:    q.Get("account"),
 		APIKeyHash: q.Get("api_key"),
 		To:         now,
 	}
@@ -123,6 +125,7 @@ func (f Filter) where(withFrom bool) (string, []any) {
 	add("provider", f.Provider)
 	add("("+modelExpr+")", f.Model)
 	add("client_name", f.Client)
+	add("auth_index", f.Account)
 	add("api_key_hash", f.APIKeyHash)
 	return strings.Join(conds, " AND "), args
 }

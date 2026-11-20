@@ -48,7 +48,8 @@ type Table struct {
 // firstPartyProviders are LiteLLM prefixes for the model makers' own APIs.
 // Their price wins over a cloud's or reseller's for a bare model name.
 var firstPartyProviders = map[string]bool{
-	"anthropic": true, "deepseek": true, "gemini": true, "meta": true, "mistral": true, "openai": true, "xai": true,
+	"anthropic": true, "dashscope": true, "deepseek": true, "gemini": true, "google": true,
+	"kimi": true, "meta": true, "mistral": true, "moonshot": true, "openai": true, "qwen": true, "xai": true,
 }
 
 // unpriceable names are either unbilled or ambiguous across model generations.

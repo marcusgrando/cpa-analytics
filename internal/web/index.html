@@ -14,6 +14,7 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #d5d9e0;
   --provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;
+  --provider-antigravity: #008300; --provider-xai: #6d3ff0; --provider-kimi: #007d87; --provider-meta: #c2185b; --provider-devin: #9f5f00;
   --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
 }
 @media (prefers-color-scheme: dark) {
@@ -26,6 +27,7 @@
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
     --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
+    --provider-antigravity: #13a065; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
     --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
   }
 }
@@ -38,6 +40,7 @@
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
   --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
+  --provider-antigravity: #13a065; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
   --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
@@ -159,6 +162,11 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 .acct-name span:first-child { color: var(--ink); }
 .acct-plan { color: var(--muted); }
 .acct-value strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.acct-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--ink-2); padding: 8px 0; border-bottom: 1px solid var(--grid); }
+.acct-status:last-child { border-bottom: 0; }
+.acct-status strong { color: var(--ink); font-weight: 600; }
+.yaml-snippet { margin: 8px 0 0; padding: 10px 12px; background: var(--wash); border-radius: 6px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; user-select: all; }
+.marker-impact { color: var(--muted); margin-left: 6px; }
 @media (max-width: 640px) {
   .acct { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
 }
@@ -204,6 +212,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <label class="usage-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
       <label class="usage-only">Model <select id="f-model"><option value="">All models</option></select></label>
       <label class="usage-only">Client <select id="f-client"><option value="">All clients</option></select></label>
+      <label class="usage-only">Account <select id="f-account"><option value="">All accounts</option></select></label>
       <label class="usage-only">API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
       <label class="usage-only">Auto refresh
         <select id="auto-refresh">
@@ -228,7 +237,9 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="hero-label">Cost, API estimate</div>
         <div id="t-cost" class="hero-value">-</div>
         <div id="t-cost-change" class="hero-label"></div>
+        <div id="t-drivers" class="notice" hidden></div>
         <p id="cost-warning" class="notice" role="status" hidden></p>
+        <p id="account-warning" class="notice" role="status" hidden></p>
         <div id="t-cost-trend" class="spark hero-spark"></div>
         <div id="t-tiles" class="tiles"></div>
         <div class="hero-label">Cost share by provider</div>
@@ -278,9 +289,12 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
                 <option value="cache_write">Cache write</option>
                 <option value="output">Output</option>
                 <option value="reasoning">Reasoning</option>
+                <option value="output_total">Output incl. reasoning</option>
+                <option value="cost_usd">Cost per request</option>
                 <option value="cache_hit_rate">Cache hit rate</option>
                 <option value="latency_ms">Latency</option>
                 <option value="ttft_ms">Time to first token</option>
+                <option value="tokens_per_sec">Output tokens / s</option>
               </select>
             </label>
             <div class="seg" role="group" aria-label="Statistic">
@@ -319,15 +333,18 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
         <div class="card-head">
           <div>
             <h2 id="breakdown-title">Breakdown</h2>
-            <p class="sub">Select a model or client to filter the page.</p>
+            <p class="sub">Select a provider, model, client, account or API key to filter the page.</p>
           </div>
           <div class="seg" role="group" aria-label="Break down by">
+            <button type="button" data-by="provider" aria-pressed="false">Provider</button>
             <button type="button" data-by="model" aria-pressed="true">Model</button>
             <button type="button" data-by="client" aria-pressed="false">Client</button>
+            <button type="button" data-by="user_agent" aria-pressed="false">User-Agent</button>
             <button type="button" data-by="day" aria-pressed="false">Day</button>
             <button type="button" data-by="api_key" aria-pressed="false">API key</button>
             <button type="button" data-by="reasoning_effort" aria-pressed="false">Effort</button>
             <button type="button" data-by="account" aria-pressed="false">Account</button>
+            <button type="button" data-by="errors" aria-pressed="false">Errors</button>
           </div>
         </div>
         <p class="section-status notice" role="status" hidden></p>
@@ -338,7 +355,7 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
-        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day. For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
+        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day, for providers that report weekly quota in response headers (Claude, Codex). For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
           <div id="burn-chart" class="chart"></div>
@@ -403,7 +420,7 @@ const SERIES_SLOTS = 8;
 const END_LABELS = 4;
 
 const state = {
-  period: 7, provider: '', model: '', client: '', apiKey: '',
+  period: 7, provider: '', model: '', client: '', account: '', apiKey: '',
   view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', by: 'model',
 };
 let data = {};
@@ -464,6 +481,7 @@ function forgetKey() {
   data = {};
   limitsData = null;
   claudeProfiles.clear();
+  antigravityPlans.clear();
   document.getElementById('health').replaceChildren();
   managementKey = '';
   try { sessionStorage.removeItem(KEY_STORE); } catch (_) { /* nothing stored */ }
@@ -511,7 +529,7 @@ function rangeParams() {
 }
 
 function filterParams() {
-  return { ...rangeParams(), provider: state.provider, model: state.model, client: state.client, api_key: state.apiKey };
+  return { ...rangeParams(), provider: state.provider, model: state.model, client: state.client, account: state.account, api_key: state.apiKey };
 }
 
 /* ---------- formatting ---------- */
@@ -799,15 +817,22 @@ function renderTotals() {
   document.getElementById('t-cost').textContent = fmtUSD(t.cost_usd);
   const costChange = change(() => relativeChange(t.cost_usd, prev.cost_usd));
   document.getElementById('t-cost-change').textContent = costChange ? costChange + ' vs the previous ' + periodName() : '';
+  const drivers = prev ? changeDrivers(t, prev) : [];
+  const driversNode = document.getElementById('t-drivers');
+  driversNode.hidden = !drivers.length;
+  driversNode.textContent = drivers.length ? 'Drivers: ' + drivers.map((d) => `${d.label} ${d.change}`).join(', ') : '';
   // Sessions and cache savings are not in the series, so their tiles have no trend.
   const size = data.daily.bucket === 'hour' ? HOUR : DAY;
   const xs = buckets(size);
   const sums = sumBuckets(data.daily.points, xs);
   const trend = (value, fmt) => ({ values: recordedValues(sums.map(value), xs, size, data.summary.data_since), xs, fmt, fmtX: size === HOUR ? fmtHour : fmtDay });
   drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost');
+  const sessionNote = t.median_requests_per_session > 0
+    ? `med ${fmtCompact(Math.round(t.median_requests_per_session))} req/session` + (t.median_peak_input_per_session > 0 ? `, ${fmtCompact(Math.round(t.median_peak_input_per_session))} peak in` : '')
+    : '';
   document.getElementById('t-tiles').replaceChildren(
     tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact)),
-    tile('Sessions', fmtCompact(t.sessions), '', change(() => relativeChange(t.sessions, prev.sessions))),
+    tile('Sessions', fmtCompact(t.sessions), sessionNote, change(() => relativeChange(t.sessions, prev.sessions))),
     tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => relativeChange(perRequest(t), perRequest(prev))),
       trend((b) => (b.requests > 0 ? b.cost_usd / b.requests : null), fmtUSD)),
     tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens),
@@ -922,12 +947,26 @@ const MARKER_KINDS = { client_version: 'client version', response_model: 'report
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
 
 // Calls that never streamed have no first-token time, so a day without one
-// has no TTFT point rather than a zero.
-const driftPlotted = (p) => state.driftMetric !== 'ttft_ms' || p.median.ttft_ms > 0;
+// has no TTFT point rather than a zero. Same for output speed without timed output.
+const driftPlotted = (p) => {
+  if (state.driftMetric === 'ttft_ms') return p.median.ttft_ms > 0;
+  if (state.driftMetric === 'tokens_per_sec') return p.median.tokens_per_sec > 0;
+  return true;
+};
 
 function driftValue(p) {
   if (state.driftMetric === 'cache_hit_rate') return p.cache_hit_rate;
   return p[state.driftStat][state.driftMetric];
+}
+
+function fmtMarkerImpact(impact) {
+  if (!impact) return '';
+  const parts = [];
+  if (impact.input && impact.input !== 'no change') parts.push('input ' + impact.input);
+  if (impact.outputTotal && impact.outputTotal !== 'no change') parts.push('output ' + impact.outputTotal);
+  if (impact.costUsd && impact.costUsd !== 'no change') parts.push('$/req ' + impact.costUsd);
+  if (impact.cacheHit && impact.cacheHit !== 'no change') parts.push('cache ' + impact.cacheHit);
+  return parts.length ? ' — after vs before: ' + parts.join(', ') : '';
 }
 
 function renderDrift() {
@@ -935,10 +974,12 @@ function renderDrift() {
   const container = document.getElementById('drift-chart');
   const drift = data.drift;
   const isRate = state.driftMetric === 'cache_hit_rate';
+  const isCost = state.driftMetric === 'cost_usd';
+  const isSpeed = state.driftMetric === 'tokens_per_sec';
   // The hit rate is the day's cache reads over its input, not a per-request value.
-  document.getElementById('drift-title').textContent = isRate ? 'Daily cache hit rate' : driftMetricLabel() + ' per request';
+  document.getElementById('drift-title').textContent = isRate ? 'Daily cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request';
   const isTime = state.driftMetric === 'latency_ms' || state.driftMetric === 'ttft_ms';
-  const fmtY = isRate ? fmtPct : isTime ? fmtSeconds : fmtCompact;
+  const fmtY = isRate ? fmtPct : isTime ? fmtSeconds : isCost ? fmtUSD : isSpeed ? (v) => fmtInt(v) + ' tok/s' : fmtCompact;
   const xs = buckets(DAY);
   const byKey = new Map();
   for (const p of drift.points) {
@@ -952,7 +993,11 @@ function renderDrift() {
   document.getElementById('drift-note').textContent = ranked.length > shown.length
     ? `${ranked.length - shown.length} smaller groups are hidden. Filter the page to see them.` : '';
   const markersList = document.getElementById('drift-markers');
-  markersList.replaceChildren(...drift.markers.map((mk) => el('li', { text: `${fmtDay(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}` })));
+  markersList.replaceChildren(...drift.markers.map((mk) => {
+    const impact = fmtMarkerImpact(markerImpact(drift.points, mk, state.driftStat));
+    return el('li', {}, `${fmtDay(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}`,
+      impact ? el('span', { class: 'marker-impact', text: impact }) : null);
+  }));
   document.getElementById('drift-changes').hidden = !drift.markers.length;
   document.getElementById('drift-changes-summary').textContent = `Changes (${drift.markers.length})`;
   if (!drift.points.length) {
@@ -964,7 +1009,7 @@ function renderDrift() {
   const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.filter(driftPlotted).map(driftValue)));
   // End labels need room to the right, so narrow charts keep the legend only.
   const labelRoom = container.clientWidth >= 560 ? Math.min(160, Math.round(container.clientWidth * 0.2)) : 0;
-  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate ? 0 : 1, 8 + labelRoom);
+  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtDay, isRate || isCost ? 0 : 1, 8 + labelRoom);
   g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by day');
   const index = new Map(xs.map((t, i) => [t, i]));
   // Change markers: one hairline per day, values listed above it.
@@ -1038,11 +1083,13 @@ function renderDrift() {
     entry.addEventListener('blur', blur);
   });
   document.getElementById('drift-table').replaceChildren(table(
-    ['Day', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cache hit', 'Latency', 'TTFT'],
+    ['Day', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Output total', '$/req', 'Cache hit', 'Latency', 'TTFT', 'tok/s'],
     drift.points.map((p) => {
       const st = p[state.driftStat];
-      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write), fmtInt(st.output), fmtInt(st.reasoning), fmtPct(p.cache_hit_rate),
-        fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-'];
+      return [fmtDay(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write),
+        fmtInt(st.output), fmtInt(st.reasoning), fmtInt(st.output_total || (st.output + st.reasoning)), st.cost_usd > 0 ? fmtUSD(st.cost_usd) : '-',
+        fmtPct(p.cache_hit_rate), fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-',
+        st.tokens_per_sec > 0 ? fmtInt(st.tokens_per_sec) : '-'];
     }),
   ));
 }
@@ -1072,7 +1119,10 @@ function renderBurn() {
     note.textContent = '';
     return;
   }
-  note.textContent = points.some((p) => p.unpriced_tokens > 0) ? 'Some tokens have no price, so these values are low.' : '';
+  const notes = [];
+  if (points.some((p) => p.unpriced_tokens > 0)) notes.push('Some tokens have no price, so these values are low.');
+  if (points.some((p) => p.low_sample)) notes.push('Hollow circles (*) moved under 3% that day; integer header rounding makes them noisy.');
+  note.textContent = notes.join(' ');
   const xs = buckets(DAY);
   const index = new Map(xs.map((t, i) => [t, i]));
   const accounts = [...new Set(points.map((p) => p.auth_index))];
@@ -1087,13 +1137,16 @@ function renderBurn() {
       g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', ...(styles.get(a).dash ? { 'stroke-dasharray': styles.get(a).dash } : {}), style: 'stroke:' + color(a) }));
     }
     for (const p of pts) {
-      g.svg.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(p.usd_per_pct), r: 4, 'stroke-width': 2, style: `fill:${color(a)};stroke:var(--surface)` }));
+      g.svg.append(svgEl('circle', {
+        cx: g.x(index.get(p.t)), cy: g.y(p.usd_per_pct), r: 4, 'stroke-width': 2,
+        style: p.low_sample ? `fill:var(--surface);stroke:${color(a)}` : `fill:${color(a)};stroke:var(--surface)`,
+      }));
     }
   }
   hitColumns(g, xs, (i) => {
     const title = fmtDay(xs[i]) + ', per 1% of the weekly limit';
     const rows = points.filter((p) => p.t === xs[i]).map((p) => ({
-      color: color(p.auth_index), value: fmtUSD(p.usd_per_pct),
+      color: color(p.auth_index), value: fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : ''),
       label: `${accountWithProvider(p.auth_index)}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
     }));
     return { title, label: title, rows };
@@ -1101,7 +1154,7 @@ function renderBurn() {
   legend(document.getElementById('burn-legend'), accounts.map((a) => ({ ...styles.get(a), label: accountWithProvider(a) })), 'line');
   document.getElementById('burn-table').replaceChildren(table(
     ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
-    points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct)]),
+    points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : '')]),
   ));
 }
 
@@ -1142,11 +1195,34 @@ function renderAffinity() {
 }
 
 function renderBreakdown() {
-  const b = data.breakdown;
   const container = document.getElementById('breakdown-table');
-  if (!b.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); return; }
+  if (state.by === 'errors') {
+    const e = data.errors;
+    if (!e || !e.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No failed records in this range' })); return; }
+    container.replaceChildren(table(
+      ['Provider', 'Model', 'Account', 'HTTP status', 'Failed', 'Share', 'Last seen'],
+      e.rows.map((r) => [
+        el('span', {}, el('span', { class: 'key-rect', style: 'background:' + colorFor('provider', r.provider) }), ' ', r.provider || 'unknown'),
+        r.model || 'unknown',
+        r.auth_index ? accountWithProvider(r.auth_index) : 'not recorded',
+        r.status_code ? String(r.status_code) : 'transport / none',
+        fmtInt(r.count),
+        fmtPct(r.share),
+        fmtStamp(r.last_at),
+      ]),
+    ));
+    return;
+  }
+  const b = data.breakdown;
+  if (!b || !b.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); return; }
   const keyCell = (r) => {
     const key = r.key;
+    if (b.by === 'provider') {
+      const provider = key || 'unknown';
+      return el('span', {},
+        el('span', { class: 'key-rect', style: 'background:' + colorFor('provider', key), title: provider }), ' ',
+        key ? el('button', { class: 'link', type: 'button', text: provider, title: 'Filter by provider ' + provider, onclick: () => setFilter('provider', key) }) : provider);
+    }
     if (b.by === 'model') {
       const provider = r.provider || 'unknown';
       return el('span', {},
@@ -1161,7 +1237,10 @@ function renderBreakdown() {
       const name = key.split('/')[0];
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by client ' + name, onclick: () => setFilter('client', name) });
     }
-    if (b.by === 'account') return key ? accountWithProvider(key) : 'not recorded';
+    if (b.by === 'account') {
+      if (!key) return 'not recorded';
+      return el('button', { class: 'link', type: 'button', text: accountWithProvider(key), title: 'Filter by this account', onclick: () => setFilter('account', key) });
+    }
     if (b.by === 'api_key') {
       if (!key) return 'no key';
       return el('button', { class: 'link', type: 'button', text: key, title: 'Filter by this API key', onclick: () => {
@@ -1171,13 +1250,46 @@ function renderBreakdown() {
     }
     return key;
   };
+  const titles = { provider: 'Provider', day: 'Day', client: 'Client', user_agent: 'User-Agent', api_key: 'API key hash', reasoning_effort: 'Reasoning effort', account: 'Account' };
+  const showFailed = b.by === 'provider' || b.rows.some((r) => r.failed > 0);
+  const headers = [titles[b.by] || 'Model', 'Requests']
+    .concat(showFailed ? ['Failed'] : [])
+    .concat(['Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit']);
   container.replaceChildren(table(
-    [{ day: 'Day', client: 'Client', api_key: 'API key hash', reasoning_effort: 'Reasoning effort', account: 'Account' }[b.by] || 'Model', 'Requests', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Cost', 'Per request', 'Share', 'Median in', 'Median out', 'Per 1M', 'Cache hit'],
-    b.rows.map((r) => [keyCell(r), fmtInt(r.requests), fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
-      fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
-      r.requests > 0 && r.cost_usd > 0 ? fmtUSD(r.cost_usd / r.requests) : '-', fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
-      r.cost_per_million_tokens > 0 ? fmtUSD(r.cost_per_million_tokens) : '-', fmtPct(r.cache_hit_rate)]),
+    headers,
+    b.rows.map((r) => {
+      const failText = r.failed > 0 ? `${fmtInt(r.failed)} (${fmtPct(r.failed / Math.max(1, r.records))})` : '0';
+      return [keyCell(r), fmtInt(r.requests)]
+        .concat(showFailed ? [failText] : [])
+        .concat([fmtCompact(r.uncached_input), fmtCompact(r.cache_read), fmtCompact(r.cache_write),
+          fmtCompact(r.output), fmtCompact(r.reasoning), r.unpriced_tokens > 0 && r.cost_usd === 0 ? 'unpriced' : fmtUSD(r.cost_usd),
+          r.requests > 0 && r.cost_usd > 0 ? fmtUSD(r.cost_usd / r.requests) : '-', fmtPct(r.cost_share), fmtCompact(r.median_input), fmtCompact(r.median_output),
+          r.cost_per_million_tokens > 0 ? fmtUSD(r.cost_per_million_tokens) : '-', fmtPct(r.cache_hit_rate)]);
+    }),
   ));
+}
+
+function renderAccountWarning() {
+  const node = document.getElementById('account-warning');
+  if (!node) return;
+  const creds = (data.credentials || []).filter((c) => !c.disabled);
+  const now = Date.now();
+  const problems = creds.map((c) => ({ c, st: summarizeCredentialStatus(c, now) }))
+    .filter(({ st }) => st.state !== 'active');
+  if (!problems.length) { node.hidden = true; node.replaceChildren(); return; }
+  const summary = problems.map(({ c, st }) => {
+    const label = `${accountName(c)} (${c.provider})`;
+    if (st.state === 'sign_in') return label + ' needs sign-in';
+    const next = st.cooldowns[0];
+    if (st.state === 'quota_blocked') return label + ' blocked by quota' + (next && next.retryAt ? ', resets in ' + fmtDuration(next.retryAt - now) : '');
+    return label + (st.message ? ': ' + st.message : ' in ' + st.state);
+  }).join('; ');
+  node.hidden = false;
+  node.replaceChildren(
+    el('span', { class: 'dot', style: 'background:var(--warning);margin-right:6px' }),
+    summary + '. ',
+    el('button', { class: 'link', type: 'button', text: 'Open Limits', onclick: () => { showView('limits'); refresh(); } }),
+  );
 }
 
 function renderCostWarning() {
@@ -1197,8 +1309,11 @@ function renderQuality() {
   const models = document.getElementById('q-models');
   const lists = [];
   if (data.pricing.unpriced.length) {
+    const yaml = 'price_overrides:\n' + data.pricing.unpriced.map((m) =>
+      `  ${JSON.stringify(m.model)}:\n    input: 0.0\n    output: 0.0\n    cache_read: 0.0`).join('\n');
     lists.push(el('p', { class: 'notice', text: 'Unpriced models. Add them to price_overrides in the plugin config.' }),
-      table(['Model', 'Tokens'], data.pricing.unpriced.map((m) => [m.model, fmtInt(m.tokens)])));
+      table(['Model', 'Tokens'], data.pricing.unpriced.map((m) => [m.model, fmtInt(m.tokens)])),
+      el('details', {}, el('summary', { text: 'Copy price_overrides YAML template' }), el('pre', { class: 'yaml-snippet', text: yaml })));
   }
   if (data.pricing.overridden.length) {
     lists.push(el('p', { class: 'notice', text: 'Models priced by override:' }),
@@ -1224,20 +1339,34 @@ function renderHealth(h) {
 /* ---------- limits ---------- */
 
 const LIMITS_REFRESH_SECONDS = 300;
-const LIMIT_PROVIDERS = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }];
+const LIMIT_PROVIDERS = [
+  { id: 'claude', name: 'Claude' },
+  { id: 'codex', name: 'Codex' },
+  { id: 'antigravity', name: 'Antigravity' },
+  { id: 'gemini', name: 'Gemini CLI', aliases: ['gemini', 'gemini-cli'] },
+  { id: 'devin', name: 'Devin' },
+  { id: 'kimi', name: 'Kimi' },
+];
 const CLAUDE_HEADERS = { 'anthropic-beta': 'oauth-2025-04-20' };
+const ANTIGRAVITY_HEADERS = { 'Content-Type': 'application/json', 'User-Agent': 'antigravity/1.15.8 linux/amd64' };
 const CLAUDE_PLANS = { 20: 'Max 20x', 5: 'Max 5x', 1: 'Pro' };
 const CODEX_PLANS = { plus: 'Plus', prolite: 'Pro Lite', pro: 'Pro' };
-// A plan rarely changes, so each Claude profile is read once per page load.
+// A plan rarely changes, so each account's profile/tier is read once per page load.
 const claudeProfiles = new Map();
+const antigravityPlans = new Map();
 let limitsData = null;
 
 // upstreamCall asks CPA to call a provider with the credential's token. The
 // token never reaches the browser, and CPA applies the credential's proxy.
-async function upstreamCall(account, url, headers) {
-  const r = await management('/v8/management/requests/api-call', {
-    auth_index: account.auth_index, method: 'GET', url, header: { Authorization: 'Bearer $TOKEN$', ...headers },
-  });
+async function upstreamCall(account, url, headers, opts = {}) {
+  const payload = {
+    auth_index: account.auth_index,
+    method: opts.method || 'GET',
+    url,
+    header: { Authorization: 'Bearer $TOKEN$', ...headers },
+  };
+  if (opts.data !== undefined) payload.data = opts.data;
+  const r = await management('/v8/management/requests/api-call', payload);
   const problem = accountProblem(r.status_code, account.requires_sign_in === true);
   if (problem) throw new Error(problem);
   try { return JSON.parse(r.body); } catch (_) { throw new Error('The provider did not answer with JSON.'); }
@@ -1262,8 +1391,65 @@ async function readCodex(account) {
   return { windows, weight: codexWeight(plan), plan: CODEX_PLANS[plan] || plan };
 }
 
-const LIMIT_READERS = { claude: readClaude, codex: readCodex };
+async function readAntigravity(account) {
+  let info = antigravityPlans.get(account.auth_index);
+  if (!info) {
+    const raw = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist', ANTIGRAVITY_HEADERS, {
+      method: 'POST', data: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } }),
+    }).catch(() => null);
+    if (raw) {
+      info = parseAntigravityPlan(raw);
+      antigravityPlans.set(account.auth_index, info);
+    }
+  }
+  const project = (info && info.project) || account.project_id || '';
+  const models = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels', ANTIGRAVITY_HEADERS, {
+    method: 'POST', data: JSON.stringify(project ? { project } : {}),
+  });
+  return {
+    windows: parseAntigravityUsage(models),
+    weight: info ? info.weight : null,
+    plan: (info && info.plan) || '',
+    credits: info ? info.credits : null,
+  };
+}
+
+async function readGemini(account) {
+  const body = await upstreamCall(account, 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota', { 'Content-Type': 'application/json' }, {
+    method: 'POST', data: JSON.stringify(account.project_id ? { project: account.project_id } : {}),
+  });
+  return { windows: parseGeminiQuota(body), weight: null, plan: '' };
+}
+
+async function readDevin(account) {
+  const { plan, windows } = parseDevinSignals(account);
+  if (!windows.length) throw new Error('No quota signals observed yet for this Devin account.');
+  return { windows, weight: null, plan };
+}
+
+async function readKimi(account) {
+  const body = await upstreamCall(account, 'https://api.kimi.com/coding/v1/usages', {});
+  return { windows: parseKimiUsage(body), weight: null, plan: '' };
+}
+
 const providerOf = (account) => String(account.provider || '').toLowerCase();
+const isOAuthAccount = (account) => String(account.account_type || '').toLowerCase() !== 'api_key';
+
+function limitReaderFor(account) {
+  const p = providerOf(account);
+  if (p === 'claude') return readClaude;
+  if (p === 'codex') return readCodex;
+  if (p === 'antigravity') return readAntigravity;
+  if ((p === 'gemini' || p === 'gemini-cli') && isOAuthAccount(account)) return readGemini;
+  if (p === 'devin') return readDevin;
+  if (p === 'kimi' && isOAuthAccount(account)) return readKimi;
+  return null;
+}
+
+function providerSectionId(provider) {
+  const p = String(provider || '').toLowerCase();
+  return p === 'gemini-cli' ? 'gemini' : p;
+}
 
 // The weekly trend shows a week of recorded readings and projects a week ahead.
 const TREND_PAST = 7 * DAY;
@@ -1281,20 +1467,22 @@ async function loadLimits(current) {
   const history = api('limit-history', { from: started - TREND_PAST, to: started, tz: -new Date().getTimezoneOffset() })
     .catch(() => null);
   const creds = await management('/v8/management/credentials');
-  const files = (creds.files || []).filter((f) => LIMIT_READERS[providerOf(f)]);
-  const active = files.filter((f) => !f.disabled);
-  const results = await mapLimit(active, 4, async (account) => {
+  const allFiles = creds.files || [];
+  const active = allFiles.filter((f) => !f.disabled);
+  const readable = active.filter((f) => limitReaderFor(f));
+  const statusOnly = active.filter((f) => !limitReaderFor(f));
+  const results = await mapLimit(readable, 4, async (account) => {
     // A newer load replaced this one, so spare the rate-limited endpoints.
     if (!current()) return null;
     try {
-      return { account, ...(await LIMIT_READERS[providerOf(account)](account)) };
+      return { account, ...(await limitReaderFor(account)(account)) };
     } catch (err) {
       if (err instanceof AuthError) throw err;
       return { account, error: err.message };
     }
   });
   if (!current()) return;
-  limitsData = { checkedAt: Date.now(), results, disabled: files.length - active.length, history: await history };
+  limitsData = { checkedAt: Date.now(), results, statusOnly, disabled: allFiles.length - active.length, history: await history };
   if (!current()) return;
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
@@ -1374,27 +1562,72 @@ function renderPool(pool, byAccount, now, readings) {
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
+function renderStatusRow(account, now) {
+  const st = summarizeCredentialStatus(account, now);
+  const dotColor = st.state === 'active' ? 'var(--good)' : st.state === 'cooldown' ? 'var(--warning)' : 'var(--critical)';
+  const label = st.state === 'active' ? 'Active'
+    : st.state === 'sign_in' ? 'Sign-in required'
+    : st.state === 'quota_blocked' ? 'Quota blocked'
+    : st.state === 'cooldown' ? 'In cooldown'
+    : 'Error' + (st.message ? ': ' + st.message : '');
+  const parts = [
+    el('strong', { text: accountName(account) }),
+    el('span', { class: 'status' }, el('span', { class: 'dot', style: 'background:' + dotColor }), label),
+  ];
+  if (st.cooldowns.length) {
+    const c = st.cooldowns[0];
+    parts.push(el('span', { text: `Cooldown (${c.model || c.scope}${c.reason ? ', ' + c.reason : ''})` + (c.retryAt ? `, resets in ${fmtDuration(c.retryAt - now)} (${fmtWhen(c.retryAt)})` : '') }));
+  }
+  const signals = (account.quota && account.quota.signals) || {};
+  const sigCount = Object.keys(signals).length;
+  if (sigCount > 0) parts.push(el('span', { text: `${sigCount} quota header signal${sigCount === 1 ? '' : 's'} observed` }));
+  if (st.recentSuccess + st.recentFailed > 0) {
+    parts.push(el('span', { text: `Recent: ${fmtInt(st.recentSuccess)} ok` + (st.recentFailed ? `, ${fmtInt(st.recentFailed)} failed` : '') }));
+  } else {
+    parts.push(el('span', { text: 'No recent traffic' }));
+  }
+  return el('div', { class: 'acct-status' }, ...parts);
+}
+
 function renderLimits() {
   const body = document.getElementById('limits-body');
   pendingTrends = [];
   const now = limitsData.checkedAt;
   const sections = [];
   for (const provider of LIMIT_PROVIDERS) {
-    const results = limitsData.results.filter((r) => providerOf(r.account) === provider.id);
+    const results = limitsData.results.filter((r) => providerSectionId(providerOf(r.account)) === provider.id);
     if (!results.length) continue;
     const ok = results.filter((r) => !r.error);
     const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
     const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
     const weighted = list.length > 0 && list[0].weighted;
     const sub = `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
+    const creditNote = ok.filter((r) => r.credits).map((r) => `${accountName(r.account)} ${fmtInt(r.credits.amount)} AI credits`);
+    const cooldownNotes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
+      .filter(({ st }) => st.cooldowns.length > 0)
+      .map(({ r, st }) => `${accountName(r.account)}: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : ''));
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now, limitsData.history && limitsData.history.accounts)),
+      ...list.map((p) => renderPool(p, byAccount, now, (provider.id === 'claude' || provider.id === 'codex') ? limitsData.history && limitsData.history.accounts : null)),
       ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
+      creditNote.length ? el('p', { class: 'notice', text: 'Google One AI credits: ' + creditNote.join(', ') }) : null,
+      cooldownNotes.length ? el('p', { class: 'notice', text: 'CPA cooldowns: ' + cooldownNotes.join('; ') }) : null,
       ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` }))));
   }
+  const byOtherProvider = new Map();
+  for (const acc of (limitsData.statusOnly || [])) {
+    const p = providerOf(acc) || 'other';
+    if (!byOtherProvider.has(p)) byOtherProvider.set(p, []);
+    byOtherProvider.get(p).push(acc);
+  }
+  for (const [provider, accounts] of [...byOtherProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    sections.push(el('div', { class: 'limits-provider' },
+      el('h2', { text: provider }),
+      el('p', { class: 'sub', text: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in CPA. This provider has no live quota percentage endpoint; showing CPA status and cooldowns.` }),
+      ...accounts.map((a) => renderStatusRow(a, now))));
+  }
   if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
-  body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no Claude or Codex accounts.' })]));
+  body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no active credentials.' })]));
   drawTrends();
 }
 
@@ -1503,11 +1736,11 @@ function trendChart(container, recorded, projected, now, label) {
 
 /* ---------- loading ---------- */
 
-function fillSelect(id, values, current, allLabel) {
+function fillSelect(id, values, current, allLabel, labelOf = (v) => v) {
   const select = document.getElementById(id);
-  const all = new Set(values.filter(Boolean));
+  const all = new Set((values || []).filter(Boolean));
   if (current) all.add(current);
-  select.replaceChildren(el('option', { value: '', text: allLabel }), ...[...all].sort().map((v) => el('option', { value: v, text: v })));
+  select.replaceChildren(el('option', { value: '', text: allLabel }), ...[...all].sort().map((v) => el('option', { value: v, text: labelOf(v) })));
   select.value = current;
 }
 
@@ -1515,6 +1748,7 @@ function renderOptions(options) {
   fillSelect('f-provider', options.providers, state.provider, 'All providers');
   fillSelect('f-model', options.models, state.model, 'All models');
   fillSelect('f-client', options.clients, state.client, 'All clients');
+  fillSelect('f-account', options.accounts, state.account, 'All accounts', (id) => typeof accountWithProvider === 'function' ? accountWithProvider(id) : id);
 }
 
 function showLoadError(err) {
@@ -1595,7 +1829,7 @@ function detailJob(section) {
   const range = { from: p.from, to: p.to, tz: p.tz };
   switch (section) {
     case 'leftover': return { section, ready: () => Boolean(data.leftover),
-      load: () => api('limit-leftover', { ...range, provider: p.provider }),
+      load: () => api('limit-leftover', { ...range, provider: p.provider, account: p.account }),
       apply: (v) => { data.leftover = v; renderLeftover(); } };
     case 'affinity': return { section, ready: () => Boolean(data.affinity),
       load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } };
@@ -1629,7 +1863,7 @@ async function loadUsage(current, reuse) {
   // Filter navigation compares the same snapshot. Refresh advances the
   // interval and renews all data, including metadata and closed details.
   if (prior) Object.assign(p, { from: prior.params.from, to: prior.params.to, tz: prior.params.tz });
-  const sameProvider = prior && prior.params.provider === p.provider;
+  const sameLimitScope = prior && prior.params.provider === p.provider && prior.params.account === p.account;
   const group = state.driftGroup, by = state.by;
   const range = { from: p.from, to: p.to, tz: p.tz };
   const prevRange = previousPeriod(p);
@@ -1647,7 +1881,7 @@ async function loadUsage(current, reuse) {
     if (failed) throw failed.reason;
     data = { summary: primary[0].value, daily: primary[1].value, previous: null, params: p, period,
       options: prior?.options, credentials: prior?.credentials,
-      burn: sameProvider ? prior.burn : undefined, leftover: sameProvider ? prior.leftover : undefined };
+      burn: sameLimitScope ? prior.burn : undefined, leftover: sameLimitScope ? prior.leftover : undefined };
     for (const section of ['drift', 'burn', 'leftover', 'affinity', 'breakdown', 'quality']) {
       sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
     }
@@ -1657,6 +1891,7 @@ async function loadUsage(current, reuse) {
     renderModelDetail();
     renderDaily();
     renderCostWarning();
+    if (typeof renderAccountWarning === 'function') renderAccountWarning();
     if (data.options) renderOptions(data.options);
     if (data.burn) { sectionState('burn'); renderBurn(); }
     if (data.leftover) { sectionState('leftover'); renderLeftover(); }
@@ -1667,9 +1902,11 @@ async function loadUsage(current, reuse) {
     if (!data.options) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
     if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
       data.credentials = files;
+      if (typeof renderAccountWarning === 'function') renderAccountWarning();
+      if (data.options) renderOptions(data.options);
       if (data.burn) renderBurn();
       if (data.leftover) renderLeftover();
-      if (data.breakdown && data.breakdown.by === 'account') renderBreakdown();
+      if ((data.breakdown && data.breakdown.by === 'account') || (state.by === 'errors' && data.errors)) renderBreakdown();
     } });
     if (recordedThrough(prevRange, data.summary.data_since)) jobs.push({ load: () => api('summary', { ...p, ...prevRange }), apply: (prev) => {
       data.previous = recordedThrough(prevRange, prev.data_since) ? prev.totals : null;
@@ -1677,9 +1914,11 @@ async function loadUsage(current, reuse) {
     } });
     jobs.push(
       { section: 'drift', load: () => api('drift', { ...p, group }), apply: (v) => { data.drift = v; renderDrift(); } },
-      { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
+      by === 'errors'
+        ? { section: 'breakdown', load: () => api('errors', p), apply: (v) => { data.errors = v; renderBreakdown(); } }
+        : { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
     );
-    if (!data.burn) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider }), apply: (v) => { data.burn = v; renderBurn(); } });
+    if (!data.burn) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider, account: p.account }), apply: (v) => { data.burn = v; renderBurn(); } });
     for (const section of DETAIL_SECTIONS) if (document.getElementById(section).open) jobs.push(detailJob(section));
     const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current));
     if (current()) document.getElementById('updated').textContent = results.includes(false)
@@ -1692,7 +1931,7 @@ async function loadUsage(current, reuse) {
 function matchesSelection() {
   const p = data.params;
   return p && data.period === state.period && p.provider === state.provider &&
-    p.model === state.model && p.client === state.client && p.api_key === state.apiKey;
+    p.model === state.model && p.client === state.client && p.account === state.account && p.api_key === state.apiKey;
 }
 
 async function refreshDetail(section) {
@@ -1721,13 +1960,15 @@ async function refreshGroup(section) {
   const seq = ++groupSeq[section];
   const current = () => pageSeq === loadSeq && seq === groupSeq[section] && state.view === 'usage';
   const card = document.getElementById(section);
-  const grouping = section === 'drift' ? { group: state.driftGroup } : { by: state.by };
+  const isErrors = section === 'breakdown' && state.by === 'errors';
+  const route = isErrors ? 'errors' : section;
+  const grouping = section === 'drift' ? { group: state.driftGroup } : isErrors ? {} : { by: state.by };
   sectionState(section, 'Loading…', true);
   document.getElementById('load-error').textContent = '';
   try {
-    const result = await api(section, { ...data.params, ...grouping });
+    const result = await api(route, { ...data.params, ...grouping });
     if (!current()) return;
-    data[section] = result;
+    if (isErrors) data.errors = result; else data[section] = result;
     sectionState(section);
     if (section === 'drift') renderDrift(); else renderBreakdown();
   } catch (err) {
@@ -1816,7 +2057,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && autoRefresh.due) refresh(true);
 });
 document.getElementById('f-period').addEventListener('change', (e) => { state.period = Number(e.target.value); refreshFilters(); });
-for (const name of ['provider', 'model', 'client']) {
+for (const name of ['provider', 'model', 'client', 'account']) {
   document.getElementById('f-' + name).addEventListener('change', (e) => { state[name] = e.target.value; refreshFilters(); });
 }
 document.getElementById('f-apikey').addEventListener('change', (e) => {

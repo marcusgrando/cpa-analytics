@@ -120,6 +120,11 @@ mgmt summary | check "cost priced from the table" 'd["totals"]["cost_usd"] > 0 a
 mgmt limit-burn | check "weekly limit read from response headers" 'len(d["points"]) == 1 and d["points"][0]["weekly_pct"] == 2 and d["points"][0]["auth_index"] != ""'
 mgmt limit-history | check "weekly snapshots listed per account" 'len(d["accounts"]) == 1 and d["accounts"][0]["points"][-1]["weekly_pct"] == 12'
 mgmt "breakdown?by=account" | check "rows grouped by account" 'len(d["rows"]) == 1 and d["rows"][0]["key"] != ""'
+mgmt "breakdown?by=provider" | check "rows grouped by provider" 'len(d["rows"]) == 1 and d["rows"][0]["requests"] == 2'
+mgmt "drift?group=response_model" | check "drift includes output_total and cost_usd" 'len(d["points"]) == 1 and d["points"][0]["median"]["output_total"] > 0 and d["points"][0]["median"]["cost_usd"] > 0'
+mgmt errors | check "errors route returns empty list on success" 'd["total"] == 0 and d["rows"] == []'
+errors_code=$(curl -s -o /dev/null -w '%{http_code}' "$API/errors")
+[ "$errors_code" = 401 ] && echo "ok   errors require the key" || fail "errors without key returned $errors_code"
 options_code=$(curl -s -o /dev/null -w '%{http_code}' "$API/options")
 [ "$options_code" = 401 ] && echo "ok   options require the key" || fail "options without key returned $options_code"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$API/summary")

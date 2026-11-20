@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
 )
 
-// Stats holds one value per token bucket and per timing, for a median or a p90.
+// Stats holds one value per token bucket, cost and timing, for a median or a p90.
 type Stats struct {
 	// Input is the whole prompt: uncached input, cache read and cache write.
 	Input         float64 `json:"input"`
@@ -16,9 +18,14 @@ type Stats struct {
 	CacheWrite    float64 `json:"cache_write"`
 	Output        float64 `json:"output"`
 	Reasoning     float64 `json:"reasoning"`
-	LatencyMs     float64 `json:"latency_ms"`
+	// OutputTotal includes both visible output and reasoning tokens.
+	OutputTotal float64 `json:"output_total"`
+	CostUSD     float64 `json:"cost_usd"`
+	LatencyMs   float64 `json:"latency_ms"`
 	// TTFTMs covers only calls that reported a first token (streamed ones).
 	TTFTMs float64 `json:"ttft_ms"`
+	// TokensPerSec is output+reasoning tokens per generation second.
+	TokensPerSec float64 `json:"tokens_per_sec"`
 }
 
 // DriftPoint is one day of one group, measured per request (see perRequest).
@@ -60,12 +67,12 @@ var markerKinds = []struct{ kind, expr, skip string }{
 // Drift returns daily medians and p90 per request (see perRequest), grouped
 // by the reported model, the client version or the reasoning effort, plus
 // change markers.
-func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
+func Drift(db *sql.DB, f Filter, table *pricing.Table, group string) (DriftResult, error) {
 	groupExpr, ok := driftGroups[group]
 	if !ok {
 		return DriftResult{}, &ParamError{Param: "group", Reason: "must be response_model, client_version or reasoning_effort"}
 	}
-	reqs, err := perRequest(db, f, groupExpr)
+	reqs, err := perRequestPriced(db, f, table, groupExpr)
 	if err != nil {
 		return DriftResult{}, err
 	}
@@ -95,31 +102,42 @@ func Drift(db *sql.DB, f Filter, group string) (DriftResult, error) {
 }
 
 func driftPoint(t int64, key string, calls []inbound) DriftPoint {
-	columns := func(pick func(inbound) int64) []float64 {
+	columns := func(pick func(inbound) float64) []float64 {
 		out := make([]float64, len(calls))
 		for i, c := range calls {
-			out[i] = float64(pick(c))
+			out[i] = pick(c)
 		}
 		return out
 	}
-	input := columns(func(c inbound) int64 { return c.tokens.input() })
-	uncached := columns(func(c inbound) int64 { return c.tokens.UncachedInput })
-	cacheRead := columns(func(c inbound) int64 { return c.tokens.CacheRead })
-	cacheWrite := columns(func(c inbound) int64 { return c.tokens.CacheWrite })
-	output := columns(func(c inbound) int64 { return c.tokens.Output })
-	reasoning := columns(func(c inbound) int64 { return c.tokens.Reasoning })
-	latency := columns(func(c inbound) int64 { return c.latencyMs })
-	var ttft []float64
+	input := columns(func(c inbound) float64 { return float64(c.tokens.input()) })
+	uncached := columns(func(c inbound) float64 { return float64(c.tokens.UncachedInput) })
+	cacheRead := columns(func(c inbound) float64 { return float64(c.tokens.CacheRead) })
+	cacheWrite := columns(func(c inbound) float64 { return float64(c.tokens.CacheWrite) })
+	output := columns(func(c inbound) float64 { return float64(c.tokens.Output) })
+	reasoning := columns(func(c inbound) float64 { return float64(c.tokens.Reasoning) })
+	outputTotal := columns(func(c inbound) float64 { return float64(c.tokens.Output + c.tokens.Reasoning) })
+	costUSD := columns(func(c inbound) float64 { return c.costUSD })
+	latency := columns(func(c inbound) float64 { return float64(c.latencyMs) })
+	var ttft, tps []float64
 	for _, c := range calls {
 		if c.ttftMs > 0 {
 			ttft = append(ttft, float64(c.ttftMs))
+		}
+		outTok := c.tokens.Output + c.tokens.Reasoning
+		genMs := c.latencyMs - c.ttftMs
+		if c.ttftMs == 0 || genMs <= 0 {
+			genMs = c.latencyMs
+		}
+		if outTok > 0 && genMs > 0 {
+			tps = append(tps, float64(outTok)*1000.0/float64(genMs))
 		}
 	}
 	stats := func(p float64) Stats {
 		return Stats{
 			Input: percentile(input, p), UncachedInput: percentile(uncached, p), CacheRead: percentile(cacheRead, p),
 			CacheWrite: percentile(cacheWrite, p), Output: percentile(output, p), Reasoning: percentile(reasoning, p),
-			LatencyMs: percentile(latency, p), TTFTMs: percentile(ttft, p),
+			OutputTotal: percentile(outputTotal, p), CostUSD: percentile(costUSD, p),
+			LatencyMs: percentile(latency, p), TTFTMs: percentile(ttft, p), TokensPerSec: percentile(tps, p),
 		}
 	}
 	var sum Tokens
@@ -187,8 +205,69 @@ type inbound struct {
 	key       string
 	at        int64
 	tokens    Tokens
+	costUSD   float64
 	latencyMs int64
 	ttftMs    int64
+}
+
+// perRequestPriced sums successful generating rows per upstream call and group,
+// pricing each model/tier slice with table so split-billing rows of one call
+// combine into one per-request cost.
+func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string) ([]inbound, error) {
+	if table == nil {
+		return perRequest(db, f, keyExpr)
+	}
+	where, args := f.where(true)
+	q := "SELECT " + callExpr + ", CAST(" + keyExpr + " AS TEXT), (" + modelExpr + "), (" + tierExpr + "), MIN(requested_at), MAX(latency_ms), MAX(ttft_ms), " + tokenSums +
+		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY 1, 2, 3, 4"
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("per request priced: %w", err)
+	}
+	defer rows.Close()
+	type callKey struct{ call, key string }
+	p := newPricer(table)
+	byCall := map[callKey]*inbound{}
+	var order []callKey
+	for rows.Next() {
+		var (
+			call, key, model, tier string
+			at, latency, ttft      int64
+			tok                    Tokens
+		)
+		targets := append([]any{&call, &key, &model, &tier, &at, &latency, &ttft}, tok.scanTargets()...)
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("per request priced scan: %w", err)
+		}
+		ck := callKey{call, key}
+		in := byCall[ck]
+		if in == nil {
+			in = &inbound{key: key, at: at, latencyMs: latency, ttftMs: ttft}
+			byCall[ck] = in
+			order = append(order, ck)
+		} else {
+			if at < in.at {
+				in.at = at
+			}
+			if latency > in.latencyMs {
+				in.latencyMs = latency
+			}
+			if ttft > in.ttftMs {
+				in.ttftMs = ttft
+			}
+		}
+		in.tokens.add(tok)
+		cost, _ := p.price(model, tier, tok)
+		in.costUSD += cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("per request priced rows: %w", err)
+	}
+	out := make([]inbound, 0, len(order))
+	for _, ck := range order {
+		out = append(out, *byCall[ck])
+	}
+	return out, nil
 }
 
 // perRequest sums the successful generating rows per request and group. A

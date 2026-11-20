@@ -23,6 +23,9 @@ type BurnPoint struct {
 	// UnpricedTokens were spent in the measured spans but have no price, so
 	// CostUSD understates the spend.
 	UnpricedTokens int64 `json:"unpriced_tokens"`
+	// LowSample flags days whose weekly percent moved less than lowSampleBurnPct,
+	// where integer header rounding makes USDPerPct noisy.
+	LowSample bool `json:"low_sample,omitempty"`
 }
 
 // BurnResult lists burn points by day, then account.
@@ -58,6 +61,8 @@ const (
 	// minBurnPct leaves out days whose weekly percent moved too little to
 	// give a stable ratio.
 	minBurnPct = 1.0
+	// lowSampleBurnPct marks days with small integer-percent movement as noisy.
+	lowSampleBurnPct = 3.0
 	// resetJitterMillis tolerates resets a provider recomputes per response.
 	resetJitterMillis = int64(60 * 60 * 1000)
 	// cycleLookbackMillis reaches the start of a weekly cycle that ends at the
@@ -200,6 +205,7 @@ func LimitBurn(db *sql.DB, f Filter, table *pricing.Table) (BurnResult, error) {
 			continue
 		}
 		bp.USDPerPct = bp.CostUSD / bp.WeeklyPct
+		bp.LowSample = bp.WeeklyPct < lowSampleBurnPct
 		res.Points = append(res.Points, *bp)
 	}
 	sort.Slice(res.Points, func(i, j int) bool {
