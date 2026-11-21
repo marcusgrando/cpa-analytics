@@ -527,15 +527,18 @@ func TestIndexOffersShortPeriodsAndCleanDriftGroups(t *testing.T) {
 	}
 }
 
-// The request log loads when opened, one page at a time, and a row opens its
-// details in place.
+// Requests has its own top-level view with live and manual refresh, one page
+// at a time, and rows expand in place.
 func TestIndexListsRequests(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
-		`<details id="requests" class="card" aria-labelledby="requests-title">`,
+		`data-view="requests"`,
+		`<section id="requests" class="card requests-only" hidden aria-labelledby="requests-title">`,
+		`<select id="req-refresh">`,
+		`<button id="refresh-requests" class="requests-only" type="button" hidden>Refresh</button>`,
 		"api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE })",
 		"row.setAttribute('aria-expanded', String(open))",
-		"const DETAIL_SECTIONS = ['latency', 'requests', 'leftover', 'affinity', 'quality'];",
+		"const DETAIL_SECTIONS = ['latency', 'leftover', 'affinity', 'quality'];",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)

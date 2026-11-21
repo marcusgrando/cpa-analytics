@@ -207,8 +207,9 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <div class="seg" role="group" aria-label="View">
         <button type="button" data-view="usage" aria-pressed="true">Usage</button>
         <button type="button" data-view="limits" aria-pressed="false">Limits</button>
+        <button type="button" data-view="requests" aria-pressed="false">Requests</button>
       </div>
-      <label class="usage-only">Period
+      <label class="data-only">Period
         <select id="f-period">
           <option value="15m">Last 15 minutes</option>
           <option value="1h">Last 1 hour</option>
@@ -219,17 +220,26 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <option value="90d">Last 90 days</option>
         </select>
       </label>
-      <label class="usage-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
-      <label class="usage-only">Model <select id="f-model"><option value="">All models</option></select></label>
-      <label class="usage-only">Client <select id="f-client"><option value="">All clients</option></select></label>
-      <label class="usage-only">Account <select id="f-account"><option value="">All accounts</option></select></label>
-      <label class="usage-only">API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
+      <label class="data-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
+      <label class="data-only">Model <select id="f-model"><option value="">All models</option></select></label>
+      <label class="data-only">Client <select id="f-client"><option value="">All clients</option></select></label>
+      <label class="data-only">Account <select id="f-account"><option value="">All accounts</option></select></label>
+      <label class="data-only">API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
       <label class="usage-only">Auto refresh
         <select id="auto-refresh">
           <option value="60" selected>Every 60 s</option>
           <option value="0">Off</option>
         </select>
       </label>
+      <label class="requests-only" hidden>Live refresh
+        <select id="req-refresh">
+          <option value="3" selected>Every 3 s</option>
+          <option value="10">Every 10 s</option>
+          <option value="30">Every 30 s</option>
+          <option value="0">Off</option>
+        </select>
+      </label>
+      <button id="refresh-requests" class="requests-only" type="button" hidden>Refresh</button>
       <button id="check-limits" class="limits-only" type="button" hidden>Check now</button>
       <button id="change-key" type="button">Change key</button>
       <span id="updated" class="updated" aria-live="off"></span>
@@ -239,6 +249,39 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
       <h2 id="limits-title">Subscription limits</h2>
       <p class="sub">With multiple accounts, the top bar pools them weighted by plan and each row below is one account against its own limit. The tick marks an even pace.</p>
       <div id="limits-body"></div>
+    </section>
+
+    <section id="requests" class="card requests-only" hidden aria-labelledby="requests-title">
+      <div class="card-head">
+        <div>
+          <h2 id="requests-title">Requests</h2>
+          <p class="sub">One row per upstream call. Select a row for its details. Request and response content is never stored.</p>
+        </div>
+        <div class="controls">
+          <div class="seg" role="group" aria-label="Sort by">
+            <button type="button" data-req-sort="recent" aria-pressed="true">Newest</button>
+            <button type="button" data-req-sort="cost" aria-pressed="false">Cost</button>
+            <button type="button" data-req-sort="latency" aria-pressed="false">Latency</button>
+            <button type="button" data-req-sort="tokens" aria-pressed="false">Tokens</button>
+          </div>
+          <label>Show
+            <select id="req-outcome">
+              <option value="all" selected>All calls</option>
+              <option value="failed">Failed</option>
+              <option value="ok">Successful</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <p class="section-status notice" role="status" hidden></p>
+      <div class="section-content">
+        <div id="requests-table" class="table-wrap"></div>
+        <div class="pager">
+          <button id="req-prev" type="button">Previous</button>
+          <span id="req-range"></span>
+          <button id="req-next" type="button">Next</button>
+        </div>
+      </div>
     </section>
 
     <div class="grid usage-only">
@@ -374,35 +417,6 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <div id="breakdown-table" class="table-wrap"></div>
         </div>
       </section>
-
-      <details id="requests" class="card" aria-labelledby="requests-title">
-        <summary><h2 id="requests-title">Requests</h2></summary>
-        <p class="sub">One row per upstream call. Select a row for its details. Request and response content is never stored.</p>
-        <div class="controls">
-          <div class="seg" role="group" aria-label="Sort by">
-            <button type="button" data-req-sort="recent" aria-pressed="true">Newest</button>
-            <button type="button" data-req-sort="cost" aria-pressed="false">Cost</button>
-            <button type="button" data-req-sort="latency" aria-pressed="false">Latency</button>
-            <button type="button" data-req-sort="tokens" aria-pressed="false">Tokens</button>
-          </div>
-          <label>Show
-            <select id="req-outcome">
-              <option value="all" selected>All calls</option>
-              <option value="failed">Failed</option>
-              <option value="ok">Successful</option>
-            </select>
-          </label>
-        </div>
-        <p class="section-status notice" role="status" hidden></p>
-        <div class="section-content">
-          <div id="requests-table" class="table-wrap"></div>
-          <div class="pager">
-            <button id="req-prev" type="button">Previous</button>
-            <span id="req-range"></span>
-            <button id="req-next" type="button">Next</button>
-          </div>
-        </div>
-      </details>
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
@@ -546,6 +560,7 @@ function rememberKey(key) {
 function forgetKey() {
   data = {};
   limitsData = null;
+  if (typeof expandedRequests !== 'undefined') expandedRequests.clear();
   claudeProfiles.clear();
   antigravityPlans.clear();
   document.getElementById('health').replaceChildren();
@@ -1962,6 +1977,10 @@ function renderLatency() {
 
 /* ---------- requests ---------- */
 
+// Keeps expanded row IDs across live-refresh ticks so inspecting a call never
+// collapses under the viewer.
+const expandedRequests = new Set();
+
 function requestDetail(c) {
   const pairs = [
     ['Call', c.id], ['Provider', c.provider], ['Requested model', c.requested_model], ['Reported model', c.models.join(', ')],
@@ -1999,12 +2018,14 @@ function renderRequests() {
       c.unpriced_tokens && !c.cost_usd ? 'unpriced' : fmtUSD(c.cost_usd), c.latency_ms ? fmtSeconds(c.latency_ms) : '-',
       c.failed ? `Failed ${c.status_code || ''}`.trim() : String(c.status_code || 'OK'),
     ];
-    const row = el('tr', { class: 'req-row', tabindex: 0, 'aria-expanded': 'false' }, ...cells.map((v) => el('td', { text: v })));
-    const detail = el('tr', { class: 'req-detail', hidden: '' }, el('td', { colspan: headers.length }, requestDetail(c)));
+    const isOpen = expandedRequests.has(c.id);
+    const row = el('tr', { class: 'req-row', tabindex: 0, 'aria-expanded': String(isOpen) }, ...cells.map((v) => el('td', { text: v })));
+    const detail = el('tr', { class: 'req-detail', ...(isOpen ? {} : { hidden: '' }) }, el('td', { colspan: headers.length }, requestDetail(c)));
     const toggle = () => {
       const open = detail.hidden;
       detail.hidden = !open;
       row.setAttribute('aria-expanded', String(open));
+      if (open) expandedRequests.add(c.id); else expandedRequests.delete(c.id);
     };
     row.addEventListener('click', toggle);
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
@@ -2014,8 +2035,7 @@ function renderRequests() {
 }
 
 function reloadRequests() {
-  data.requests = null;
-  refreshDetail('requests');
+  refresh(false, true);
 }
 
 /* ---------- loading ---------- */
@@ -2091,6 +2111,7 @@ function refresh(quiet, reuse = false) {
         if (detailPromise) await detailPromise;
         if (!current()) return;
         if (state.view === 'limits') await loadLimits(current);
+        else if (state.view === 'requests') await loadRequests(current, reuseRange, quiet);
         else await loadUsage(current, reuseRange);
       }, quiet);
     } while (refreshPending);
@@ -2107,7 +2128,7 @@ function sectionState(section, message = '', busy = false) {
   status.hidden = !message;
 }
 
-const DETAIL_SECTIONS = ['latency', 'requests', 'leftover', 'affinity', 'quality'];
+const DETAIL_SECTIONS = ['latency', 'leftover', 'affinity', 'quality'];
 
 function detailJob(section) {
   const p = data.params;
@@ -2120,11 +2141,45 @@ function detailJob(section) {
       load: () => api('affinity', p), apply: (v) => { data.affinity = v; renderAffinity(); } };
     case 'latency': return { section, ready: () => Boolean(data.latency),
       load: () => api('latency', p), apply: (v) => { data.latency = v; renderLatency(); } };
-    case 'requests': return { section, ready: () => Boolean(data.requests),
-      load: () => api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE }),
-      apply: (v) => { data.requests = v; renderRequests(); } };
     case 'quality': return { section, ready: () => Boolean(data.pricing),
       load: () => api('pricing', p), apply: (v) => { data.pricing = v; renderQuality(); } };
+  }
+}
+
+// loadRequests powers the Requests tab. Quiet live ticks fetch only the
+// current page of calls without flashing a loading state, while keeping
+// filter options and credential names cached across ticks.
+async function loadRequests(current, reuse, quiet) {
+  const p = filterParams();
+  const period = state.period;
+  const prior = (reuse || quiet) && data.period === period && data.params?.tz === p.tz ? data : null;
+  if (reuse && prior) Object.assign(p, { from: prior.params.from, to: prior.params.to, tz: prior.params.tz });
+  const range = { from: p.from, to: p.to, tz: p.tz };
+  if (!quiet && !data.requests) sectionState('requests', 'Loading…', true);
+  try {
+    const req = await api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE });
+    if (!current()) return;
+    data = { ...data, requests: req, params: p, period, options: prior?.options, credentials: data.credentials };
+    document.getElementById('key-form').hidden = true;
+    document.getElementById('app').hidden = false;
+    sectionState('requests');
+    renderRequests();
+    if (data.options) renderOptions(data.options);
+    const live = typeof reqRefreshSeconds === 'function' ? reqRefreshSeconds() : 0;
+    document.getElementById('updated').textContent = 'Through ' + new Date(p.to).toLocaleTimeString() + (live > 0 ? `, every ${live} s` : '');
+    if (quiet) return;
+    const jobs = [];
+    if (!data.options) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
+    if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
+      data.credentials = files;
+      if (data.options) renderOptions(data.options);
+      if (data.requests) renderRequests();
+    } });
+    if (jobs.length) await mapLimit(jobs, 2, (job) => runUsageJob(job, current));
+  } catch (err) {
+    if (!current()) return;
+    if (!quiet && !data.requests) sectionState('requests', 'Could not load. Refresh to retry.');
+    throw err;
   }
 }
 
@@ -2278,10 +2333,15 @@ async function refreshGroup(section) {
 /* ---------- auto refresh ---------- */
 
 const AUTO_REFRESH_STORE = 'cpa-analytics.auto-refresh';
+const REQ_REFRESH_STORE = 'cpa-analytics.req-refresh';
 const autoRefresh = { timer: 0, due: false };
 
 function autoRefreshSeconds() {
   return Number(document.getElementById('auto-refresh').value);
+}
+
+function reqRefreshSeconds() {
+  return Number(document.getElementById('req-refresh').value);
 }
 
 // The next refresh is scheduled after each load, so a slow load never stacks
@@ -2290,7 +2350,9 @@ function scheduleAutoRefresh() {
   clearTimeout(autoRefresh.timer);
   autoRefresh.due = false;
   // Provider usage endpoints are rate limited, so limits refresh slower.
-  const seconds = state.view === 'limits' ? LIMITS_REFRESH_SECONDS : autoRefreshSeconds();
+  const seconds = state.view === 'limits' ? LIMITS_REFRESH_SECONDS
+    : state.view === 'requests' ? reqRefreshSeconds()
+    : autoRefreshSeconds();
   if (seconds <= 0 || document.getElementById('app').hidden) return;
   autoRefresh.timer = setTimeout(() => {
     if (document.hidden) autoRefresh.due = true;
@@ -2299,10 +2361,12 @@ function scheduleAutoRefresh() {
 }
 
 function restoreAutoRefresh() {
-  const select = document.getElementById('auto-refresh');
-  let saved = null;
-  try { saved = sessionStorage.getItem(AUTO_REFRESH_STORE); } catch (_) { /* storage blocked: keep the default */ }
-  if ([...select.options].some((o) => o.value === saved)) select.value = saved;
+  for (const [id, key] of [['auto-refresh', AUTO_REFRESH_STORE], ['req-refresh', REQ_REFRESH_STORE]]) {
+    const select = document.getElementById(id);
+    let saved = null;
+    try { saved = sessionStorage.getItem(key); } catch (_) { /* storage blocked: keep the default */ }
+    if (select && [...select.options].some((o) => o.value === saved)) select.value = saved;
+  }
 }
 
 function setFilter(name, value, { refresh: reload = true } = {}) {
@@ -2320,8 +2384,10 @@ function showView(view) {
   state.view = view;
   try { sessionStorage.setItem(VIEW_STORE, view); } catch (_) { /* storage blocked: applies to this page only */ }
   pressed('.filters', 'data-view', view);
+  for (const node of document.querySelectorAll('.data-only')) node.hidden = view !== 'usage' && view !== 'requests';
   for (const node of document.querySelectorAll('.usage-only')) node.hidden = view !== 'usage';
   for (const node of document.querySelectorAll('.limits-only')) node.hidden = view !== 'limits';
+  for (const node of document.querySelectorAll('.requests-only')) node.hidden = view !== 'requests';
   document.getElementById('updated').textContent = '';
 }
 
@@ -2343,9 +2409,14 @@ document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('clic
   refresh();
 }));
 document.getElementById('check-limits').addEventListener('click', () => refresh());
+document.getElementById('refresh-requests').addEventListener('click', () => refresh());
 document.getElementById('change-key').addEventListener('click', () => { ++loadSeq; refreshPending = false; clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
 document.getElementById('auto-refresh').addEventListener('change', (e) => {
   try { sessionStorage.setItem(AUTO_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }
+  scheduleAutoRefresh();
+});
+document.getElementById('req-refresh').addEventListener('change', (e) => {
+  try { sessionStorage.setItem(REQ_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }
   scheduleAutoRefresh();
 });
 document.addEventListener('visibilitychange', () => {
@@ -2398,7 +2469,10 @@ new ResizeObserver(() => {
 }).observe(document.querySelector('.wrap'));
 
 restoreAutoRefresh();
-try { if (sessionStorage.getItem(VIEW_STORE) === 'limits') showView('limits'); } catch (_) { /* storage blocked: start on usage */ }
+try {
+  const savedView = sessionStorage.getItem(VIEW_STORE);
+  if (savedView === 'limits' || savedView === 'requests') showView(savedView);
+} catch (_) { /* storage blocked: start on usage */ }
 managementKey = storedKey() || managementCenterKey();
 if (managementKey) refresh(); else showKeyForm('');
 </script>

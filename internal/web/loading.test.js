@@ -24,18 +24,19 @@ function dashboard() {
   const calls = [], credentialCalls = [], renders = [], painted = [], classes = new Set();
   const responses = {
     health: {}, summary: { totals: {}, providers: [], data_since: 1 },
-    timeseries: {}, drift: { points: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
+    timeseries: {}, drift: { points: [] }, requests: { total: 0, calls: [] }, 'limit-burn': {}, 'limit-leftover': {}, affinity: {},
     breakdown: { rows: [] }, errors: { total: 0, rows: [] }, pricing: {},
     options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'], accounts: ['acc1'] },
   };
   const ctx = vm.createContext({
-    state: { period: '7d', provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model' },
+    state: { period: '7d', provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model', reqSort: 'recent', reqOutcome: 'all', reqOffset: 0 },
+    REQUESTS_PAGE: 50,
     data: {}, autoRefresh: { timer: 0 }, AuthError: class AuthError extends Error {},
     document: {
       body: { classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) } },
       getElementById: node, querySelectorAll: () => [],
     },
-    clearTimeout() {}, scheduleAutoRefresh() {}, pressed() {}, mapLimit,
+    clearTimeout() {}, scheduleAutoRefresh() {}, pressed() {}, mapLimit, reqRefreshSeconds: () => 3,
     rangeParams: () => ({ from: 100, to: 200, tz: -300 }),
     previousPeriod: () => ({ from: 0, to: 100 }), recordedThrough: () => true,
     el: (tag, attrs) => ({ tag, ...attrs }),
@@ -46,7 +47,7 @@ function dashboard() {
     renderDaily: () => renders.push('daily'), renderModelDetail() {},
     renderBurn() {}, renderLeftover() {}, renderAffinity() {}, renderQuality() {}, renderCostWarning() {},
     renderDrift: () => renders.push('drift'), renderBreakdown: () => renders.push('breakdown'),
-    renderLatency() {}, renderRequests() {},
+    renderLatency() {}, renderRequests: () => renders.push('requests'),
     forgetKey: () => { ctx.data = {}; renders.push('forget-key'); }, showKeyForm: () => renders.push('key-form'),
     loadLimits: async () => renders.push('limits'),
   });
@@ -60,7 +61,7 @@ test('opening usage does not query collapsed analyses or an incomplete previous 
   ctx.recordedThrough = () => false;
   await ctx.refresh();
   expect(calls.map((c) => c.route)).toEqual(['health', 'summary', 'timeseries', 'options', 'drift', 'breakdown', 'limit-burn']);
-  for (const section of ['latency', 'requests', 'affinity', 'leftover', 'quality']) {
+  for (const section of ['latency', 'affinity', 'leftover', 'quality']) {
     expect(node(section).open).toBe(false);
     expect(node(section).attrs['aria-busy']).toBe('false');
   }
@@ -697,4 +698,25 @@ test('drift chart keeps model and harness markers separated and omits unplotted 
     .map((c) => c.textContent);
   expect(clientMarkerLabels).toEqual(['claude-code/2.1.329']);
   expect(capturedTooltipRows[1].filter((r) => r.value === 'new').map((r) => r.label)).toEqual(['claude-code/2.1.329']);
+});
+
+test('requests tab loads calls and quiet live ticks fetch only requests without flashing loading', async () => {
+  const { ctx, calls, credentialCalls, renders, node } = dashboard();
+  ctx.state.view = 'requests';
+  await ctx.refresh();
+  expect(calls.map((c) => c.route)).toEqual(['requests', 'options']);
+  expect(credentialCalls.length).toBe(1);
+  expect(renders).toContain('requests');
+  expect(node('requests .section-content').hidden).toBe(false);
+
+  calls.length = credentialCalls.length = renders.length = 0;
+  ctx.rangeParams = () => ({ from: 200, to: 300, tz: -300 });
+  await ctx.refresh(true);
+  expect(calls).toEqual([{
+    route: 'requests',
+    params: { from: 200, to: 300, tz: -300, provider: '', model: '', client: '', account: '', api_key: '', sort: 'recent', outcome: 'all', offset: 0, limit: 50 },
+  }]);
+  expect(credentialCalls.length).toBe(0);
+  expect(renders).toEqual(['requests']);
+  expect(node('requests .section-content').hidden).toBe(false);
 });
