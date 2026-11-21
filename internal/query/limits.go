@@ -93,6 +93,15 @@ type weeklyCycle struct {
 	pairs             []weeklyPair
 }
 
+func (c weeklyCycle) endedEarly() bool {
+	return c.nextAt > 0 && c.nextAt < c.reset
+}
+
+func withCycleLookback(f Filter) Filter {
+	f.From = f.From.Add(-time.Duration(cycleLookbackMillis) * time.Millisecond)
+	return f
+}
+
 func rejectPartialAccountFilters(f Filter) error {
 	for param, value := range map[string]string{"model": f.Model, "client": f.Client, "api_key": f.APIKeyHash} {
 		if value != "" {
@@ -102,15 +111,21 @@ func rejectPartialAccountFilters(f Filter) error {
 	return nil
 }
 
-// weeklyCycles walks every account's rows from since to f.To in time order. A
+// weeklyCycles walks each account's rows in time order. Only pairs with both
+// readings at or after measureFrom contribute tokens, cost and quota movement. A
 // reading whose reset moved by more than resetJitterMillis starts a new cycle.
 // Within a cycle, a pair whose percent went down, as when a Claude reset
 // refills it, is dropped and the next pair starts from the lower reading.
-func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]weeklyCycle, error) {
-	where, args := f.where(false)
+func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64) ([]weeklyCycle, error) {
+	where, args := f.where(true)
+	if f.From.UnixMilli() < measureFrom {
+		// Only the last complete reading before the period can establish a reset at its start.
+		where += " AND (requested_at >= ? OR (limit_weekly_pct IS NOT NULL AND limit_weekly_reset IS NOT NULL))"
+		args = append(args, measureFrom)
+	}
 	rows, err := db.Query(`SELECT auth_index, provider, requested_at, (`+modelExpr+`), (`+tierExpr+`), `+
 		`uncached_input, cache_read, cache_write, output_non_reasoning, output_reasoning, unclassified, limit_weekly_pct, limit_weekly_reset
-		FROM requests WHERE auth_index <> '' AND requested_at >= ? AND `+where+` ORDER BY auth_index, requested_at, id`, append([]any{since}, args...)...)
+		FROM requests WHERE auth_index <> '' AND `+where+` ORDER BY auth_index, provider, requested_at, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("weekly cycles: %w", err)
 	}
@@ -142,9 +157,13 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 		if err := rows.Scan(append(targets, &pct, &reset)...); err != nil {
 			return nil, fmt.Errorf("weekly cycles scan: %w", err)
 		}
-		if cur != nil && acct != cur.account {
+		if cur != nil && (acct != cur.account || provider != cur.provider) {
 			flush()
 			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+		}
+		if at < measureFrom {
+			cur = &weeklyCycle{account: acct, provider: provider, reset: reset.Int64, lastPct: pct.Float64, lastAt: at}
+			continue
 		}
 		cost, quality := p.price(model, tier, tokens.input(), tokens)
 		spanCost += cost
@@ -155,7 +174,7 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 		}
 		switch {
 		case cur != nil && abs(reset.Int64-cur.reset) <= resetJitterMillis:
-			if pct.Float64 >= cur.lastPct {
+			if cur.lastAt >= measureFrom && pct.Float64 >= cur.lastPct {
 				cur.pairs = append(cur.pairs, weeklyPair{at: at, pct: pct.Float64 - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
 			}
 			cur.reset, cur.lastPct, cur.lastAt = reset.Int64, pct.Float64, at
@@ -232,14 +251,15 @@ func LimitLeftover(db *sql.DB, f Filter, table *pricing.Table, now time.Time) (L
 	if err := rejectPartialAccountFilters(f); err != nil {
 		return LeftoverResult{}, err
 	}
-	cycles, err := weeklyCycles(db, f, table, f.From.UnixMilli()-cycleLookbackMillis)
+	history := withCycleLookback(f)
+	cycles, err := weeklyCycles(db, history, table, history.From.UnixMilli())
 	if err != nil {
 		return LeftoverResult{}, err
 	}
 	res := LeftoverResult{Cycles: []LeftoverCycle{}}
 	for _, c := range cycles {
 		end, early := c.reset, false
-		if c.nextAt > 0 && c.nextAt < c.reset {
+		if c.endedEarly() {
 			end, early = c.nextAt, true
 		}
 		if end > now.UnixMilli() || end < f.From.UnixMilli() || end >= f.To.UnixMilli() {
@@ -376,6 +396,8 @@ type AccountValue struct {
 	CacheHitRate           float64 `json:"cache_hit_rate"`
 	TopModel               string  `json:"top_model,omitempty"`
 	TopModelShare          float64 `json:"top_model_share,omitempty"`
+	EarlyResets            int     `json:"early_resets"`
+	QuotaMeasured          bool    `json:"quota_measured"`
 	WeeklyPct              float64 `json:"weekly_pct"`
 	MeasuredCostUSD        float64 `json:"measured_cost_usd"`
 	MeasuredUnpricedTokens int64   `json:"measured_unpriced_tokens"`
@@ -458,7 +480,7 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 		return PlanValueResult{}, fmt.Errorf("plan value requests rows: %w", err)
 	}
 
-	cycles, err := weeklyCycles(db, f, table, f.From.UnixMilli())
+	cycles, err := weeklyCycles(db, withCycleLookback(f), table, f.From.UnixMilli())
 	if err != nil {
 		return PlanValueResult{}, err
 	}
@@ -466,10 +488,13 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 		k := acctKey{c.account, c.provider}
 		av := byAcct[k]
 		if av == nil {
-			av = &AccountValue{AuthIndex: k.authIndex, Provider: k.provider}
-			byAcct[k] = av
+			continue // Only seen before the selected period.
+		}
+		if c.endedEarly() {
+			av.EarlyResets++
 		}
 		for _, pair := range c.pairs {
+			av.QuotaMeasured = true
 			av.WeeklyPct += pair.pct
 			av.MeasuredCostUSD += pair.cost
 			av.MeasuredUnpricedTokens += pair.unpriced

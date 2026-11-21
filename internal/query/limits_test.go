@@ -252,7 +252,7 @@ func TestPlanValueAggregatesRealizedAndMeasuredQuotaAcrossProviders(t *testing.T
 		{
 			RequestID: "c3", TraceID: "c3", RequestedAt: day2.Add(1 * h).UnixMilli(),
 			Provider: "codex", Model: "gpt-5", AuthIndex: "acc-codex", Generate: true,
-			UncachedInput: 2000,
+			UncachedInput:    2000,
 			LimitWeeklyPct:   sql.NullFloat64{Float64: 15, Valid: true},
 			LimitWeeklyReset: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true},
 		},
@@ -297,4 +297,39 @@ func TestPlanValueAggregatesRealizedAndMeasuredQuotaAcrossProviders(t *testing.T
 	if _, err := PlanValue(s.DB(), f, testPrices(t)); !errors.As(err, &pe) {
 		t.Errorf("model filter: err = %v, want ParamError", err)
 	}
+}
+
+func TestPlanValueMeasuresQuotaAcrossEarlyReset(t *testing.T) {
+	oldReset := day2
+	newReset := day1.Add(7 * 24 * time.Hour)
+	s := insertSamples(t, []sample{
+		{id: "start", account: "early", model: "gpt-5", at: day1, weekly: 0, reset: oldReset, uncached: 10},
+		{id: "before-reset", account: "early", model: "gpt-5", at: day1.Add(time.Hour), weekly: 80, reset: oldReset, uncached: 800},
+		{id: "new-cycle", account: "early", model: "gpt-5", at: day1.Add(2 * time.Hour), weekly: 5, reset: newReset, uncached: 20},
+		{id: "after-reset", account: "early", model: "gpt-5", at: day1.Add(3 * time.Hour), weekly: 45, reset: newReset, uncached: 400},
+		{id: "old", account: "scheduled", model: "gpt-5", at: day1, weekly: 80, reset: oldReset},
+		{id: "renewal", account: "scheduled", model: "gpt-5", at: oldReset, weekly: 1, reset: newReset},
+		{id: "flat", account: "scheduled", model: "gpt-5", at: oldReset.Add(time.Hour), weekly: 1, reset: newReset},
+		{id: "headerless", account: "headerless", model: "gpt-5", at: day1, weekly: -1},
+	})
+
+	check := func(account string, from, to time.Time, resets int, measured bool, points float64, priced, realized int64) {
+		t.Helper()
+		got, err := PlanValue(s.DB(), Filter{From: from, To: to, Account: account}, testPrices(t))
+		if err != nil || len(got.Accounts) != 1 {
+			t.Fatalf("%s: %+v, %v", account, got, err)
+		}
+		a := got.Accounts[0]
+		if a.EarlyResets != resets || a.QuotaMeasured != measured || a.WeeklyPct != points ||
+			a.MeasuredTokens.UncachedInput != priced || a.UncachedInput != realized ||
+			!near(a.MeasuredCostUSD, float64(priced)*gpt5Input) || !near(a.CostUSD, float64(realized)*gpt5Input) {
+			t.Errorf("%s from %s to %s: %+v", account, from, to, a)
+		}
+	}
+	check("early", day1, day4, 1, true, 120, 1200, 1230)
+	check("early", day1, day1.Add(2*time.Hour), 0, true, 80, 800, 810)
+	check("early", day1.Add(2*time.Hour), day4, 1, true, 40, 400, 420)
+	check("early", day1.Add(3*time.Hour), day4, 0, false, 0, 0, 400)
+	check("scheduled", day1, day4, 0, true, 0, 0, 0)
+	check("headerless", day1, day4, 0, false, 0, 0, 0)
 }

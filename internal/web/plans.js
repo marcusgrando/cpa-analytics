@@ -148,10 +148,6 @@ function computeAccountPlanRow(item, opts) {
     };
   }
 
-  const utilizationPct = potential && potential.leverage > 0 && realizedLeverage !== null
-    ? (realizedLeverage / potential.leverage) * 100
-    : null;
-
   return {
     id: item.authIndex,
     authIndex: item.authIndex,
@@ -178,8 +174,9 @@ function computeAccountPlanRow(item, opts) {
       tokensPerDollar: realizedTokensPerDollar,
     },
     potential,
-    utilizationPct,
-    measuredRaw: { weeklyPct, costUSD: measuredCostUSD, tokens: measuredTokens },
+    quotaPoints: item.quota_measured || weeklyPct > 0 ? weeklyPct : null,
+    earlyResets: item.early_resets || 0,
+    measuredRaw: { costUSD: measuredCostUSD, tokens: measuredTokens },
   };
 }
 
@@ -223,7 +220,7 @@ function groupPlanRows(accountRows, opts) {
 
     // Pool measured weekly spans across accounts of the same plan so a
     // low-traffic account does not skew the plan average.
-    const measuredPct = members.reduce((s, m) => s + m.measuredRaw.weeklyPct, 0);
+    const measuredPct = members.reduce((s, m) => s + (m.quotaPoints ?? 0), 0);
     const measuredCost = members.reduce((s, m) => s + m.measuredRaw.costUSD, 0);
     const measuredTokens = {
       input: members.reduce((s, m) => s + m.measuredRaw.tokens.input, 0),
@@ -250,10 +247,6 @@ function groupPlanRows(accountRows, opts) {
         lowSample: measuredPct < LOW_SAMPLE_WEEKLY_PCT,
       };
     }
-
-    const utilizationPct = potential && potential.leverage > 0 && realizedLeverage !== null
-      ? (realizedLeverage / potential.leverage) * 100
-      : null;
 
     // Pick the top model from the busiest account in the group.
     const busiest = members.reduce((best, m) => ((m.realized.costUSD || m.realized.tokens.total) > (best.realized.costUSD || best.realized.tokens.total) ? m : best), members[0]);
@@ -286,7 +279,8 @@ function groupPlanRows(accountRows, opts) {
         tokensPerDollar: realizedTokensPerDollar,
       },
       potential,
-      utilizationPct,
+      quotaPoints: members.some(m => m.quotaPoints !== null) ? measuredPct : null,
+      earlyResets: members.reduce((sum, m) => sum + m.earlyResets, 0),
     });
   }
   return out;

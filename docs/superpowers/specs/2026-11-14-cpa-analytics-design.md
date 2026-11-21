@@ -218,7 +218,7 @@ All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and 
 - `limit-burn`: per day and account, the weekly limit points used, their cost and the cost per point.
 - `limit-leftover`: per ended weekly cycle and account, the percent used and left, the cost per point and the left part at API prices.
 - `limit-history`: per account, weekly snapshots, the last one per bucket.
-- `plan-value`: per account, realized usage, top model and whole-range weekly quota burn (cost and tokens by type), plus configured `plan_costs` and `data_since`, for the Plans cost-benefit ranking tab.
+- `plan-value` returns realized usage, top model, measured weekly quota points, their cost and tokens, and observed early resets per account, plus `plan_costs` and `data_since`. Plans estimates potential from 100 points in one normal weekly cycle. Realized includes all recorded traffic in the selected period. The table sums observed quota movement and early resets across accounts in each plan. It dates an early reset by the first reading of the new cycle and counts quota movement only between two readings inside the period and the same cycle.
 - `affinity`: per provider, session switches between accounts and the cache written again after them.
 - `requests?sort=recent|cost|latency|tokens&outcome=all|failed|ok&offset=&limit=1..200`: one page of upstream calls and the number of calls in the filter.
 - `latency`: an even sample of up to 3,000 successful calls with a first token, and percentiles over all of them.

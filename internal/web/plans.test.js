@@ -49,10 +49,37 @@ describe('cost-benefit and ranking', () => {
     expect(row.potential.fullCycleUSD).toBeCloseTo(600, 6);
     expect(row.potential.leverage).toBeCloseTo(600 / weekCost200, 6);
     expect(row.realized.leverage).toBeCloseTo(300 / weekCost200, 6);
-    expect(row.utilizationPct).toBeCloseTo(50, 6);
+    expect(row.quotaPoints).toBe(50);
     // Output includes reasoning: 3M at 50% => 6M per full cycle => 6M / weekCost200 per $1.
     expect(row.potential.tokensPerDollar.output).toBeCloseTo(6_000_000 / weekCost200, 2);
     expect(row.potential.tokensPerDollar.cacheRead).toBeCloseTo(180_000_000 / weekCost200, 2);
+  });
+
+  test('early resets add to realized value while potential prices a single normal cycle', () => {
+    const opts = { effectiveDays: 7 };
+    const item = { provider: 'codex', plan: 'Pro', weekly_pct: 120, early_resets: 1,
+      quota_measured: true, cost_usd: 250, measured_cost_usd: 240 };
+    const reset = computeAccountPlanRow(item, opts);
+    expect(reset.quotaPoints).toBe(120);
+    expect(reset.earlyResets).toBe(1);
+    expect(reset.potential.fullCycleUSD).toBe(200);
+    expect(reset.realized.leverage).toBeCloseTo(250 / weekCost200);
+
+    const ordinary = computeAccountPlanRow({ ...item, weekly_pct: 50, early_resets: 0,
+      cost_usd: 100, measured_cost_usd: 100 }, opts);
+    const [plan] = groupPlanRows([reset, ordinary], opts);
+    expect(plan.quotaPoints).toBe(170);
+    expect(plan.earlyResets).toBe(1);
+    expect(plan.realized.leverage).toBeCloseTo(350 / (2 * weekCost200));
+    expect(plan.potential.fullCycleUSD).toBe(200);
+  });
+
+  test('a measured zero differs from a missing quota reading at both grouping levels', () => {
+    for (const [measured, expected] of [[true, 0], [false, null]]) {
+      const row = computeAccountPlanRow({ provider: 'codex', quota_measured: measured, weekly_pct: 0 }, { effectiveDays: 1 });
+      expect(row.quotaPoints).toBe(expected);
+      expect(groupPlanRows([row], { effectiveDays: 1 })[0].quotaPoints).toBe(expected);
+    }
   });
 
   test('pools multiple accounts of the same plan weighted by measured quota movement', () => {

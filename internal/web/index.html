@@ -298,7 +298,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="card-head">
         <div>
           <h2 id="plans-title">Plan value</h2>
-          <p class="sub">Ranks subscriptions by API value per $1 paid: potential (100% of the weekly quota, for Claude and Codex) and realized (actual traffic in the period, for all providers). Edit any monthly price to recalculate.</p>
+          <p class="sub">Compare API value per $1 paid. Potential estimates one normal weekly cycle for Claude and Codex. Realized includes all recorded usage in the period, including usage after an early reset. Edit any monthly price to recalculate.</p>
         </div>
         <div class="controls">
           <label>Period
@@ -2347,13 +2347,17 @@ function renderPlans() {
           + (r.potential.lowSample ? ', low sample' : '');
         potCell = el('span', {}, el('strong', { text: main }), el('span', { class: 'plan-sub', text: sub }));
       } else {
-        potCell = el('span', { class: 'plan-sub', text: 'No weekly quota headers' });
+        potCell = el('span', { class: 'plan-sub', text: 'Insufficient measured quota or priced usage' });
       }
 
       const realMain = r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
-      const realSub = (r.realized.leverage !== null ? fmtUSD(r.realized.costUSD) : `${fmtInt(r.requests)} reqs`)
-        + (r.utilizationPct !== null ? `, ${Math.round(r.utilizationPct)}% used` : '');
-      const realCell = el('span', {}, el('strong', { text: realMain }), el('span', { class: 'plan-sub', text: realSub }));
+      const realSub = [r.realized.leverage !== null ? fmtUSD(r.realized.costUSD) : `${fmtInt(r.requests)} reqs`];
+      if (r.quotaPoints !== null) {
+        const points = r.quotaPoints.toLocaleString(undefined, { maximumFractionDigits: 3 });
+        realSub.push(`${points} quota point${r.quotaPoints === 1 ? '' : 's'} measured`);
+      }
+      if (r.earlyResets) realSub.push(`${fmtInt(r.earlyResets)} early reset${r.earlyResets === 1 ? '' : 's'} observed`);
+      const realCell = el('span', {}, el('strong', { text: realMain }), el('span', { class: 'plan-sub', text: realSub.join(', ') }));
 
       const tokSrc = unit === 'pct'
         ? (r.potential && r.potential.tokensPerPct)
