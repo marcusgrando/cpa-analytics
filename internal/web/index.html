@@ -72,8 +72,17 @@ button { cursor: pointer; }
 button:hover, select:hover { background-color: var(--wash); }
 button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 12px; }
-.updated { color: var(--muted); font-size: 12px; align-self: center; }
+.nav-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 12px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--grid);
+}
+.nav-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inline-control { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.filters {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin-bottom: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+}
+.updated { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .filters label, .controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--ink-2); gap: 2px; }
 .filters input { width: 9em; }
 .grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
@@ -148,8 +157,9 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .tooltip .row strong { font-variant-numeric: tabular-nums; }
 .key-form { max-width: 380px; margin: 64px auto; display: flex; flex-direction: column; gap: 10px; }
 .key-form p { margin: 0; color: var(--ink-2); }
-body.loading main { opacity: 0.6; transition: opacity 0.2s; }
-.card[aria-busy="true"] { opacity: 0.6; }
+body.loading #refresh-now { opacity: 0.65; }
+.card { transition: opacity 0.15s; }
+.card[aria-busy="true"] { opacity: 0.82; }
 .section-status { min-height: 80px; display: grid; place-items: center; }
 #drift .section-status, #burn .section-status { min-height: 240px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -203,13 +213,35 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
   <p id="load-error" class="error" role="alert"></p>
 
   <main id="app" hidden>
-    <div class="filters" role="group" aria-label="Filters">
+    <nav class="nav-bar" aria-label="View">
       <div class="seg" role="group" aria-label="View">
         <button type="button" data-view="usage" aria-pressed="true">Usage</button>
         <button type="button" data-view="limits" aria-pressed="false">Limits</button>
         <button type="button" data-view="requests" aria-pressed="false">Requests</button>
       </div>
-      <label class="data-only">Period
+      <div class="nav-actions">
+        <span id="updated" class="updated" aria-live="off"></span>
+        <label class="inline-control usage-only">Auto refresh
+          <select id="auto-refresh">
+            <option value="60" selected>Every 60 s</option>
+            <option value="0">Off</option>
+          </select>
+        </label>
+        <label class="inline-control requests-only" hidden>Live refresh
+          <select id="req-refresh">
+            <option value="3" selected>Every 3 s</option>
+            <option value="10">Every 10 s</option>
+            <option value="30">Every 30 s</option>
+            <option value="0">Off</option>
+          </select>
+        </label>
+        <button id="refresh-now" type="button">Refresh</button>
+        <button id="change-key" type="button">Change key</button>
+      </div>
+    </nav>
+
+    <div class="filters data-only" role="group" aria-label="Filters">
+      <label>Period
         <select id="f-period">
           <option value="15m">Last 15 minutes</option>
           <option value="1h">Last 1 hour</option>
@@ -220,34 +252,20 @@ body.loading main { opacity: 0.6; transition: opacity 0.2s; }
           <option value="90d">Last 90 days</option>
         </select>
       </label>
-      <label class="data-only">Provider <select id="f-provider"><option value="">All providers</option></select></label>
-      <label class="data-only">Model <select id="f-model"><option value="">All models</option></select></label>
-      <label class="data-only">Client <select id="f-client"><option value="">All clients</option></select></label>
-      <label class="data-only">Account <select id="f-account"><option value="">All accounts</option></select></label>
-      <label class="data-only">API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
-      <label class="usage-only">Auto refresh
-        <select id="auto-refresh">
-          <option value="60" selected>Every 60 s</option>
-          <option value="0">Off</option>
-        </select>
-      </label>
-      <label class="requests-only" hidden>Live refresh
-        <select id="req-refresh">
-          <option value="3" selected>Every 3 s</option>
-          <option value="10">Every 10 s</option>
-          <option value="30">Every 30 s</option>
-          <option value="0">Off</option>
-        </select>
-      </label>
-      <button id="refresh-requests" class="requests-only" type="button" hidden>Refresh</button>
-      <button id="check-limits" class="limits-only" type="button" hidden>Check now</button>
-      <button id="change-key" type="button">Change key</button>
-      <span id="updated" class="updated" aria-live="off"></span>
+      <label>Provider <select id="f-provider"><option value="">All providers</option></select></label>
+      <label>Model <select id="f-model"><option value="">All models</option></select></label>
+      <label>Client <select id="f-client"><option value="">All clients</option></select></label>
+      <label>Account <select id="f-account"><option value="">All accounts</option></select></label>
+      <label>API key hash <input id="f-apikey" inputmode="text" maxlength="12" placeholder="any"></label>
     </div>
 
     <section id="limits" class="card limits-only" hidden aria-labelledby="limits-title">
-      <h2 id="limits-title">Subscription limits</h2>
-      <p class="sub">With multiple accounts, the top bar pools them weighted by plan and each row below is one account against its own limit. The tick marks an even pace.</p>
+      <div class="card-head">
+        <div>
+          <h2 id="limits-title">Subscription limits</h2>
+          <p class="sub">With multiple accounts, the top bar pools them weighted by plan and each row below is one account against its own limit. The tick marks an even pace.</p>
+        </div>
+      </div>
       <div id="limits-body"></div>
     </section>
 
@@ -2112,7 +2130,7 @@ function refresh(quiet, reuse = false) {
         if (!current()) return;
         if (state.view === 'limits') await loadLimits(current);
         else if (state.view === 'requests') await loadRequests(current, reuseRange, quiet);
-        else await loadUsage(current, reuseRange);
+        else await loadUsage(current, reuseRange, quiet);
       }, quiet);
     } while (refreshPending);
   })().finally(() => { refreshPromise = null; scheduleAutoRefresh(); });
@@ -2183,10 +2201,10 @@ async function loadRequests(current, reuse, quiet) {
   }
 }
 
-async function runUsageJob(job, current) {
+async function runUsageJob(job, current, quiet = false) {
   if (!current()) return true;
   if (DETAIL_SECTIONS.includes(job.section) && (!document.getElementById(job.section).open || job.ready())) return true;
-  if (job.section) sectionState(job.section, 'Loading…', true);
+  if (job.section && !quiet) sectionState(job.section, 'Loading…', true);
   try {
     const result = await job.load();
     if (!current()) return true;
@@ -2205,7 +2223,7 @@ function periodBucket(period) {
   return period === '15m' || period === '1h' ? 'minute' : period === '6h' || period === '24h' ? 'hour' : 'day';
 }
 
-async function loadUsage(current, reuse) {
+async function loadUsage(current, reuse, quiet = false) {
   const p = filterParams();
   const period = state.period;
   const bucket = periodBucket(period);
@@ -2214,6 +2232,8 @@ async function loadUsage(current, reuse) {
   // interval and renews all data, including metadata and closed details.
   if (prior) Object.assign(p, { from: prior.params.from, to: prior.params.to, tz: prior.params.tz });
   const sameLimitScope = prior && prior.params.provider === p.provider && prior.params.account === p.account;
+  const hadData = Boolean(data.summary);
+  const keepVisible = quiet && hadData;
   const group = state.driftGroup, by = state.by;
   const range = { from: p.from, to: p.to, tz: p.tz };
   const prevRange = previousPeriod(p);
@@ -2229,11 +2249,20 @@ async function loadUsage(current, reuse) {
     if (!current()) return;
     const failed = primary.find((r) => r.status === 'rejected');
     if (failed) throw failed.reason;
-    data = { summary: primary[0].value, daily: primary[1].value, previous: null, params: p, period,
-      options: prior?.options, credentials: prior?.credentials,
-      burn: sameLimitScope ? prior.burn : undefined, leftover: sameLimitScope ? prior.leftover : undefined };
-    for (const section of ['drift', 'burn', ...DETAIL_SECTIONS, 'breakdown']) {
-      sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
+    const prevDrift = keepVisible ? data.drift : undefined;
+    const prevBreakdown = keepVisible ? data.breakdown : undefined;
+    const prevErrors = keepVisible ? data.errors : undefined;
+    const prevBurn = sameLimitScope || keepVisible ? data.burn : undefined;
+    const prevLeftover = sameLimitScope || keepVisible ? data.leftover : undefined;
+    data = { summary: primary[0].value, daily: primary[1].value, previous: keepVisible ? data.previous : null, params: p, period,
+      options: prior?.options || (keepVisible ? data.options : undefined),
+      credentials: prior?.credentials || (keepVisible ? data.credentials : undefined),
+      drift: prevDrift, breakdown: prevBreakdown, errors: prevErrors,
+      burn: prevBurn, leftover: prevLeftover };
+    if (!keepVisible) {
+      for (const section of ['drift', 'burn', ...DETAIL_SECTIONS, 'breakdown']) {
+        sectionState(section, 'Loading…', !DETAIL_SECTIONS.includes(section));
+      }
     }
     document.getElementById('key-form').hidden = true;
     document.getElementById('app').hidden = false;
@@ -2243,13 +2272,13 @@ async function loadUsage(current, reuse) {
     renderCostWarning();
     if (typeof renderAccountWarning === 'function') renderAccountWarning();
     if (data.options) renderOptions(data.options);
-    if (data.burn) { sectionState('burn'); renderBurn(); }
-    if (data.leftover) { sectionState('leftover'); renderLeftover(); }
+    if (sameLimitScope && data.burn) { sectionState('burn'); renderBurn(); }
+    if (sameLimitScope && data.leftover) { sectionState('leftover'); renderLeftover(); }
     document.body.classList.remove('loading');
-    document.getElementById('updated').textContent = 'Loading details…';
+    if (!keepVisible) document.getElementById('updated').textContent = 'Loading details…';
 
     const jobs = [];
-    if (!data.options) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
+    if (!data.options || (keepVisible && !prior)) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
     if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
       data.credentials = files;
       if (typeof renderAccountWarning === 'function') renderAccountWarning();
@@ -2268,9 +2297,9 @@ async function loadUsage(current, reuse) {
         ? { section: 'breakdown', load: () => api('errors', p), apply: (v) => { data.errors = v; renderBreakdown(); } }
         : { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
     );
-    if (!data.burn) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider, account: p.account }), apply: (v) => { data.burn = v; renderBurn(); } });
+    if (!sameLimitScope) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider, account: p.account }), apply: (v) => { data.burn = v; renderBurn(); } });
     for (const section of DETAIL_SECTIONS) if (document.getElementById(section).open) jobs.push(detailJob(section));
-    const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current));
+    const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current, keepVisible));
     if (current()) document.getElementById('updated').textContent = results.includes(false)
       ? 'Some details could not be loaded' : 'Through ' + new Date(p.to).toLocaleTimeString();
   } finally {
@@ -2313,7 +2342,7 @@ async function refreshGroup(section) {
   const isErrors = section === 'breakdown' && state.by === 'errors';
   const route = isErrors ? 'errors' : section;
   const grouping = section === 'drift' ? { group: state.driftGroup, bucket: periodBucket(state.period) } : isErrors ? {} : { by: state.by };
-  sectionState(section, 'Loading…', true);
+  card.setAttribute('aria-busy', 'true');
   document.getElementById('load-error').textContent = '';
   try {
     const result = await api(route, { ...data.params, ...grouping });
@@ -2383,12 +2412,11 @@ const VIEW_STORE = 'cpa-analytics.view';
 function showView(view) {
   state.view = view;
   try { sessionStorage.setItem(VIEW_STORE, view); } catch (_) { /* storage blocked: applies to this page only */ }
-  pressed('.filters', 'data-view', view);
+  pressed('.nav-bar', 'data-view', view);
   for (const node of document.querySelectorAll('.data-only')) node.hidden = view !== 'usage' && view !== 'requests';
   for (const node of document.querySelectorAll('.usage-only')) node.hidden = view !== 'usage';
   for (const node of document.querySelectorAll('.limits-only')) node.hidden = view !== 'limits';
   for (const node of document.querySelectorAll('.requests-only')) node.hidden = view !== 'requests';
-  document.getElementById('updated').textContent = '';
 }
 
 function pressed(group, attr, value) {
@@ -2406,10 +2434,12 @@ document.getElementById('key-form').addEventListener('submit', (e) => {
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => {
   if (state.view === b.dataset.view) return;
   showView(b.dataset.view);
-  refresh();
+  const hasCached = (state.view === 'usage' && Boolean(data.summary))
+    || (state.view === 'limits' && Boolean(limitsData))
+    || (state.view === 'requests' && Boolean(data.requests));
+  refresh(hasCached);
 }));
-document.getElementById('check-limits').addEventListener('click', () => refresh());
-document.getElementById('refresh-requests').addEventListener('click', () => refresh());
+document.getElementById('refresh-now').addEventListener('click', () => refresh());
 document.getElementById('change-key').addEventListener('click', () => { ++loadSeq; refreshPending = false; clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
 document.getElementById('auto-refresh').addEventListener('change', (e) => {
   try { sessionStorage.setItem(AUTO_REFRESH_STORE, e.target.value); } catch (_) { /* storage blocked: applies to this page only */ }

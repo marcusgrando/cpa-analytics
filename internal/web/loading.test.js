@@ -720,3 +720,16 @@ test('requests tab loads calls and quiet live ticks fetch only requests without 
   expect(renders).toEqual(['requests']);
   expect(node('requests .section-content').hidden).toBe(false);
 });
+
+test('quiet refresh on usage keeps existing charts visible without flashing Loading', async () => {
+  const { ctx, node } = dashboard();
+  await ctx.refresh();
+  const gate = deferred(), api = ctx.api;
+  ctx.api = (route, params) => route === 'drift' ? gate.promise : api(route, params);
+  const pending = ctx.refresh(true);
+  await new Promise(setImmediate);
+  expect(node('drift .section-content').hidden).toBe(false);
+  expect(node('burn .section-content').hidden).toBe(false);
+  gate.resolve({ points: [] });
+  await pending;
+});

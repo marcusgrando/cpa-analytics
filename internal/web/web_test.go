@@ -532,10 +532,11 @@ func TestIndexOffersShortPeriodsAndCleanDriftGroups(t *testing.T) {
 func TestIndexListsRequests(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
+		`<nav class="nav-bar" aria-label="View">`,
 		`data-view="requests"`,
 		`<section id="requests" class="card requests-only" hidden aria-labelledby="requests-title">`,
 		`<select id="req-refresh">`,
-		`<button id="refresh-requests" class="requests-only" type="button" hidden>Refresh</button>`,
+		`<button id="refresh-now" type="button">Refresh</button>`,
 		"api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE })",
 		"row.setAttribute('aria-expanded', String(open))",
 		"const DETAIL_SECTIONS = ['latency', 'leftover', 'affinity', 'quality'];",
