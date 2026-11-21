@@ -84,6 +84,13 @@ func (p *Plugin) routes() map[string]route {
 		"limit-leftover": {"Weekly limit each account left unused when its cycle ended, priced at the cycle's cost per point", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.LimitLeftover(db, f, t, time.Now())
 		}},
+		"plan-value": {"Per-account realized usage and whole-range weekly quota burn for plan cost-benefit ranking", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
+			val, err := query.PlanValue(db, f, t)
+			if err != nil {
+				return nil, err
+			}
+			return planValueReport{PlanValueResult: val, PlanCosts: p.planCosts()}, nil
+		}},
 		"affinity": {"Account switches within sessions, and the cache they wrote again", func(db *sql.DB, f query.Filter, t *pricing.Table, _ url.Values) (any, error) {
 			return query.Affinity(db, f, t)
 		}},
@@ -104,6 +111,11 @@ func (p *Plugin) routes() map[string]route {
 type pricingReport struct {
 	Status pricing.Status `json:"status"`
 	query.ModelsReport
+}
+
+type planValueReport struct {
+	query.PlanValueResult
+	PlanCosts map[string]float64 `json:"plan_costs"`
 }
 
 func paramOr(q url.Values, name, fallback string) string {

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { driftSeries, driftMeasurement } from './drift.js';
 import { mapLimit } from './limits.js';
 import { previousPeriod, recordedThrough } from './compare.js';
 
@@ -29,7 +30,7 @@ function dashboard() {
     options: { providers: ['codex'], models: ['gpt-5'], clients: ['codex'], accounts: ['acc1'] },
   };
   const ctx = vm.createContext({
-    state: { period: '7d', provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', by: 'model', reqSort: 'recent', reqOutcome: 'all', reqOffset: 0 },
+    state: { period: '7d', provider: '', model: '', client: '', account: '', apiKey: '', view: 'usage', driftGroup: 'response_model', driftSelection: new Set(), driftMinimum: 5, by: 'model', reqSort: 'recent', reqOutcome: 'all', reqOffset: 0 },
     REQUESTS_PAGE: 50,
     data: {}, autoRefresh: { timer: 0 }, AuthError: class AuthError extends Error {},
     document: {
@@ -629,8 +630,8 @@ test('drift chart keeps model and harness markers separated and omits unplotted 
   const ctx = vm.createContext({
     MINUTE: 60000, HOUR: 3600000, DAY: 86400000,
     BUCKET_MS: { minute: 60000, hour: 3600000, day: 86400000 },
-    SERIES_SLOTS: 2, END_LABELS: 4,
-    state: { driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median' },
+    driftSeries, driftMeasurement, END_LABELS: 4,
+    state: { driftGroup: 'response_model', driftSelection: new Set(), driftMinimum: 5, driftMetric: 'input', driftStat: 'median' },
     data: { params: { from: day1, to: day2, tz: 0 }, drift: null },
     document: {
       getElementById: getNode,
@@ -663,7 +664,7 @@ test('drift chart keeps model and harness markers separated and omits unplotted 
     median: { input: 1000, uncached_input: 100, cache_read: 900, cache_write: 0, output: 100, reasoning: 0, output_total: 100, cost_usd: 0.1, latency_ms: 500, ttft_ms: 100, tokens_per_sec: 50 },
     p90: { input: 2000, uncached_input: 200, cache_read: 1800, cache_write: 0, output: 200, reasoning: 0, output_total: 200, cost_usd: 0.2, latency_ms: 900, ttft_ms: 200, tokens_per_sec: 40 },
   });
-  // Model view: receives a plotted model marker, an unplotted model marker, and a stray client marker.
+  // First appearances stay in details. Drawing them on the model line is redundant.
   ctx.data.drift = {
     group: 'response_model', bucket: 'day',
     points: [pt(day1, 'model-a', 100), pt(day2, 'model-a', 100), pt(day2, 'model-b', 50), pt(day2, 'model-tiny', 1)],
@@ -677,9 +678,18 @@ test('drift chart keeps model and harness markers separated and omits unplotted 
   const modelMarkerLabels = getNode('drift-chart').children[0].children
     .filter((c) => c.attrs.class === 'marker-label' && !c.removed)
     .map((c) => c.textContent);
-  expect(modelMarkerLabels).toEqual(['model-b']);
-  expect(capturedTooltipRows[1].filter((r) => r.value === 'new').map((r) => r.label)).toEqual(['model-b']);
+  expect(modelMarkerLabels).toEqual([]);
+  expect(capturedTooltipRows[1].filter((r) => r.value === 'new').map((r) => r.label)).toEqual([]);
   expect(getNode('drift-changes-summary').textContent).toBe('Changes (2)');
+  expect(capturedTooltipRows[1].map(r => r.label)).toEqual(['model-a (100 calls)', 'model-b (50 calls)']);
+  ctx.state.driftMinimum = 1;
+  ctx.state.driftScale = 'change';
+  ctx.state.driftSelection.add('model-tiny');
+  ctx.renderDrift();
+  expect(capturedTooltipRows[1].map(r => r.label)).toEqual(['model-tiny (1 call)']);
+  expect(capturedTooltipRows[1][0].value).toContain('(0%)');
+  ctx.state.driftSelection.clear();
+  ctx.state.driftMinimum = 5;
 
   // Client (harness) view: shows continuous harness lines and marks upgrades of plotted harnesses only.
   ctx.state.driftGroup = 'client';
@@ -732,4 +742,35 @@ test('quiet refresh on usage keeps existing charts visible without flashing Load
   expect(node('burn .section-content').hidden).toBe(false);
   gate.resolve({ points: [] });
   await pending;
+});
+
+test('daily peak follows the chosen unit, including an empty range after a populated one', () => {
+  const nodes = new Map();
+  const node = id => {
+    if (!nodes.has(id)) nodes.set(id, { textContent: '', children: [], replaceChildren(...children) { this.children = children; } });
+    return nodes.get(id);
+  };
+  const points = [
+    {t: 1, key: 'a', cost_usd: 6, tokens: 100}, {t: 1, key: 'b', cost_usd: 5, tokens: 50},
+    {t: 2, key: 'a', cost_usd: 4, tokens: 200},
+  ];
+  const ctx = vm.createContext({ document: {getElementById: node}, data: {daily: {points, bucket: 'day'}},
+    state: {dailyMode: 'cost'}, BUCKET_MS: {day: 1}, DAY: 1, buckets: () => [1, 2],
+    totalTokens: p => p.tokens, fmtCompact: String, fmtUSD: v => '$' + v, fmtInt: String, fmtDay: t => 'Day ' + t,
+    el() {}, svgEl() {}, colorFor() {}, legend() {}, table() {}, hitColumns() {},
+    frame: () => ({svg: {setAttribute() {}, append() {}}, x: Number, y: v => -v, band: 20}),
+  });
+  vm.runInContext(page.slice(page.indexOf('function renderDaily()'), page.indexOf('const MARKER_KINDS')), ctx);
+  ctx.renderDaily();
+  expect(node('daily-sub').textContent).toContain('Day 1');
+  expect(node('daily-sub').textContent).toContain('$11');
+  expect(node('daily-sub').textContent).toContain('a ($6)');
+  ctx.state.dailyMode = 'tokens';
+  ctx.renderDaily();
+  expect(node('daily-sub').textContent).toContain('Day 2');
+  expect(node('daily-sub').textContent).toContain('200 tokens');
+  ctx.data.daily.points = [];
+  ctx.renderDaily();
+  expect(node('daily-sub').textContent).not.toContain('Day 2');
+  expect(node('daily-table').children).toEqual([]);
 });

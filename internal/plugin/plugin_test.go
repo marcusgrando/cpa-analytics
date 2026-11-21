@@ -68,7 +68,7 @@ func TestRegisterDeclaresCapabilities(t *testing.T) {
 	for _, f := range reg.Metadata.ConfigFields {
 		got[f.Name] = true
 	}
-	for _, name := range []string{"db_path", "retention_days", "price_overrides", "pricing_url"} {
+	for _, name := range []string{"db_path", "retention_days", "price_overrides", "pricing_url", "plan_costs"} {
 		if !got[name] {
 			t.Errorf("missing config field %s", name)
 		}
@@ -110,6 +110,24 @@ func TestParseConfigRejectsNegativePriceOverride(t *testing.T) {
 	for _, field := range []string{"input", "cache_write"} {
 		if _, err := ParseConfig([]byte("price_overrides:\n  my-model:\n    " + field + ": -1\n")); err == nil {
 			t.Fatalf("expected error for negative %s override price", field)
+		}
+	}
+}
+
+func TestParseConfigPlanCosts(t *testing.T) {
+	cfg, err := ParseConfig([]byte("plan_costs:\n  \"claude:Max 20x\": 200\n  \"codex:Pro\": 180.5\n  \"antigravity:Free\": 0\n"))
+	if err != nil {
+		t.Fatalf("valid plan_costs failed: %v", err)
+	}
+	if cfg.PlanCosts["claude:Max 20x"] != 200 || cfg.PlanCosts["codex:Pro"] != 180.5 || cfg.PlanCosts["antigravity:Free"] != 0 {
+		t.Errorf("plan_costs = %+v", cfg.PlanCosts)
+	}
+	for _, bad := range []string{
+		"plan_costs:\n  \"claude:Pro\": -20\n",
+		"plan_costs:\n  \"   \": 20\n",
+	} {
+		if _, err := ParseConfig([]byte(bad)); err == nil {
+			t.Errorf("expected error for %q", bad)
 		}
 	}
 }

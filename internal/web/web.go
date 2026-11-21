@@ -28,6 +28,10 @@ var (
 	endLabelsScript []byte
 	//go:embed scatter.js
 	scatterScript []byte
+	//go:embed drift.js
+	driftScript []byte
+	//go:embed plans.js
+	plansScript []byte
 )
 
 var index = inline(page, map[string][]byte{
@@ -38,6 +42,8 @@ var index = inline(page, map[string][]byte{
 	"/* sparkline.js */": sparklineScript,
 	"/* endlabels.js */": endLabelsScript,
 	"/* scatter.js */":   scatterScript,
+	"/* drift.js */":     driftScript,
+	"/* plans.js */":     plansScript,
 })
 
 func inline(page []byte, scripts map[string][]byte) []byte {

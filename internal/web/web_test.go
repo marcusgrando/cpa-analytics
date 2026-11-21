@@ -128,7 +128,7 @@ func TestIndexFollowsManagementCenterTheme(t *testing.T) {
 // step drew the labels 0, 1, 1, 2, 2, so count axes step by at least one.
 func TestIndexCountAxesStepByWholeTokens(t *testing.T) {
 	page := string(Index())
-	for _, want := range []string{`Math.max(minStep, niceStep(maxY, 4))`, `fmtX, isRate || isCost ? 0 : 1, 8 + labelRoom)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
+	for _, want := range []string{`Math.max(minStep, niceStep(span, 4))`, `fmtX, indexed || isRate || isCost ? 0 : 1, 8 + labelRoom, minY)`, `fmtX, state.dailyMode === 'cost' ? 0 : 1)`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
 		}
@@ -248,6 +248,7 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* sparkline.js */": "function sparkline(values, height, pad)",
 		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
 		"/* scatter.js */":   "function nearestPoint(points, x, y, radius)",
+		"/* plans.js */":     "function rankPlanRows(rows, sortBy = 'potential')",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)
@@ -576,6 +577,23 @@ func TestIndexOmitsDuplicateBarForSingleAccountLimit(t *testing.T) {
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestIndexOffersPlansCostBenefitView(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`data-view="plans"`,
+		`<section id="plans" class="card plans-only" hidden aria-labelledby="plans-title">`,
+		`api('plan-value', range)`,
+		`computeAccountPlanRow(`,
+		`groupPlanRows(`,
+		`rankPlanRows(`,
+		`planCostsYAML(`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
 		}
 	}
 }

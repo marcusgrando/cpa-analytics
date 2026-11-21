@@ -66,8 +66,9 @@ var longContextKey = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_toke
 // firstPartyProviders are LiteLLM prefixes for the model makers' own APIs.
 // Their price wins over a cloud's or reseller's for a bare model name.
 var firstPartyProviders = map[string]bool{
-	"anthropic": true, "dashscope": true, "deepseek": true, "gemini": true, "google": true,
-	"kimi": true, "meta": true, "mistral": true, "moonshot": true, "openai": true, "qwen": true, "xai": true,
+	"alibaba": true, "anthropic": true, "dashscope": true, "deepseek": true, "gemini": true, "google": true,
+	"kimi": true, "kimi-for-coding": true, "meta": true, "mistral": true, "moonshot": true, "moonshotai": true,
+	"openai": true, "qwen": true, "xai": true,
 }
 
 // unpriceable names are either unbilled or ambiguous across model generations.
@@ -76,6 +77,11 @@ var unpriceable = map[string]bool{
 }
 
 var dateSuffix = regexp.MustCompile(`-(\d{8}|\d{4}-\d{2}-\d{2})$`)
+
+// variantSuffix matches trailing effort, release-channel, and Antigravity
+// internal variant suffixes (e.g. -xhigh, -high, -trial, -n) stripped only
+// after exact and date-stripped lookups miss.
+var variantSuffix = regexp.MustCompile(`-(xhigh|high|medium|low|minimal|none|thinking|trial|preview|latest|exp|beta|alpha|n)$`)
 
 // ParseLiteLLM reads LiteLLM's model_prices_and_context_window.json. Entries
 // without both input and output prices are skipped so cost is never understated as zero.
@@ -105,6 +111,147 @@ func ParseLiteLLM(raw []byte) (*Table, error) {
 	}
 	addBareAliases(rates)
 	return &Table{rates: rates, thresholds: thresholds(rates)}, nil
+}
+
+// ParseModelsDev reads models.dev's api.json catalog (USD per 1M tokens per
+// provider/model). First-party providers win when resolving bare model names.
+func ParseModelsDev(raw []byte) (*Table, error) {
+	var doc map[string]struct {
+		Models map[string]struct {
+			Cost *struct {
+				Input      *float64 `json:"input"`
+				Output     *float64 `json:"output"`
+				CacheRead  *float64 `json:"cache_read"`
+				CacheWrite *float64 `json:"cache_write"`
+			} `json:"cost"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse models.dev table: %w", err)
+	}
+	rates := make(map[string]modelRate)
+	for prov, p := range doc {
+		provNorm := normalize(prov)
+		if provNorm == "" {
+			continue
+		}
+		for id, m := range p.Models {
+			if m.Cost == nil || m.Cost.Input == nil || m.Cost.Output == nil {
+				continue
+			}
+			in, okIn := validNonNegative(*m.Cost.Input)
+			out, okOut := validNonNegative(*m.Cost.Output)
+			if !okIn || !okOut {
+				continue
+			}
+			cr := in
+			if m.Cost.CacheRead != nil {
+				if v, ok := validNonNegative(*m.Cost.CacheRead); ok {
+					cr = v
+				}
+			}
+			cw := in
+			if m.Cost.CacheWrite != nil {
+				if v, ok := validNonNegative(*m.Cost.CacheWrite); ok {
+					cw = v
+				}
+			}
+			idNorm := normalize(id)
+			if idNorm == "" {
+				continue
+			}
+			key := idNorm
+			if !strings.Contains(key, "/") {
+				key = provNorm + "/" + idNorm
+			}
+			rates[key] = modelRate{standard: Rates{
+				Input: in / 1e6, Output: out / 1e6, CacheRead: cr / 1e6, CacheWrite: cw / 1e6,
+			}}
+		}
+	}
+	addBareAliases(rates)
+	return &Table{rates: rates}, nil
+}
+
+// ParseOpenRouter reads OpenRouter's /api/v1/models JSON (USD per token as
+// strings). Free and batch suffixed variants are skipped so paid traffic is
+// never priced at $0 or batch rates.
+func ParseOpenRouter(raw []byte) (*Table, error) {
+	var doc struct {
+		Data []struct {
+			ID      string `json:"id"`
+			Pricing struct {
+				Prompt          string `json:"prompt"`
+				Completion      string `json:"completion"`
+				InputCacheRead  string `json:"input_cache_read"`
+				InputCacheWrite string `json:"input_cache_write"`
+			} `json:"pricing"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse openrouter table: %w", err)
+	}
+	rates := make(map[string]modelRate, len(doc.Data))
+	for _, m := range doc.Data {
+		id := normalize(m.ID)
+		if id == "" || strings.HasSuffix(id, ":free") || strings.HasSuffix(id, ":batch") {
+			continue
+		}
+		in, okIn := parseNonNegativeString(m.Pricing.Prompt)
+		out, okOut := parseNonNegativeString(m.Pricing.Completion)
+		if !okIn || !okOut {
+			continue
+		}
+		cr, okCR := parseNonNegativeString(m.Pricing.InputCacheRead)
+		if !okCR {
+			cr = in
+		}
+		cw, okCW := parseNonNegativeString(m.Pricing.InputCacheWrite)
+		if !okCW {
+			cw = in
+		}
+		rates[id] = modelRate{standard: Rates{Input: in, Output: out, CacheRead: cr, CacheWrite: cw}}
+	}
+	addBareAliases(rates)
+	return &Table{rates: rates}, nil
+}
+
+func validNonNegative(v float64) (float64, bool) {
+	return v, !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
+}
+
+func parseNonNegativeString(raw string) (float64, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return validNonNegative(v)
+}
+
+// Merge combines primary with one or more fallback tables. Primary entries
+// always win; fallback entries fill only model keys missing from earlier tables.
+func Merge(primary *Table, fallbacks ...*Table) *Table {
+	merged := make(map[string]modelRate)
+	if primary != nil {
+		for k, v := range primary.rates {
+			merged[k] = v
+		}
+	}
+	for _, fb := range fallbacks {
+		if fb == nil {
+			continue
+		}
+		for k, v := range fb.rates {
+			if _, exists := merged[k]; !exists {
+				merged[k] = v
+			}
+		}
+	}
+	return &Table{rates: merged, thresholds: thresholds(merged)}
 }
 
 // readTiers reads the pricedTiers rates for the price keys ending in suffix.
@@ -307,12 +454,13 @@ func (t *Table) Lookup(model, tier string, input int64) (Rates, Source, bool) {
 	if bare == "" || unpriceable[bare] {
 		return Rates{}, "", false
 	}
-	for _, candidate := range []string{key, bare, dateSuffix.ReplaceAllString(key, ""), dateSuffix.ReplaceAllString(bare, "")} {
+	candidates := lookupCandidates(key, bare)
+	for _, candidate := range candidates {
 		if r, ok := t.overrides[candidate]; ok {
 			return r, SourceOverride, true
 		}
 	}
-	for _, candidate := range []string{key, bare, dateSuffix.ReplaceAllString(key, ""), dateSuffix.ReplaceAllString(bare, "")} {
+	for _, candidate := range candidates {
 		mr, ok := t.rates[candidate]
 		if !ok {
 			continue
@@ -332,6 +480,38 @@ func (t *Table) Lookup(model, tier string, input int64) (Rates, Source, bool) {
 		return mr.standard, SourceLiteLLM, true
 	}
 	return Rates{}, "", false
+}
+
+// lookupCandidates orders candidate model keys from most specific to least:
+// exact key/bare, date-stripped, then stripping trailing effort/channel/variant
+// suffixes (up to two levels, e.g. -20260101-high or -trial-high).
+func lookupCandidates(key, bare string) []string {
+	out := make([]string, 0, 10)
+	seen := make(map[string]bool, 10)
+	add := func(s string) {
+		if s != "" && !unpriceable[bareName(s)] && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(key)
+	add(bare)
+	dk, db := dateSuffix.ReplaceAllString(key, ""), dateSuffix.ReplaceAllString(bare, "")
+	add(dk)
+	add(db)
+	for _, base := range []string{dk, db} {
+		cur := base
+		for range 2 {
+			next := variantSuffix.ReplaceAllString(cur, "")
+			next = dateSuffix.ReplaceAllString(next, "")
+			if next == cur || next == "" {
+				break
+			}
+			add(next)
+			cur = next
+		}
+	}
+	return out
 }
 
 // TypeCost is a cost split by what the tokens were billed as.

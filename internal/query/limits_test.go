@@ -73,8 +73,8 @@ func TestLimitBurnPricesEachPointOfTheWeeklyLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []BurnPoint{
-		{T: day1.UnixMilli(), AuthIndex: "acc1", Provider: "codex", WeeklyPct: 2, CostUSD: 4000 * gpt5Input},
-		{T: day2.UnixMilli(), AuthIndex: "acc1", Provider: "codex", WeeklyPct: 3.5, CostUSD: 8400 * gpt5Input},
+		{T: day1.UnixMilli(), AuthIndex: "acc1", Provider: "codex", WeeklyPct: 2, CostUSD: 4000 * gpt5Input, Tokens: Tokens{UncachedInput: 4000}},
+		{T: day2.UnixMilli(), AuthIndex: "acc1", Provider: "codex", WeeklyPct: 3.5, CostUSD: 8400 * gpt5Input, Tokens: Tokens{UncachedInput: 8400}},
 	}
 	if len(got.Points) != len(want) {
 		t.Fatalf("points = %+v, want %+v", got.Points, want)
@@ -82,7 +82,7 @@ func TestLimitBurnPricesEachPointOfTheWeeklyLimit(t *testing.T) {
 	for i, w := range want {
 		g := got.Points[i]
 		if g.T != w.T || g.AuthIndex != w.AuthIndex || g.Provider != w.Provider || !near(g.WeeklyPct, w.WeeklyPct) || !near(g.CostUSD, w.CostUSD) ||
-			!near(g.USDPerPct, w.CostUSD/w.WeeklyPct) {
+			!near(g.USDPerPct, w.CostUSD/w.WeeklyPct) || g.Tokens != w.Tokens {
 			t.Errorf("point %d = %+v, want %+v and %v per point", i, g, w, w.CostUSD/w.WeeklyPct)
 		}
 	}
@@ -223,5 +223,78 @@ func TestLimitHistoryKeepsTheLastReadingPerBucket(t *testing.T) {
 	var pe *ParamError
 	if _, err := LimitHistory(s.DB(), f); !errors.As(err, &pe) {
 		t.Errorf("client filter: err = %v, want a ParamError", err)
+	}
+}
+
+func TestPlanValueAggregatesRealizedAndMeasuredQuotaAcrossProviders(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "pv.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := time.Hour
+	reset := day1.Add(6 * 24 * h)
+	rows := []store.Row{
+		// Codex account with weekly headers across two pairs (total +5% for 6000 uncached + 2000 cache read + 500 output).
+		{
+			RequestID: "c1", TraceID: "c1", RequestedAt: day1.Add(1 * h).UnixMilli(),
+			Provider: "codex", Model: "gpt-5", AuthIndex: "acc-codex", Generate: true,
+			UncachedInput: 1000, LimitWeeklyPct: sql.NullFloat64{Float64: 10, Valid: true},
+			LimitWeeklyReset: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true},
+		},
+		{
+			RequestID: "c2", TraceID: "c2", RequestedAt: day1.Add(2 * h).UnixMilli(),
+			Provider: "codex", Model: "gpt-5", AuthIndex: "acc-codex", Generate: true,
+			UncachedInput: 4000, CacheRead: 2000, OutputNonReasoning: 500,
+			LimitWeeklyPct:   sql.NullFloat64{Float64: 14, Valid: true},
+			LimitWeeklyReset: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true},
+		},
+		{
+			RequestID: "c3", TraceID: "c3", RequestedAt: day2.Add(1 * h).UnixMilli(),
+			Provider: "codex", Model: "gpt-5", AuthIndex: "acc-codex", Generate: true,
+			UncachedInput: 2000,
+			LimitWeeklyPct:   sql.NullFloat64{Float64: 15, Valid: true},
+			LimitWeeklyReset: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true},
+		},
+		// Antigravity account with no weekly headers: realized totals only.
+		{
+			RequestID: "a1", TraceID: "a1", RequestedAt: day1.Add(3 * h).UnixMilli(),
+			Provider: "antigravity", Model: "claude-sonnet-4-6", AuthIndex: "acc-ag", Generate: true,
+			UncachedInput: 3000, CacheRead: 1000, OutputNonReasoning: 200,
+		},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := PlanValue(s.DB(), rangeFilter(), testPrices(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DataSince != day1.Add(1*h).UnixMilli() {
+		t.Errorf("data_since = %d, want %d", got.DataSince, day1.Add(1*h).UnixMilli())
+	}
+	byID := map[string]AccountValue{}
+	for _, a := range got.Accounts {
+		byID[a.AuthIndex] = a
+	}
+	cx := byID["acc-codex"]
+	if cx.Requests != 3 || cx.UncachedInput != 7000 || cx.CacheRead != 2000 || cx.Output != 500 {
+		t.Errorf("codex realized = %+v", cx)
+	}
+	if !near(cx.WeeklyPct, 5.0) || cx.MeasuredTokens.UncachedInput != 6000 || cx.MeasuredTokens.CacheRead != 2000 || cx.MeasuredTokens.Output != 500 || cx.LowSample {
+		t.Errorf("codex measured = %+v", cx)
+	}
+	if cx.TopModel != "gpt-5" || !near(cx.TopModelShare, 1.0) {
+		t.Errorf("codex top model = %q (%v)", cx.TopModel, cx.TopModelShare)
+	}
+	ag := byID["acc-ag"]
+	if ag.Provider != "antigravity" || ag.Requests != 1 || ag.WeeklyPct != 0 || ag.MeasuredCostUSD != 0 || ag.TopModel != "claude-sonnet-4-6" {
+		t.Errorf("antigravity = %+v", ag)
+	}
+	f := rangeFilter()
+	f.Model = "gpt-5"
+	var pe *ParamError
+	if _, err := PlanValue(s.DB(), f, testPrices(t)); !errors.As(err, &pe) {
+		t.Errorf("model filter: err = %v, want ParamError", err)
 	}
 }

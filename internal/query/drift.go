@@ -31,12 +31,15 @@ type Stats struct {
 // DriftPoint is one day of one group, measured per request (see perRequest).
 type DriftPoint struct {
 	// T is the local day start in unix ms.
-	T            int64   `json:"t"`
-	Key          string  `json:"key"`
-	Requests     int64   `json:"requests"`
-	Median       Stats   `json:"median"`
-	P90          Stats   `json:"p90"`
-	CacheHitRate float64 `json:"cache_hit_rate"`
+	T             int64   `json:"t"`
+	Key           string  `json:"key"`
+	Requests      int64   `json:"requests"`
+	TTFTRequests  int     `json:"ttft_requests"`
+	SpeedRequests int     `json:"speed_requests"`
+	InputRequests int     `json:"input_requests"`
+	Median        Stats   `json:"median"`
+	P90           Stats   `json:"p90"`
+	CacheHitRate  float64 `json:"cache_hit_rate"`
 }
 
 // Marker flags the day a client version, reported model or reasoning effort
@@ -154,11 +157,16 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 		}
 	}
 	var sum Tokens
+	inputRequests := 0
 	for _, c := range calls {
 		sum.add(c.tokens)
+		if c.tokens.input() > 0 {
+			inputRequests++
+		}
 	}
 	return DriftPoint{
 		T: t, Key: key, Requests: int64(len(calls)),
+		TTFTRequests: len(ttft), SpeedRequests: len(tps), InputRequests: inputRequests,
 		Median: stats(0.5), P90: stats(0.9), CacheHitRate: cacheHitRate(sum),
 	}
 }

@@ -639,7 +639,7 @@ func TestDriftMeasuresLatencyAndTTFTPerRequest(t *testing.T) {
 		if pt.Requests != 3 || pt.Median.LatencyMs != 2000 || !near(pt.P90.LatencyMs, 2800) {
 			t.Errorf("latency = %+v / %+v, want 3 requests, median 2000, p90 2800", pt.Median, pt.P90)
 		}
-		if pt.Median.TTFTMs != 400 || !near(pt.P90.TTFTMs, 560) {
+		if pt.TTFTRequests != 2 || pt.SpeedRequests != 0 || pt.InputRequests != 3 || pt.Median.TTFTMs != 400 || !near(pt.P90.TTFTMs, 560) {
 			t.Errorf("ttft = %v / %v, want median 400 and p90 560 over the two streamed calls", pt.Median.TTFTMs, pt.P90.TTFTMs)
 		}
 		return
@@ -808,7 +808,7 @@ func TestDriftTokensPerSec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Points) != 1 || !near(d.Points[0].Median.TokensPerSec, 75) {
+	if len(d.Points) != 1 || d.Points[0].SpeedRequests != 2 || d.Points[0].InputRequests != 0 || !near(d.Points[0].Median.TokensPerSec, 75) {
 		t.Fatalf("tps = %+v, want median 75", d.Points)
 	}
 }

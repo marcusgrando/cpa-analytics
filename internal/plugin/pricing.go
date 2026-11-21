@@ -11,7 +11,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const pricingRefreshEvery = 24 * time.Hour
+const (
+	pricingRefreshEvery = 24 * time.Hour
+	modelsDevPricingURL = "https://models.dev/api.json"
+	openRouterModelsURL = "https://openrouter.ai/api/v1/models"
+)
 
 // fetchViaHost downloads a URL through host.http.do so CPA's proxy settings apply.
 func (p *Plugin) fetchViaHost(url string) ([]byte, error) {
@@ -55,7 +59,10 @@ func (p *Plugin) startPricing(url string, kv pricing.KV) {
 	p.refresher = nil
 	p.mu.Unlock()
 	old.Stop()
-	r := pricing.NewRefresher(p.fetchViaHost, kv, url, pricingRefreshEvery)
+	r := pricing.NewRefresher(p.fetchViaHost, kv, url, pricingRefreshEvery).WithFallbacks(
+		pricing.FallbackSource{Name: "modelsdev", URL: modelsDevPricingURL, Parse: pricing.ParseModelsDev},
+		pricing.FallbackSource{Name: "openrouter", URL: openRouterModelsURL, Parse: pricing.ParseOpenRouter},
+	)
 	p.mu.Lock()
 	p.refresher = r
 	p.mu.Unlock()

@@ -24,15 +24,25 @@ type Status struct {
 	LastError   string    `json:"last_error,omitempty"`
 }
 
-// Refresher keeps the LiteLLM table fresh. A failed fetch keeps the current
-// table, or the copy saved in the KV store, so cost estimates degrade instead
-// of disappearing.
+// FallbackSource is an optional secondary price catalog merged only for models
+// missing from the primary table.
+type FallbackSource struct {
+	Name  string
+	URL   string
+	Parse func([]byte) (*Table, error)
+}
+
+// Refresher keeps the LiteLLM table fresh, optionally merging fallback
+// catalogs for models LiteLLM lacks. A failed fetch keeps the current table,
+// or the copy saved in the KV store, so cost estimates degrade instead of
+// disappearing.
 type Refresher struct {
-	fetch func(url string) ([]byte, error)
-	kv    KV
-	url   string
-	every time.Duration
-	now   func() time.Time
+	fetch     func(url string) ([]byte, error)
+	kv        KV
+	url       string
+	fallbacks []FallbackSource
+	every     time.Duration
+	now       func() time.Time
 
 	mu          sync.Mutex
 	table       *Table
@@ -43,6 +53,13 @@ type Refresher struct {
 	stop chan struct{}
 	done chan struct{}
 	once sync.Once
+}
+
+// WithFallbacks attaches secondary catalogs fetched on each refresh to fill
+// models missing from the primary table.
+func (r *Refresher) WithFallbacks(sources ...FallbackSource) *Refresher {
+	r.fallbacks = append(r.fallbacks, sources...)
+	return r
 }
 
 type storedTable struct {
@@ -84,16 +101,18 @@ func (r *Refresher) Stop() {
 	<-r.done
 }
 
-// Refresh fetches the table once.
+// Refresh fetches the primary table and any configured fallbacks once.
 func (r *Refresher) Refresh() {
 	now := r.now()
-	tbl, err := r.fetchTable()
+	primary, err := r.fetchTable()
+	fallbackTables := r.refreshFallbacks(now)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastAttempt = now
 	if err == nil {
-		r.table, r.fetchedAt, r.lastError = tbl.table, now, ""
-		if raw, errMarshal := json.Marshal(storedTable{FetchedAt: now, Body: tbl.raw}); errMarshal == nil && r.kv != nil {
+		r.table = Merge(primary.table, fallbackTables...)
+		r.fetchedAt, r.lastError = now, ""
+		if raw, errMarshal := json.Marshal(storedTable{FetchedAt: now, Body: primary.raw}); errMarshal == nil && r.kv != nil {
 			if errSave := r.kv.SaveKV(kvKey, raw); errSave != nil {
 				r.lastError = errSave.Error()
 			}
@@ -102,8 +121,45 @@ func (r *Refresher) Refresh() {
 	}
 	r.lastError = err.Error()
 	if r.table == nil {
-		r.loadStoredLocked()
+		r.loadStoredLocked(fallbackTables)
 	}
+}
+
+func (r *Refresher) refreshFallbacks(now time.Time) []*Table {
+	if len(r.fallbacks) == 0 {
+		return nil
+	}
+	out := make([]*Table, 0, len(r.fallbacks))
+	for _, fb := range r.fallbacks {
+		key := "pricing.fallback." + fb.Name
+		raw, err := r.fetch(fb.URL)
+		if err == nil {
+			if tbl, perr := fb.Parse(raw); perr == nil && tbl.Len() > 0 {
+				out = append(out, tbl)
+				if r.kv != nil {
+					if data, merr := json.Marshal(storedTable{FetchedAt: now, Body: raw}); merr == nil {
+						_ = r.kv.SaveKV(key, data)
+					}
+				}
+				continue
+			}
+		}
+		if r.kv == nil {
+			continue
+		}
+		storedRaw, lerr := r.kv.LoadKV(key)
+		if lerr != nil || len(storedRaw) == 0 {
+			continue
+		}
+		var stored storedTable
+		if json.Unmarshal(storedRaw, &stored) != nil {
+			continue
+		}
+		if tbl, perr := fb.Parse(stored.Body); perr == nil && tbl.Len() > 0 {
+			out = append(out, tbl)
+		}
+	}
+	return out
 }
 
 type fetchedTable struct {
@@ -126,20 +182,21 @@ func (r *Refresher) fetchTable() (fetchedTable, error) {
 	return fetchedTable{table: tbl, raw: raw}, nil
 }
 
-func (r *Refresher) loadStoredLocked() {
-	if r.kv == nil {
-		return
+func (r *Refresher) loadStoredLocked(fallbacks []*Table) {
+	if r.kv != nil {
+		raw, err := r.kv.LoadKV(kvKey)
+		if err == nil && len(raw) > 0 {
+			var stored storedTable
+			if json.Unmarshal(raw, &stored) == nil {
+				if tbl, err := ParseLiteLLM(stored.Body); err == nil {
+					r.table, r.fetchedAt = Merge(tbl, fallbacks...), stored.FetchedAt
+					return
+				}
+			}
+		}
 	}
-	raw, err := r.kv.LoadKV(kvKey)
-	if err != nil || len(raw) == 0 {
-		return
-	}
-	var stored storedTable
-	if json.Unmarshal(raw, &stored) != nil {
-		return
-	}
-	if tbl, err := ParseLiteLLM(stored.Body); err == nil {
-		r.table, r.fetchedAt = tbl, stored.FetchedAt
+	if len(fallbacks) > 0 {
+		r.table, r.fetchedAt = Merge(nil, fallbacks...), r.now()
 	}
 }
 

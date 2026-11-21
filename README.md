@@ -83,7 +83,7 @@ The page reloads its data every 60 seconds while the tab is visible. **Auto refr
 
 The totals show how each figure changed against the previous period of the same length, once the plugin has recorded through that whole period.
 
-The drift chart is the main view. It plots median or p90 input (including cache by default) and output tokens per request, grouped by reported model or by client version, and draws a marker on the first day a new model or client version appears. A jump that lines up with a client version marker points at your change. A jump that lines up with a model marker, or with no marker at all, points at the provider. Grouping by reasoning effort catches a client that raised its default effort: output and reasoning go up with no model change.
+The drift chart shows how a typical call (median) or a call at the 90th percentile changes over time. It opens on input tokens including cache for the five busiest reported models with qualifying data. Each point needs five measured calls by default. Choose **All measured buckets** to see smaller samples. **Change from first bucket** compares each group with its own first qualifying bucket. Cache hit rate uses percentage points. The largest changes show both endpoint dates, values and call counts. Select a change to isolate its series, then use the legend to add groups. Group by client to see when each client version first appeared.
 
 The same chart plots median or p90 latency and time to first token per request. Time to first token covers streamed calls only, since CPA reports none for the others.
 

@@ -20,6 +20,7 @@ type BurnPoint struct {
 	WeeklyPct float64 `json:"weekly_pct"`
 	CostUSD   float64 `json:"cost_usd"`
 	USDPerPct float64 `json:"usd_per_pct"`
+	Tokens
 	// UnpricedTokens were spent in the measured spans but have no price, so
 	// CostUSD understates the spend.
 	UnpricedTokens int64 `json:"unpriced_tokens"`
@@ -78,6 +79,7 @@ type weeklyPair struct {
 	pct      float64
 	cost     float64
 	unpriced int64
+	tokens   Tokens
 }
 
 // weeklyCycle is one account's weekly cycle as its readings saw it. nextAt is
@@ -116,10 +118,11 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 
 	p := newPricer(table)
 	var (
-		cycles   []weeklyCycle
-		cur      *weeklyCycle
-		spanCost float64
-		spanUnpr int64
+		cycles     []weeklyCycle
+		cur        *weeklyCycle
+		spanCost   float64
+		spanUnpr   int64
+		spanTokens Tokens
 	)
 	flush := func() {
 		if cur != nil {
@@ -141,17 +144,19 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 		}
 		if cur != nil && acct != cur.account {
 			flush()
+			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 		}
 		cost, quality := p.price(model, tier, tokens.input(), tokens)
 		spanCost += cost
 		spanUnpr += quality.UnpricedTokens
+		spanTokens.add(tokens)
 		if !pct.Valid || !reset.Valid {
 			continue
 		}
 		switch {
 		case cur != nil && abs(reset.Int64-cur.reset) <= resetJitterMillis:
 			if pct.Float64 >= cur.lastPct {
-				cur.pairs = append(cur.pairs, weeklyPair{at: at, pct: pct.Float64 - cur.lastPct, cost: spanCost, unpriced: spanUnpr})
+				cur.pairs = append(cur.pairs, weeklyPair{at: at, pct: pct.Float64 - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
 			}
 			cur.reset, cur.lastPct, cur.lastAt = reset.Int64, pct.Float64, at
 		default:
@@ -161,7 +166,7 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, since int64) ([]we
 			}
 			cur = &weeklyCycle{account: acct, provider: provider, reset: reset.Int64, lastPct: pct.Float64, lastAt: at}
 		}
-		spanCost, spanUnpr = 0, 0
+		spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("weekly cycles rows: %w", err)
@@ -195,6 +200,7 @@ func LimitBurn(db *sql.DB, f Filter, table *pricing.Table) (BurnResult, error) {
 			}
 			bp.WeeklyPct += pair.pct
 			bp.CostUSD += pair.cost
+			bp.Tokens.add(pair.tokens)
 			bp.UnpricedTokens += pair.unpriced
 		}
 	}
@@ -353,5 +359,162 @@ func LimitHistory(db *sql.DB, f Filter) (HistoryResult, error) {
 	if err := rows.Err(); err != nil {
 		return HistoryResult{}, fmt.Errorf("limit history rows: %w", err)
 	}
+	return res, nil
+}
+
+// AccountValue summarizes one account's realized usage over the selected range
+// and, when the provider reports weekly quota headers, its measured quota burn
+// across the whole range.
+type AccountValue struct {
+	AuthIndex string `json:"auth_index"`
+	Provider  string `json:"provider"`
+	Requests  int64  `json:"requests"`
+	Failed    int64  `json:"failed"`
+	Tokens
+	CostUSD                float64 `json:"cost_usd"`
+	UnpricedTokens         int64   `json:"unpriced_tokens"`
+	CacheHitRate           float64 `json:"cache_hit_rate"`
+	TopModel               string  `json:"top_model,omitempty"`
+	TopModelShare          float64 `json:"top_model_share,omitempty"`
+	WeeklyPct              float64 `json:"weekly_pct"`
+	MeasuredCostUSD        float64 `json:"measured_cost_usd"`
+	MeasuredUnpricedTokens int64   `json:"measured_unpriced_tokens"`
+	MeasuredTokens         Tokens  `json:"measured_tokens"`
+	LowSample              bool    `json:"low_sample,omitempty"`
+}
+
+// PlanValueResult answers the plan-value route.
+type PlanValueResult struct {
+	DataSince int64          `json:"data_since"`
+	Accounts  []AccountValue `json:"accounts"`
+}
+
+// PlanValue returns per-account realized usage and whole-range weekly quota
+// burn so the dashboard can rank plans by potential and realized cost-benefit.
+func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, error) {
+	if err := rejectPartialAccountFilters(f); err != nil {
+		return PlanValueResult{}, err
+	}
+	since, err := dataSince(db)
+	if err != nil {
+		return PlanValueResult{}, err
+	}
+	rows, err := aggregate(db, f, table, "auth_index", "provider")
+	if err != nil {
+		return PlanValueResult{}, err
+	}
+	type acctKey struct {
+		authIndex string
+		provider  string
+	}
+	type modelMix struct {
+		cost   float64
+		tokens int64
+	}
+	byAcct := map[acctKey]*AccountValue{}
+	modelsByAcct := map[acctKey]map[string]*modelMix{}
+	for _, r := range rows {
+		if r.keys[0] == "" {
+			continue
+		}
+		k := acctKey{r.keys[0], r.keys[1]}
+		av := byAcct[k]
+		if av == nil {
+			av = &AccountValue{AuthIndex: k.authIndex, Provider: k.provider}
+			byAcct[k] = av
+			modelsByAcct[k] = map[string]*modelMix{}
+		}
+		av.Failed += r.failed
+		av.Tokens.add(r.tokens)
+		av.CostUSD += r.cost
+		av.UnpricedTokens += r.quality.UnpricedTokens
+		mm := modelsByAcct[k][r.model]
+		if mm == nil {
+			mm = &modelMix{}
+			modelsByAcct[k][r.model] = mm
+		}
+		mm.cost += r.cost
+		mm.tokens += r.tokens.total()
+	}
+
+	where, args := f.where(true)
+	reqRows, err := db.Query(`SELECT auth_index, provider, COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END)
+		FROM requests WHERE auth_index <> '' AND `+where+` GROUP BY auth_index, provider`, args...)
+	if err != nil {
+		return PlanValueResult{}, fmt.Errorf("plan value requests: %w", err)
+	}
+	defer reqRows.Close()
+	for reqRows.Next() {
+		var authIdx, prov string
+		var reqs int64
+		if err := reqRows.Scan(&authIdx, &prov, &reqs); err != nil {
+			return PlanValueResult{}, fmt.Errorf("plan value requests scan: %w", err)
+		}
+		if av := byAcct[acctKey{authIdx, prov}]; av != nil {
+			av.Requests = reqs
+		}
+	}
+	if err := reqRows.Err(); err != nil {
+		return PlanValueResult{}, fmt.Errorf("plan value requests rows: %w", err)
+	}
+
+	cycles, err := weeklyCycles(db, f, table, f.From.UnixMilli())
+	if err != nil {
+		return PlanValueResult{}, err
+	}
+	for _, c := range cycles {
+		k := acctKey{c.account, c.provider}
+		av := byAcct[k]
+		if av == nil {
+			av = &AccountValue{AuthIndex: k.authIndex, Provider: k.provider}
+			byAcct[k] = av
+		}
+		for _, pair := range c.pairs {
+			av.WeeklyPct += pair.pct
+			av.MeasuredCostUSD += pair.cost
+			av.MeasuredUnpricedTokens += pair.unpriced
+			av.MeasuredTokens.add(pair.tokens)
+		}
+	}
+
+	res := PlanValueResult{DataSince: since, Accounts: make([]AccountValue, 0, len(byAcct))}
+	for k, av := range byAcct {
+		av.CacheHitRate = cacheHitRate(av.Tokens)
+		if av.WeeklyPct > 0 && av.WeeklyPct < lowSampleBurnPct {
+			av.LowSample = true
+		}
+		if mix := modelsByAcct[k]; len(mix) > 0 {
+			useCost := av.CostUSD > 0
+			var bestModel string
+			var bestScore float64
+			for model, mm := range mix {
+				score := float64(mm.tokens)
+				if useCost {
+					score = mm.cost
+				}
+				if bestModel == "" || score > bestScore || (score == bestScore && model < bestModel) {
+					bestModel = model
+					bestScore = score
+				}
+			}
+			av.TopModel = bestModel
+			if useCost {
+				av.TopModelShare = ratio(bestScore, av.CostUSD)
+			} else {
+				av.TopModelShare = ratio(bestScore, float64(av.Tokens.total()))
+			}
+		}
+		res.Accounts = append(res.Accounts, *av)
+	}
+	sort.Slice(res.Accounts, func(i, j int) bool {
+		a, b := res.Accounts[i], res.Accounts[j]
+		if a.CostUSD != b.CostUSD {
+			return a.CostUSD > b.CostUSD
+		}
+		if a.AuthIndex != b.AuthIndex {
+			return a.AuthIndex < b.AuthIndex
+		}
+		return a.Provider < b.Provider
+	})
 	return res, nil
 }

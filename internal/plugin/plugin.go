@@ -19,7 +19,7 @@ import (
 
 const (
 	pluginName    = "cpa-analytics"
-	pluginVersion = "0.1.29"
+	pluginVersion = "0.2.0"
 	// minHostSchema is the first host schema that honors
 	// request_interceptor_omit_body_before, so request bodies never reach the plugin.
 	minHostSchema uint32 = 7
@@ -144,6 +144,19 @@ func (p *Plugin) currentWriter() *store.Writer {
 	return p.writer
 }
 
+func (p *Plugin) planCosts() map[string]float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.cfg.PlanCosts) == 0 {
+		return map[string]float64{}
+	}
+	out := make(map[string]float64, len(p.cfg.PlanCosts))
+	for k, v := range p.cfg.PlanCosts {
+		out[k] = v
+	}
+	return out
+}
+
 // openStorage (re)opens the database when the path changed or a previous
 // open failed. A failure is recorded for health and never fails registration.
 func (p *Plugin) openStorage(path string) {
@@ -259,6 +272,7 @@ func metadata() pluginapi.Metadata {
 			{Name: "retention_days", Type: pluginapi.ConfigFieldTypeInteger, Default: 0, Description: "Delete rows older than this many days. 0 keeps everything."},
 			{Name: "price_overrides", Type: pluginapi.ConfigFieldTypeObject, Description: "Model name to USD per 1M tokens: input, output, cache_read, cache_write."},
 			{Name: "pricing_url", Type: pluginapi.ConfigFieldTypeString, Default: defaultPricingURL, Description: "LiteLLM price table URL, refreshed every 24 hours."},
+			{Name: "plan_costs", Type: pluginapi.ConfigFieldTypeObject, Description: "Monthly subscription USD by plan key (for example 'claude:Max 20x', 'codex:Pro') or account auth_index."},
 		},
 	}
 }

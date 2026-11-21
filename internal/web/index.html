@@ -124,6 +124,13 @@ details.card[open] > summary { margin-bottom: 8px; }
 .trend-stats { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; color: var(--ink-2); margin-top: 10px; }
 .key-line.dashed { background: repeating-linear-gradient(90deg, var(--tone1) 0 5px, transparent 5px 9px); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.drift-options { margin: 8px 0; }
+.drift-summary, #drift-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.drift-summary { margin: 10px 0; font-size: 12px; color: var(--ink-2); }
+.drift-summary button, #drift-legend button { font-size: 12px; max-width: 100%; overflow-wrap: anywhere; }
+.drift-summary button { text-align: left; }
+.drift-summary small { display: block; font-size: 11px; }
+#drift-legend .key-line { vertical-align: middle; margin-right: 5px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .key-rect { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .key-line { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
@@ -185,8 +192,24 @@ body.loading #refresh-now { opacity: 0.65; }
 .acct-status strong { color: var(--ink); font-weight: 600; }
 .yaml-snippet { margin: 8px 0 0; padding: 10px 12px; background: var(--wash); border-radius: 6px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; user-select: all; }
 .marker-impact { color: var(--muted); margin-left: 6px; }
+.cost-edit { display: inline-flex; align-items: center; gap: 4px; }
+.cost-input { width: 5.5em; text-align: right; min-height: 28px; padding: 2px 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.plan-badge { display: inline-block; font-size: 11px; color: var(--ink-2); background: var(--wash); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.plan-bars { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 18px; }
+.plan-bar-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) minmax(0, 12rem); align-items: center; gap: 6px 12px; font-size: 12px; }
+.plan-bar-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-weight: 500; }
+.plan-bar-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-bar-track { position: relative; height: 14px; border-radius: 4px; background: var(--wash); }
+.plan-bar-pot { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; opacity: 0.28; }
+.plan-bar-real { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 3px; }
+.plan-bar-ref { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--axis); }
+.plan-bar-val { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-bar-val strong { color: var(--ink); }
+.plan-sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 @media (max-width: 640px) {
   .acct { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
+  .plan-bar-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .plan-bar-val { text-align: left; }
 }
 .split { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); margin-top: 16px; }
 .split-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
@@ -218,6 +241,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="seg" role="group" aria-label="View">
         <button type="button" data-view="usage" aria-pressed="true">Usage</button>
         <button type="button" data-view="limits" aria-pressed="false">Limits</button>
+        <button type="button" data-view="plans" aria-pressed="false">Plans</button>
         <button type="button" data-view="requests" aria-pressed="false">Requests</button>
       </div>
       <div class="nav-actions">
@@ -268,6 +292,58 @@ body.loading #refresh-now { opacity: 0.65; }
         </div>
       </div>
       <div id="limits-body"></div>
+    </section>
+
+    <section id="plans" class="card plans-only" hidden aria-labelledby="plans-title">
+      <div class="card-head">
+        <div>
+          <h2 id="plans-title">Plan value</h2>
+          <p class="sub">Ranks subscriptions by API value per $1 paid: potential (100% of the weekly quota, for Claude and Codex) and realized (actual traffic in the period, for all providers). Edit any monthly price to recalculate.</p>
+        </div>
+        <div class="controls">
+          <label>Period
+            <select id="plans-period">
+              <option value="24h">Last 24 hours</option>
+              <option value="7d" selected>Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+            </select>
+          </label>
+          <label>Rank by
+            <select id="plans-sort">
+              <option value="potential" selected>Best potential (x)</option>
+              <option value="realized">Best realized (x)</option>
+              <option value="output">Output tokens / $1</option>
+              <option value="input">Uncached input / $1</option>
+              <option value="cacheRead">Cache read / $1</option>
+              <option value="cacheWrite">Cache write / $1</option>
+            </select>
+          </label>
+          <label>Token columns
+            <select id="plans-unit">
+              <option value="potential" selected>Per $1 (potential)</option>
+              <option value="realized">Per $1 (realized)</option>
+              <option value="pct">Per 1% weekly quota</option>
+            </select>
+          </label>
+          <div class="seg" role="group" aria-label="Group by">
+            <button type="button" data-plans-group="plan" aria-pressed="true">By plan</button>
+            <button type="button" data-plans-group="account" aria-pressed="false">By account</button>
+          </div>
+        </div>
+      </div>
+      <p class="section-status notice" role="status" hidden></p>
+      <div class="section-content">
+        <div id="plans-tiles" class="tiles"></div>
+        <p id="plans-note" class="notice"></p>
+        <div id="plans-chart" class="plan-bars"></div>
+        <div id="plans-legend" class="legend"></div>
+        <div id="plans-table" class="table-wrap" style="margin-top:14px"></div>
+        <details id="plans-config">
+          <summary>Save custom monthly prices in plugin config</summary>
+          <div id="plans-yaml"></div>
+        </details>
+      </div>
     </section>
 
     <section id="requests" class="card requests-only" hidden aria-labelledby="requests-title">
@@ -343,7 +419,7 @@ body.loading #refresh-now { opacity: 0.65; }
         <div class="card-head">
           <div>
             <h2 id="drift-title">Per request</h2>
-            <p id="drift-sub" class="sub">Daily, per upstream call. A vertical line marks when a plotted model first appeared.</p>
+            <p id="drift-sub" class="sub">Compare the size of successful calls over time.</p>
           </div>
           <div class="controls">
             <label>Group by
@@ -363,14 +439,14 @@ body.loading #refresh-now { opacity: 0.65; }
                 <option value="output">Output</option>
                 <option value="reasoning">Reasoning</option>
                 <option value="output_total">Output incl. reasoning</option>
-                <option value="cost_usd">Cost per request</option>
+                <option value="cost_usd">Estimated API cost</option>
                 <option value="cache_hit_rate">Cache hit rate</option>
                 <option value="latency_ms">Latency</option>
                 <option value="ttft_ms">Time to first token</option>
                 <option value="tokens_per_sec">Output tokens / s</option>
               </select>
             </label>
-            <div class="seg" role="group" aria-label="Statistic">
+            <div id="drift-stat" class="seg" role="group" aria-label="Statistic">
               <button type="button" data-stat="median" aria-pressed="true">Median</button>
               <button type="button" data-stat="p90" aria-pressed="false">p90</button>
             </div>
@@ -378,17 +454,22 @@ body.loading #refresh-now { opacity: 0.65; }
         </div>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
+          <div class="controls drift-options">
+            <label>Scale <select id="drift-scale"><option value="absolute">Absolute</option><option value="change">Change from first bucket</option></select></label>
+            <label>Sample <select id="drift-sample"><option value="5">5+ calls per bucket</option><option value="1">All measured buckets</option></select></label>
+          </div>
+          <div id="drift-summary" class="drift-summary"></div>
           <div id="drift-chart" class="chart"></div>
           <div id="drift-legend" class="legend"></div>
           <p id="drift-note" class="notice"></p>
           <details id="drift-changes" hidden><summary id="drift-changes-summary"></summary><ul id="drift-markers" class="markers"></ul></details>
-          <details><summary>Table</summary><div id="drift-table" class="table-wrap"></div></details>
+          <details><summary>All buckets in absolute values</summary><div id="drift-table" class="table-wrap"></div></details>
         </div>
       </section>
 
       <details id="latency" class="card" aria-labelledby="latency-title">
         <summary><h2 id="latency-title">Latency</h2></summary>
-        <p class="sub">One dot per successful streamed call, on log scales. Dashed lines mark the 95th percentile.</p>
+        <p class="sub">Farther right means a longer wait for the first token. Higher means a longer call overall. Dashed lines mark p95 on each log scale.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
           <div id="latency-chart" class="chart"></div>
@@ -401,7 +482,7 @@ body.loading #refresh-now { opacity: 0.65; }
         <div class="card-head">
           <div>
             <h2 id="daily-title">Usage over time</h2>
-            <p class="sub">Stacked by provider.</p>
+            <p id="daily-sub" class="sub"></p>
           </div>
           <div class="seg" role="group" aria-label="Measure">
             <button type="button" data-daily="cost" aria-pressed="true">Cost</button>
@@ -439,7 +520,7 @@ body.loading #refresh-now { opacity: 0.65; }
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
-        <p class="sub">What each 1% of an account's weekly limit bought, at API prices, per day, for providers that report weekly quota in response headers (Claude, Codex). For the same work, a drop means the provider tightened the limit. Ignores the model, client and API key filters.</p>
+        <p class="sub">How much API-priced work did each 1% of weekly quota buy? Compare days with a similar model and token mix. Covers Claude and Codex. The model, client and API key filters do not apply.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
           <div id="burn-chart" class="chart"></div>
@@ -491,6 +572,8 @@ body.loading #refresh-now { opacity: 0.65; }
 /* sparkline.js */
 /* endlabels.js */
 /* scatter.js */
+/* drift.js */
+/* plans.js */
 </script>
 <script>
 'use strict';
@@ -518,8 +601,9 @@ const END_LABELS = 4;
 
 const state = {
   period: '7d', provider: '', model: '', client: '', account: '', apiKey: '',
-  view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', by: 'model',
+  view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', driftScale: 'absolute', driftMinimum: 5, driftSelection: new Set(), by: 'model',
   reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
+  plansGroup: 'plan', plansSort: 'potential', plansUnit: 'potential',
 };
 const REQUESTS_PAGE = 50;
 let data = {};
@@ -579,9 +663,11 @@ function rememberKey(key) {
 function forgetKey() {
   data = {};
   limitsData = null;
+  if (typeof plansData !== 'undefined') plansData = null;
   if (typeof expandedRequests !== 'undefined') expandedRequests.clear();
   claudeProfiles.clear();
   antigravityPlans.clear();
+  if (typeof detectedPlans !== 'undefined') detectedPlans.clear();
   document.getElementById('health').replaceChildren();
   managementKey = '';
   try { sessionStorage.removeItem(KEY_STORE); } catch (_) { /* nothing stored */ }
@@ -749,17 +835,20 @@ function niceStep(max, count) {
 // frame draws the y grid and x labels and returns the plot geometry.
 // minStep keeps count axes on whole numbers. right leaves room for labels at
 // the end of lines.
-function frame(container, xs, maxY, fmtY, fmtX, minStep = 0, right = 8) {
+function frame(container, xs, maxY, fmtY, fmtX, minStep = 0, right = 8, minY = 0) {
   const width = Math.max(280, container.clientWidth);
   const height = 240;
   const m = { top: 22, right, bottom: 24, left: 52 };
   const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img' });
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
-  const step = maxY > 0 ? Math.max(minStep, niceStep(maxY, 4)) : 1;
-  const top = Math.max(step, Math.ceil(maxY / step) * step);
-  const y = (v) => m.top + plotH - (v / top) * plotH;
-  for (let v = 0; v <= top + step / 2; v += step) {
+  const span = maxY - minY;
+  const step = span > 0 ? Math.max(minStep, niceStep(span, 4)) : 1;
+  const bottom = Math.floor(minY / step) * step;
+  const top = Math.max(bottom + step, Math.ceil(maxY / step) * step);
+  const y = (v) => m.top + plotH - ((v - bottom) / (top - bottom)) * plotH;
+  for (let tick = Math.round(bottom / step); tick <= Math.round(top / step); tick++) {
+    const v = tick * step;
     svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.append(svgEl('text', { x: m.left - 6, y: y(v) + 4, 'text-anchor': 'end', text: fmtY(v) }));
   }
@@ -1008,8 +1097,25 @@ function renderDaily() {
   const keys = [...new Set(series.points.map((p) => p.key))];
   const at = new Map(series.points.map((p) => [p.t + '|' + p.key, p]));
   const stackAt = (t) => keys.map((k) => ({ key: k, p: at.get(t + '|' + k) })).filter((s) => s.p);
-  const maxY = Math.max(0, ...xs.map((t) => stackAt(t).reduce((s, e) => s + value(e.p), 0)));
-  if (!series.points.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); document.getElementById('daily-legend').replaceChildren(); return; }
+  const subtitle = document.getElementById('daily-sub');
+  if (!series.points.length) {
+    container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' }));
+    document.getElementById('daily-legend').replaceChildren();
+    document.getElementById('daily-table').replaceChildren();
+    subtitle.textContent = '';
+    return;
+  }
+  const totals = xs.map(t => stackAt(t).reduce((sum, e) => sum + value(e.p), 0));
+  const maxY = Math.max(0, ...totals);
+  const unit = state.dailyMode === 'cost' ? 'estimated API cost' : 'token volume';
+  if (maxY > 0) {
+    const peak = xs[totals.indexOf(maxY)];
+    const lead = stackAt(peak).reduce((a, b) => value(a.p) >= value(b.p) ? a : b);
+    const amount = fmtY(maxY) + (state.dailyMode === 'tokens' ? ' tokens' : '');
+    subtitle.textContent = `Peak ${unit} on ${fmtLabel(peak)} was ${amount}. Led by ${lead.key || 'unknown'} (${fmtY(value(lead.p))}).`;
+  } else {
+    subtitle.textContent = `Recorded ${unit} is zero throughout this period.`;
+  }
   const g = frame(container, xs, maxY, fmtY, fmtX, state.dailyMode === 'cost' ? 0 : 1);
   g.svg.setAttribute('aria-label', 'Usage per ' + series.bucket + ' stacked by provider');
   const barW = Math.min(24, Math.max(2, g.band * 0.6));
@@ -1046,26 +1152,21 @@ function renderDaily() {
 
 const MARKER_KINDS = { client_version: 'client version', response_model: 'reported model', reasoning_effort: 'reasoning effort' };
 const DRIFT_CADENCE = { day: 'Daily', hour: 'Hourly', minute: 'Per minute' };
-const DRIFT_MARKER_NOTE = {
-  response_model: 'A vertical line marks when a plotted model first appeared.',
-  client: 'One line per harness. A vertical line marks a new version of a plotted harness.',
-  client_version: 'A vertical line marks when a plotted client version first appeared.',
-  reasoning_effort: 'A vertical line marks when a reasoning effort first appeared.',
+const DRIFT_MEASURE_NOTE = {
+  input: 'How much context does a call carry, including cached input?',
+  uncached_input: 'How many input tokens arrive uncached?',
+  cache_read: 'How much of the prompt comes from cache?',
+  cache_write: 'How much new context does each call write to cache?',
+  output: 'How many visible output tokens does a call produce?',
+  reasoning: 'How many tokens does a call spend on reasoning?',
+  output_total: 'How much output does a call generate, including reasoning?',
+  cost_usd: 'What would a call cost at API prices? Unpriced tokens count as $0.',
+  cache_hit_rate: 'What share of input tokens came from cache?',
+  latency_ms: 'How long does a successful call take to finish?',
+  ttft_ms: 'How long do streamed calls wait for their first token?',
+  tokens_per_sec: 'How quickly does a call generate output, including reasoning?',
 };
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
-
-// Calls that never streamed have no first-token time, so a bucket without one
-// has no TTFT point rather than a zero. Same for output speed without timed output.
-const driftPlotted = (p) => {
-  if (state.driftMetric === 'ttft_ms') return p.median.ttft_ms > 0;
-  if (state.driftMetric === 'tokens_per_sec') return p.median.tokens_per_sec > 0;
-  return true;
-};
-
-function driftValue(p) {
-  if (state.driftMetric === 'cache_hit_rate') return p.cache_hit_rate;
-  return p[state.driftStat][state.driftMetric];
-}
 
 function fmtMarkerImpact(impact) {
   if (!impact) return '';
@@ -1096,25 +1197,55 @@ function renderDrift() {
   // The hit rate is the bucket's cache reads over its input, not a per-request value.
   document.getElementById('drift-title').textContent = isRate ? (DRIFT_CADENCE[bucket] || 'Daily') + ' cache hit rate' : isSpeed ? 'Output tokens / s' : driftMetricLabel() + ' per request';
   const sub = document.getElementById('drift-sub');
-  if (sub) sub.textContent = `${DRIFT_CADENCE[bucket] || 'Daily'}, per upstream call. ${DRIFT_MARKER_NOTE[group] || ''}`.trim();
+  document.getElementById('drift-stat').hidden = isRate;
+  const cadence = DRIFT_CADENCE[bucket] || 'Daily';
+  const statNote = isRate ? 'share of input tokens read from cache' : state.driftStat === 'median' ? 'median of measured calls' : 'p90 of measured calls';
+  sub.textContent = DRIFT_MEASURE_NOTE[state.driftMetric] + ' ' + cadence + ' ' + statNote + '.';
   const isTime = state.driftMetric === 'latency_ms' || state.driftMetric === 'ttft_ms';
   const fmtY = isRate ? fmtPct : isTime ? fmtSeconds : isCost ? fmtUSD : isSpeed ? (v) => fmtInt(v) + ' tok/s' : fmtCompact;
   const xs = buckets(size);
-  const byKey = new Map();
-  for (const p of drift.points) {
-    if (!byKey.has(p.key)) byKey.set(p.key, []);
-    byKey.get(p.key).push(p);
+  const indexed = state.driftScale === 'change';
+  const ranked = driftSeries(drift.points, state.driftMetric, state.driftStat, state.driftMinimum);
+  const defaultGroups = ranked.slice(0, 5);
+  const selection = state.driftSelection;
+  for (const key of selection) {
+    if (!ranked.some(s => s.key === key)) selection.delete(key);
   }
-  // Keep the busiest groups; colors stay with the group, not its rank.
-  const ranked = [...byKey.entries()].map(([key, pts]) => ({ key, pts, n: pts.reduce((s, p) => s + p.requests, 0) }))
-    .sort((a, b) => b.n - a.n);
-  const shown = ranked.slice(0, SERIES_SLOTS);
-  const shownKeys = new Set(shown.map((s) => s.key));
+  const candidates = defaultGroups.concat(ranked.slice(5).filter(s => selection.has(s.key)));
+  const shown = candidates.filter(s => !selection.size || selection.has(s.key));
+  const shownKeys = new Set(shown.map(s => s.key));
   const wantKind = group === 'client' ? 'client_version' : group;
   const matchingMarkers = (drift.markers || []).filter((mk) => mk.kind === wantKind);
-  const chartMarkers = matchingMarkers.filter((mk) => shownKeys.has(driftMarkerOwner(mk, group)));
-  document.getElementById('drift-note').textContent = ranked.length > shown.length
-    ? `${ranked.length - shown.length} smaller groups are hidden. Filter the page to see them.` : '';
+  const chartMarkers = group === 'response_model' ? [] : matchingMarkers.filter(mk => shownKeys.has(driftMarkerOwner(mk, group)));
+  const calls = n => fmtInt(n) + (n === 1 ? ' call' : ' calls');
+  const fmtChange = v => v.toLocaleString(undefined, { maximumFractionDigits: 2, signDisplay: 'exceptZero' }) + (isRate ? ' pp' : '%');
+  const changed = shown.filter(s => s.change !== null && s.change !== 0)
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 3);
+  const summary = document.getElementById('drift-summary');
+  const legendEl = document.getElementById('drift-legend');
+  function selectSeries(key, isolate) {
+    if (isolate) selection.clear();
+    if (selection.has(key)) selection.delete(key); else selection.add(key);
+    renderDrift();
+    [...legendEl.children].find(button => button.dataset.key === key)?.focus();
+  }
+  summary.replaceChildren();
+  if (changed.length) {
+    summary.append('Largest changes shown');
+    for (const s of changed) {
+      const first = s.points[0], last = s.points.at(-1);
+      summary.append(el('button', { type: 'button', onclick: () => selectSeries(s.key, true) },
+        s.key + ' ' + fmtChange(s.change),
+        el('small', { text: `${fmtBucket(first.t)}, ${fmtY(first.value)} (${calls(first.n)}) → ${fmtBucket(last.t)}, ${fmtY(last.value)} (${calls(last.n)})` })));
+    }
+  } else if (shown.length) {
+    summary.textContent = shown.some(s => s.change === 0) ? 'No change between comparable endpoints.' : 'No comparable endpoints in the selected series.';
+  }
+  const notes = [];
+  if (ranked.length > 5) notes.push(`The default view shows the five busiest of ${fmtInt(ranked.length)} qualifying groups.`);
+  if (indexed) notes.push(isRate ? 'Percentage points from each group’s first measured rate.' : 'Percent change from each group’s first qualifying bucket. A zero baseline has no percent change.');
+  if (group === 'client') notes.push('Vertical lines mark new client versions.');
+  document.getElementById('drift-note').textContent = notes.join(' ');
   const markersList = document.getElementById('drift-markers');
   markersList.replaceChildren(...matchingMarkers.map((mk) => {
     const scope = group === 'client' ? drift.points.filter((p) => p.key === driftMarkerOwner(mk, group)) : drift.points;
@@ -1124,17 +1255,45 @@ function renderDrift() {
   }));
   document.getElementById('drift-changes').hidden = !matchingMarkers.length;
   document.getElementById('drift-changes-summary').textContent = `Changes (${matchingMarkers.length})`;
-  if (!drift.points.length) {
-    container.replaceChildren(el('div', { class: 'empty', text: 'No generating requests in this range' }));
-    document.getElementById('drift-legend').replaceChildren();
-    document.getElementById('drift-table').replaceChildren();
+  document.getElementById('drift-table').replaceChildren(table(
+    [size === DAY ? 'Day' : 'Time', 'Group', 'Measured calls', driftMetricLabel() + (isRate ? '' : ' (' + state.driftStat + ')')],
+    drift.points.map(p => {
+      const point = driftMeasurement(p, state.driftMetric, state.driftStat);
+      return [fmtBucket(p.t), p.key, fmtInt(point.n), point.n > 0 ? fmtY(point.value) : '—'];
+    }),
+  ));
+  legendEl.replaceChildren();
+  if (candidates.length > 1) legendEl.append(el('span', { text: 'Select groups to compare' }));
+  const entries = new Map();
+  for (const s of candidates) {
+    const button = el('button', { type: 'button', 'data-key': s.key, 'aria-pressed': selection.has(s.key),
+      onclick: () => selectSeries(s.key, false) }, el('span', { class: 'key-line', style: 'background:' + colorFor('drift:' + group, s.key) }), s.key);
+    entries.set(s.key, button);
+    legendEl.append(button);
+  }
+  const otherGroups = ranked.slice(5).filter(s => !selection.has(s.key));
+  if (otherGroups.length) {
+    legendEl.append(el('select', { 'aria-label': 'Compare another group', onchange: e => selectSeries(e.target.value, false) },
+      el('option', { value: '', disabled: '', selected: '', text: 'Compare another group…' }),
+      ...otherGroups.map(s => el('option', { value: s.key, text: s.key }))));
+  }
+  if (selection.size) legendEl.append(el('button', { type: 'button', text: ranked.length > 5 ? 'Show top five' : 'Show all', onclick: () => {
+    selection.clear(); renderDrift(); legendEl.querySelector('button')?.focus();
+  } }));
+  const ordinate = p => indexed ? p.change : p.value;
+  const values = shown.flatMap(s => s.points.map(ordinate)).filter(v => v !== null);
+  if (!values.length) {
+    const message = !drift.points.length ? 'No successful calls in this range.'
+      : !ranked.length && state.driftMinimum === 1 ? 'No calls reported this measure. Choose another measure or widen the period.'
+      : !ranked.length ? 'No bucket meets the sample for this measure. Include all measured buckets or widen the period.'
+      : 'The first bucket is zero. Select Absolute to see these values.';
+    container.replaceChildren(el('div', { class: 'empty', text: message }));
     return;
   }
-  const maxY = Math.max(0, ...shown.flatMap((s) => s.pts.filter(driftPlotted).map(driftValue)));
-  // End labels need room to the right, so narrow charts keep the legend only.
+  const maxY = Math.max(0, ...values), minY = Math.min(0, ...values);
   const labelRoom = container.clientWidth >= 560 ? Math.min(160, Math.round(container.clientWidth * 0.2)) : 0;
-  const g = frame(container, xs, isRate ? Math.max(maxY, 0.01) : maxY, fmtY, fmtX, isRate || isCost ? 0 : 1, 8 + labelRoom);
-  g.svg.setAttribute('aria-label', driftMetricLabel() + ' per request by ' + bucket);
+  const g = frame(container, xs, maxY, indexed ? fmtChange : fmtY, fmtX, indexed || isRate || isCost ? 0 : 1, 8 + labelRoom, minY);
+  g.svg.setAttribute('aria-label', driftMetricLabel() + (indexed ? ' change' : '') + ' by ' + bucket);
   const index = new Map(xs.map((t, i) => [t, i]));
   // Change markers: only for the active dimension and plotted series, so model
   // charts never mix in harness versions or unplotted one-off models.
@@ -1161,14 +1320,14 @@ function renderDrift() {
   // One group per line, in legend order, so a legend entry can highlight it.
   const lines = shown.map((s) => {
     const color = colorFor('drift:' + group, s.key);
-    const pts = s.pts.filter((p) => index.has(p.t) && driftPlotted(p)).sort((a, b) => a.t - b.t);
+    const pts = s.points.filter(p => index.has(p.t) && ordinate(p) !== null);
     const seriesGroup = svgEl('g', { class: 'series' });
     if (pts.length > 1) {
-      const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(driftValue(p))).join(' ');
+      const d = pts.map((p, j) => (j && p.t - pts[j - 1].t === size ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(ordinate(p))).join(' ');
       seriesGroup.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', style: 'stroke:' + color }));
     }
     for (const p of pts) {
-      seriesGroup.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(driftValue(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
+      seriesGroup.append(svgEl('circle', { cx: g.x(index.get(p.t)), cy: g.y(ordinate(p)), r: 4, 'stroke-width': 2, style: `fill:${color};stroke:var(--surface)` }));
     }
     g.svg.append(seriesGroup);
     return { key: s.key, group: seriesGroup, last: pts[pts.length - 1] };
@@ -1176,11 +1335,11 @@ function renderDrift() {
   if (labelRoom) {
     // Only lines that reach the latest plotted bucket are named, at their end.
     const lastT = Math.max(...lines.filter((l) => l.last).map((l) => l.last.t));
-    const ends = lines.filter((l) => l.last && l.last.t === lastT).map((l) => ({ key: l.key, y: g.y(driftValue(l.last)) }));
+    const ends = lines.filter((l) => l.last && l.last.t === lastT).map((l) => ({ key: l.key, y: g.y(ordinate(l.last)) }));
     const named = new Set(endLabels(ends, END_LABELS, 14));
     for (const l of lines) {
       if (!named.has(l.key)) continue;
-      const label = svgEl('text', { x: g.x(index.get(lastT)) + 8, y: g.y(driftValue(l.last)) + 4, class: 'end-label', text: l.key });
+      const label = svgEl('text', { x: g.x(index.get(lastT)) + 8, y: g.y(ordinate(l.last)) + 4, class: 'end-label', text: l.key });
       l.group.append(label);
       const room = g.width - label.getAttribute('x') - 4;
       while (label.getComputedTextLength() > room && label.textContent.length > 4) label.textContent = label.textContent.slice(0, -2) + '…';
@@ -1190,33 +1349,23 @@ function renderDrift() {
     const t = xs[i];
     const rows = [];
     for (const s of shown) {
-      const p = s.pts.find((q) => q.t === t);
-      if (p && driftPlotted(p)) rows.push({ color: colorFor('drift:' + group, s.key), value: fmtY(driftValue(p)), label: `${s.key} (${fmtInt(p.requests)} req)` });
+      const p = s.points.find(q => q.t === t);
+      if (p && ordinate(p) !== null) rows.push({ color: colorFor('drift:' + group, s.key), value: fmtY(p.value) + (indexed ? ' (' + fmtChange(p.change) + ')' : ''), label: `${s.key} (${calls(p.n)})` });
     }
     const marks = chartMarkers.filter((mk) => mk.t === t).map((mk) => ({ value: 'new', label: mk.value }));
     const title = fmtBucket(t) + ', ' + driftMetricLabel() + (isRate ? '' : ', ' + state.driftStat);
     return { title, label: title, rows: rows.concat(marks) };
   });
-  legend(document.getElementById('drift-legend'), shown.map((s) => ({ color: colorFor('drift:' + group, s.key), label: s.key })), 'line');
-  [...document.getElementById('drift-legend').children].forEach((entry, i) => {
-    entry.tabIndex = 0;
-    const focus = () => { g.svg.classList.add('focusing'); lines[i].group.classList.add('focus'); };
-    const blur = () => { g.svg.classList.remove('focusing'); lines[i].group.classList.remove('focus'); };
+  lines.forEach(line => {
+    if (selection.size) return;
+    const entry = entries.get(line.key);
+    const focus = () => { g.svg.classList.add('focusing'); line.group.classList.add('focus'); };
+    const blur = () => { g.svg.classList.remove('focusing'); line.group.classList.remove('focus'); };
     entry.addEventListener('pointerenter', focus);
     entry.addEventListener('focus', focus);
     entry.addEventListener('pointerleave', blur);
     entry.addEventListener('blur', blur);
   });
-  document.getElementById('drift-table').replaceChildren(table(
-    [size === DAY ? 'Day' : 'Time', 'Group', 'Requests', 'Input', 'Uncached in', 'Cache read', 'Cache write', 'Output', 'Reasoning', 'Output total', '$/req', 'Cache hit', 'Latency', 'TTFT', 'tok/s'],
-    drift.points.map((p) => {
-      const st = p[state.driftStat];
-      return [fmtBucket(p.t), p.key, fmtInt(p.requests), fmtInt(st.input), fmtInt(st.uncached_input), fmtInt(st.cache_read), fmtInt(st.cache_write),
-        fmtInt(st.output), fmtInt(st.reasoning), fmtInt(st.output_total || (st.output + st.reasoning)), st.cost_usd > 0 ? fmtUSD(st.cost_usd) : '-',
-        fmtPct(p.cache_hit_rate), fmtSeconds(st.latency_ms), st.ttft_ms > 0 ? fmtSeconds(st.ttft_ms) : '-',
-        st.tokens_per_sec > 0 ? fmtInt(st.tokens_per_sec) : '-'];
-    }),
-  ));
 }
 
 // Accounts are named from CPA's credential list. Without it, by auth index.
@@ -1258,7 +1407,7 @@ function renderBurn() {
   for (const a of accounts) {
     const pts = points.filter((p) => p.auth_index === a && index.has(p.t));
     if (pts.length > 1) {
-      const d = pts.map((p, j) => (j ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(p.usd_per_pct)).join(' ');
+      const d = pts.map((p, j) => (j && p.t - pts[j - 1].t === DAY ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(p.usd_per_pct)).join(' ');
       g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', ...(styles.get(a).dash ? { 'stroke-dasharray': styles.get(a).dash } : {}), style: 'stroke:' + color(a) }));
     }
     for (const p of pts) {
@@ -1481,7 +1630,9 @@ const CODEX_PLANS = { plus: 'Plus', prolite: 'Pro Lite', pro: 'Pro' };
 // A plan rarely changes, so each account's profile/tier is read once per page load.
 const claudeProfiles = new Map();
 const antigravityPlans = new Map();
+const detectedPlans = new Map();
 let limitsData = null;
+let plansData = null;
 
 // upstreamCall asks CPA to call a provider with the credential's token. The
 // token never reaches the browser, and CPA applies the credential's proxy.
@@ -1499,8 +1650,7 @@ async function upstreamCall(account, url, headers, opts = {}) {
   try { return JSON.parse(r.body); } catch (_) { throw new Error('The provider did not answer with JSON.'); }
 }
 
-async function readClaude(account) {
-  const usage = await upstreamCall(account, 'https://api.anthropic.com/api/oauth/usage', CLAUDE_HEADERS);
+async function readClaudeProfile(account) {
   let profile = claudeProfiles.get(account.auth_index);
   if (!profile) {
     // Without a profile the pool falls back to equal weights.
@@ -1508,17 +1658,27 @@ async function readClaude(account) {
     if (profile) claudeProfiles.set(account.auth_index, profile);
   }
   const weight = claudeWeight(profile);
-  return { windows: parseClaudeUsage(usage), weight, plan: CLAUDE_PLANS[weight] || '', spend: parseClaudeSpend(usage) };
+  return { weight, plan: CLAUDE_PLANS[weight] || '' };
+}
+
+async function readClaude(account) {
+  const usage = await upstreamCall(account, 'https://api.anthropic.com/api/oauth/usage', CLAUDE_HEADERS);
+  const { weight, plan } = await readClaudeProfile(account);
+  if (plan) detectedPlans.set(account.auth_index, { plan, weight });
+  return { windows: parseClaudeUsage(usage), weight, plan, spend: parseClaudeSpend(usage) };
 }
 
 async function readCodex(account) {
   const workspace = account.id_token && account.id_token.chatgpt_account_id;
   const usage = await upstreamCall(account, 'https://chatgpt.com/backend-api/wham/usage', workspace ? { 'ChatGPT-Account-Id': workspace } : {});
   const { plan, windows } = parseCodexUsage(usage);
-  return { windows, weight: codexWeight(plan), plan: CODEX_PLANS[plan] || plan };
+  const label = CODEX_PLANS[plan] || plan;
+  const weight = codexWeight(plan);
+  if (label) detectedPlans.set(account.auth_index, { plan: label, weight });
+  return { windows, weight, plan: label };
 }
 
-async function readAntigravity(account) {
+async function readAntigravityPlan(account) {
   let info = antigravityPlans.get(account.auth_index);
   if (!info) {
     const raw = await upstreamCall(account, 'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist', ANTIGRAVITY_HEADERS, {
@@ -1527,8 +1687,14 @@ async function readAntigravity(account) {
     if (raw) {
       info = parseAntigravityPlan(raw);
       antigravityPlans.set(account.auth_index, info);
+      if (info.plan) detectedPlans.set(account.auth_index, { plan: info.plan, weight: info.weight });
     }
   }
+  return info;
+}
+
+async function readAntigravity(account) {
+  const info = await readAntigravityPlan(account);
   const project = (info && info.project) || account.project_id || '';
   const body = JSON.stringify(project ? { project } : {});
   // The quota summary reports each group's 5-hour and weekly limits. Without
@@ -1922,6 +2088,321 @@ function trendChart(container, recorded, projected, now, label, single = false) 
   svg.append(hit);
 }
 
+/* ---------- plans ---------- */
+
+const PLAN_COSTS_STORE = 'cpa-analytics.plan-costs';
+
+function sessionPlanCosts() {
+  try {
+    const raw = sessionStorage.getItem(PLAN_COSTS_STORE);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveSessionPlanCost(key, value) {
+  const map = sessionPlanCosts();
+  if (value === null || value === '') delete map[key];
+  else map[key] = value;
+  try { sessionStorage.setItem(PLAN_COSTS_STORE, JSON.stringify(map)); } catch (_) { /* storage blocked */ }
+}
+
+function clearSessionPlanCosts() {
+  try { sessionStorage.removeItem(PLAN_COSTS_STORE); } catch (_) { /* storage blocked */ }
+}
+
+async function detectAccountPlan(account) {
+  const cached = detectedPlans.get(account.auth_index);
+  if (cached) return cached.plan;
+  if (!isOAuthAccount(account)) return '';
+  const p = providerOf(account);
+  try {
+    if (p === 'claude') {
+      const { plan, weight } = await readClaudeProfile(account);
+      if (plan) detectedPlans.set(account.auth_index, { plan, weight });
+      return plan;
+    }
+    if (p === 'codex') {
+      const { plan } = await readCodex(account);
+      return plan;
+    }
+    if (p === 'antigravity') {
+      const info = await readAntigravityPlan(account);
+      return (info && info.plan) || '';
+    }
+    if (p === 'devin') {
+      const { plan } = parseDevinSignals(account);
+      if (plan) detectedPlans.set(account.auth_index, { plan, weight: null });
+      return plan;
+    }
+    if (p === 'gemini' || p === 'gemini-cli') {
+      detectedPlans.set(account.auth_index, { plan: 'Free', weight: null });
+      return 'Free';
+    }
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+  }
+  return '';
+}
+
+function plansRangeParams() {
+  const period = PERIODS[state.period] ? state.period : '7d';
+  const to = Date.now();
+  return { from: to - periodSpec(period).ms, to, tz: -new Date().getTimezoneOffset() };
+}
+
+async function loadPlans(current, quiet = false) {
+  const range = plansRangeParams();
+  if (!quiet && !plansData) sectionState('plans', 'Loading…', true);
+  try {
+    const [val, creds] = await Promise.all([
+      api('plan-value', range),
+      management('/v8/management/credentials'),
+    ]);
+    if (!current()) return;
+    const allFiles = creds.files || [];
+    const active = allFiles.filter((f) => !f.disabled);
+    const needDetect = active.filter((f) => !detectedPlans.has(f.auth_index) && isOAuthAccount(f));
+    await mapLimit(needDetect, 4, async (account) => {
+      if (!current()) return;
+      await detectAccountPlan(account);
+    });
+    if (!current()) return;
+    plansData = { range, val, credentials: allFiles, checkedAt: Date.now() };
+    data.credentials = allFiles;
+    document.getElementById('key-form').hidden = true;
+    document.getElementById('app').hidden = false;
+    sectionState('plans');
+    renderPlans();
+    document.getElementById('updated').textContent = 'Through ' + new Date(range.to).toLocaleTimeString();
+  } catch (err) {
+    if (!current()) return;
+    if (!quiet && !plansData) sectionState('plans', 'Could not load. Refresh to retry.');
+    throw err;
+  }
+}
+
+const fmtMult = (x) => (x === null || x === undefined ? '-' : x.toFixed(x >= 10 ? 1 : 2) + 'x');
+
+function renderPlans() {
+  if (!plansData) return;
+  const { range, val, credentials } = plansData;
+  const { days: effectiveDays, clamped } = effectiveRangeDays(range.from, range.to, val.data_since || 0);
+  const configCosts = val.plan_costs || {};
+  const sessionCosts = sessionPlanCosts();
+  const credById = new Map((credentials || []).map((c) => [c.auth_index, c]));
+  const statsById = new Map((val.accounts || []).map((a) => [a.auth_index, a]));
+
+  const ids = new Set();
+  for (const c of (credentials || [])) if (!c.disabled) ids.add(c.auth_index);
+  for (const a of (val.accounts || [])) ids.add(a.auth_index);
+
+  const items = [];
+  for (const id of ids) {
+    const cred = credById.get(id);
+    const stat = statsById.get(id);
+    const provider = (cred && providerOf(cred)) || (stat && stat.provider) || 'other';
+    const isApiKey = cred ? !isOAuthAccount(cred) : false;
+    const detected = detectedPlans.get(id);
+    const plan = (detected && detected.plan) || '';
+    items.push({
+      authIndex: id,
+      name: cred ? accountName(cred) : id,
+      provider,
+      plan,
+      isApiKey,
+      ...(stat || {}),
+    });
+  }
+
+  const opts = { effectiveDays, configCosts, sessionCosts };
+  const accountRows = items.map((it) => computeAccountPlanRow(it, opts));
+  const grouped = state.plansGroup === 'account' ? accountRows : groupPlanRows(accountRows, opts);
+  const ranked = rankPlanRows(grouped, state.plansSort);
+
+  // Summary tiles
+  const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost !== null);
+  const totalMonthly = knownSubs.reduce((s, r) => s + r.monthlyCost, 0);
+  const totalPeriodSub = knownSubs.reduce((s, r) => s + (r.periodCost || 0), 0);
+  const totalRealizedAPI = knownSubs.reduce((s, r) => s + r.realized.costUSD, 0);
+  const overallRealized = totalPeriodSub > 0 ? totalRealizedAPI / totalPeriodSub : null;
+  const bestPot = rankPlanRows(grouped.filter((r) => r.potential && r.potential.leverage > 0), 'potential')[0] || null;
+  const bestReal = rankPlanRows(grouped.filter((r) => !r.isApiKey && r.monthlyCost > 0 && r.realized.leverage > 0), 'realized')[0] || null;
+
+  document.getElementById('plans-tiles').replaceChildren(
+    tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(knownSubs.length)} priced account${knownSubs.length === 1 ? '' : 's'}`),
+    tile('API value extracted', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} realized over ${effectiveDays.toFixed(1)} d` : ''),
+    tile('Best potential plan', bestPot ? `${bestPot.provider} ${bestPot.plan}` : '-', bestPot ? `${fmtMult(bestPot.potential.leverage)} (${fmtUSD(bestPot.potential.fullCycleUSD)} / wk)` : 'Needs weekly quota headers'),
+    tile('Best realized plan', bestReal ? `${bestReal.provider} ${bestReal.plan}` : '-', bestReal ? `${fmtMult(bestReal.realized.leverage)} (${fmtUSD(bestReal.realized.costUSD)} in period)` : 'Set monthly prices below'),
+  );
+
+  const notes = [];
+  if (clamped) notes.push(`Recording covers ${effectiveDays.toFixed(1)} days of this range, so realized subscription cost is scaled to match.`);
+  const unpricedCount = accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).length;
+  if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the ranking.`);
+  document.getElementById('plans-note').textContent = notes.join(' ');
+
+  // Horizontal leverage comparison chart
+  const chartEl = document.getElementById('plans-chart');
+  const legendEl = document.getElementById('plans-legend');
+  const barRows = ranked.filter((r) => (r.potential && r.potential.leverage > 0) || (r.realized.leverage > 0 && !r.isApiKey));
+  if (barRows.length) {
+    const maxLev = Math.max(2, ...barRows.map((r) => Math.max(r.potential && r.potential.leverage || 0, r.realized.leverage || 0)));
+    const refLeft = (1 / maxLev) * 100;
+    chartEl.replaceChildren(...barRows.map((r) => {
+      const color = colorFor('provider', r.provider);
+      const potW = r.potential && r.potential.leverage ? Math.min(100, (r.potential.leverage / maxLev) * 100) : 0;
+      const realW = r.realized.leverage ? Math.min(100, (r.realized.leverage / maxLev) * 100) : 0;
+      const label = state.plansGroup === 'account' ? `${r.name} (${r.provider} ${r.plan})` : `${r.provider} ${r.plan}`;
+      const track = el('div', { class: 'plan-bar-track', role: 'img', 'aria-label': `${label}: potential ${fmtMult(r.potential && r.potential.leverage)}, realized ${fmtMult(r.realized.leverage)}` },
+        el('div', { class: 'plan-bar-ref', style: `left:${refLeft.toFixed(1)}%`, title: '1.0x API list price' }));
+      if (potW > 0) track.append(el('div', { class: 'plan-bar-pot', style: `width:${potW.toFixed(1)}%;background:${color}` }));
+      if (realW > 0) track.append(el('div', { class: 'plan-bar-real', style: `width:${realW.toFixed(1)}%;background:${color}` }));
+      const valText = r.potential && r.potential.leverage !== null
+        ? el('div', { class: 'plan-bar-val' }, el('strong', { text: fmtMult(r.potential.leverage) }), ` pot, ${fmtMult(r.realized.leverage)} real`)
+        : el('div', { class: 'plan-bar-val' }, el('strong', { text: fmtMult(r.realized.leverage) }), ' real');
+      return el('div', { class: 'plan-bar-row' },
+        el('div', { class: 'plan-bar-name', title: label }, el('span', { class: 'dot', style: 'background:' + color }), el('span', { text: label })),
+        track,
+        valText);
+    }));
+    legendEl.replaceChildren(
+      el('span', {}, el('span', { class: 'key-rect', style: 'background:var(--tone2)' }), 'Realized (period)'),
+      el('span', {}, el('span', { class: 'key-rect', style: 'background:var(--tone2);opacity:0.28' }), 'Potential (100% weekly quota)'),
+      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--axis)' }), '1.0x API price'),
+    );
+  } else {
+    chartEl.replaceChildren();
+    legendEl.replaceChildren();
+  }
+
+  // Ranking table
+  const wrap = document.getElementById('plans-table');
+  if (!ranked.length) {
+    wrap.replaceChildren(el('div', { class: 'empty', text: 'No active accounts or recorded traffic in this period.' }));
+  } else {
+    const unit = state.plansUnit;
+    const unitSuffix = unit === 'pct' ? ' / 1%' : ' / $1';
+    const headers = [
+      'Rank',
+      state.plansGroup === 'account' ? 'Account' : 'Plan',
+      'Monthly cost',
+      'Potential (100% quota)',
+      'Realized (period)',
+      'Uncached in' + unitSuffix,
+      'Cache read' + unitSuffix,
+      'Cache write' + unitSuffix,
+      'Output' + unitSuffix,
+      'Top model',
+    ];
+    let rankNum = 0;
+    const rows = ranked.map((r) => {
+      const isRanked = !r.isApiKey && r.monthlyCost !== null && r.monthlyCost > 0 && ((r.potential && r.potential.leverage > 0) || r.realized.leverage > 0);
+      const rankCell = isRanked ? '#' + (++rankNum) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
+
+      const nameTitle = state.plansGroup === 'account' ? r.name : `${r.provider} ${r.plan}`;
+      const nameSub = state.plansGroup === 'account'
+        ? `${r.provider} ${r.plan}`
+        : `${fmtInt(r.accountCount)} account${r.accountCount === 1 ? '' : 's'}`;
+      const nameCell = el('span', {},
+        el('span', { class: 'dot', style: 'background:' + colorFor('provider', r.provider) + ';margin-right:6px' }),
+        el('strong', { text: nameTitle }),
+        el('span', { class: 'plan-sub', text: nameSub }));
+
+      let costCell;
+      if (r.isApiKey) {
+        costCell = el('span', { text: 'Pay-as-you-go' });
+      } else {
+        const editKey = state.plansGroup === 'account' ? r.authIndex : r.planKey;
+        const input = el('input', {
+          class: 'cost-input',
+          type: 'number',
+          min: '0',
+          step: '1',
+          placeholder: 'USD',
+          'aria-label': `Monthly USD cost for ${nameTitle}`,
+        });
+        if (r.monthlyCost !== null) input.value = String(Math.round(r.monthlyCost * 100) / 100);
+        input.addEventListener('change', () => {
+          const raw = input.value.trim();
+          const n = Number(raw);
+          if (raw === '') saveSessionPlanCost(editKey, null);
+          else if (Number.isFinite(n) && n >= 0) saveSessionPlanCost(editKey, n);
+          renderPlans();
+        });
+        const badgeLabel = r.costSource === 'session' ? 'edited' : r.costSource === 'config' ? 'config' : r.costSource === 'default' ? 'list' : '';
+        costCell = el('span', { class: 'cost-edit' },
+          '$', input,
+          badgeLabel ? el('span', { class: 'plan-badge', text: badgeLabel }) : null);
+      }
+
+      let potCell;
+      if (r.isApiKey) {
+        potCell = '1.00x (baseline)';
+      } else if (r.potential) {
+        const main = r.potential.leverage !== null ? fmtMult(r.potential.leverage) : fmtUSD(r.potential.fullCycleUSD) + ' / wk';
+        const sub = (r.potential.leverage !== null ? fmtUSD(r.potential.fullCycleUSD) + ' / wk' : 'set price for x')
+          + (r.potential.lowSample ? ', low sample' : '');
+        potCell = el('span', {}, el('strong', { text: main }), el('span', { class: 'plan-sub', text: sub }));
+      } else {
+        potCell = el('span', { class: 'plan-sub', text: 'No weekly quota headers' });
+      }
+
+      const realMain = r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
+      const realSub = (r.realized.leverage !== null ? fmtUSD(r.realized.costUSD) : `${fmtInt(r.requests)} reqs`)
+        + (r.utilizationPct !== null ? `, ${Math.round(r.utilizationPct)}% used` : '');
+      const realCell = el('span', {}, el('strong', { text: realMain }), el('span', { class: 'plan-sub', text: realSub }));
+
+      const tokSrc = unit === 'pct'
+        ? (r.potential && r.potential.tokensPerPct)
+        : unit === 'potential'
+          ? ((r.potential && r.potential.tokensPerDollar) || r.realized.tokensPerDollar)
+          : r.realized.tokensPerDollar;
+      const fmtTok = (v) => (tokSrc && v !== null && v !== undefined ? fmtCompact(Math.round(v)) : '-');
+
+      const modelCell = r.topModel
+        ? `${r.topModel} (${Math.round(r.topModelShare * 100)}%)`
+        : '-';
+
+      return [
+        rankCell, nameCell, costCell, potCell, realCell,
+        fmtTok(tokSrc && tokSrc.input),
+        fmtTok(tokSrc && tokSrc.cacheRead),
+        fmtTok(tokSrc && tokSrc.cacheWrite),
+        fmtTok(tokSrc && tokSrc.output),
+        modelCell,
+      ];
+    });
+    wrap.replaceChildren(table(headers, rows));
+  }
+
+  // Config YAML export for edited / custom prices
+  const mergedOverrides = { ...configCosts, ...sessionCosts };
+  const yaml = planCostsYAML(mergedOverrides);
+  const yamlBox = document.getElementById('plans-yaml');
+  const hasEdits = Object.keys(sessionCosts).length > 0;
+  const parts = [];
+  if (yaml) {
+    parts.push(
+      el('p', { class: 'notice', text: 'Copy this into plugins.configs.cpa-analytics in your CPA config to keep custom monthly prices across sessions.' }),
+      el('pre', { class: 'yaml-snippet', text: yaml }),
+    );
+  } else {
+    parts.push(el('p', { class: 'notice', text: 'Using built-in list prices. Edit any price in the table above to generate a plan_costs snippet for your plugin config.' }));
+  }
+  if (hasEdits) {
+    parts.push(el('button', {
+      type: 'button',
+      style: 'margin-top:8px',
+      text: 'Reset session edits',
+      onclick: () => { clearSessionPlanCosts(); renderPlans(); },
+    }));
+  }
+  yamlBox.replaceChildren(...parts);
+}
+
 /* ---------- latency ---------- */
 
 function renderLatency() {
@@ -2130,6 +2611,7 @@ function refresh(quiet, reuse = false) {
         if (detailPromise) await detailPromise;
         if (!current()) return;
         if (state.view === 'limits') await loadLimits(current);
+        else if (state.view === 'plans') await loadPlans(current, quiet);
         else if (state.view === 'requests') await loadRequests(current, reuseRange, quiet);
         else await loadUsage(current, reuseRange, quiet);
       }, quiet);
@@ -2379,8 +2861,8 @@ function reqRefreshSeconds() {
 function scheduleAutoRefresh() {
   clearTimeout(autoRefresh.timer);
   autoRefresh.due = false;
-  // Provider usage endpoints are rate limited, so limits refresh slower.
-  const seconds = state.view === 'limits' ? LIMITS_REFRESH_SECONDS
+  // Provider usage endpoints are rate limited, so limits and plans refresh slower.
+  const seconds = state.view === 'limits' || state.view === 'plans' ? LIMITS_REFRESH_SECONDS
     : state.view === 'requests' ? reqRefreshSeconds()
     : autoRefreshSeconds();
   if (seconds <= 0 || document.getElementById('app').hidden) return;
@@ -2417,7 +2899,12 @@ function showView(view) {
   for (const node of document.querySelectorAll('.data-only')) node.hidden = view !== 'usage' && view !== 'requests';
   for (const node of document.querySelectorAll('.usage-only')) node.hidden = view !== 'usage';
   for (const node of document.querySelectorAll('.limits-only')) node.hidden = view !== 'limits';
+  for (const node of document.querySelectorAll('.plans-only')) node.hidden = view !== 'plans';
   for (const node of document.querySelectorAll('.requests-only')) node.hidden = view !== 'requests';
+  if (view === 'plans') {
+    const sel = document.getElementById('plans-period');
+    if (sel && [...sel.options].some((o) => o.value === state.period)) sel.value = state.period;
+  }
 }
 
 function pressed(group, attr, value) {
@@ -2437,6 +2924,7 @@ document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('clic
   showView(b.dataset.view);
   const hasCached = (state.view === 'usage' && Boolean(data.summary))
     || (state.view === 'limits' && Boolean(limitsData))
+    || (state.view === 'plans' && Boolean(plansData))
     || (state.view === 'requests' && Boolean(data.requests));
   refresh(hasCached);
 }));
@@ -2470,6 +2958,8 @@ document.querySelectorAll('[data-daily]').forEach((b) => b.addEventListener('cli
 document.querySelectorAll('[data-stat]').forEach((b) => b.addEventListener('click', () => {
   state.driftStat = b.dataset.stat; pressed('#drift', 'data-stat', state.driftStat); renderDrift();
 }));
+document.getElementById('drift-scale').addEventListener('change', e => { state.driftScale = e.target.value; renderDrift(); });
+document.getElementById('drift-sample').addEventListener('change', e => { state.driftMinimum = Number(e.target.value); renderDrift(); });
 document.getElementById('drift-metric').addEventListener('change', (e) => { state.driftMetric = e.target.value; renderDrift(); });
 for (const section of DETAIL_SECTIONS) {
   document.getElementById(section).addEventListener('toggle', () => refreshDetail(section));
@@ -2483,11 +2973,22 @@ document.getElementById('req-prev').addEventListener('click', () => { state.reqO
 document.getElementById('req-next').addEventListener('click', () => { state.reqOffset += REQUESTS_PAGE; reloadRequests(); });
 document.getElementById('drift-group').addEventListener('change', (e) => {
   state.driftGroup = e.target.value;
+  state.driftSelection.clear();
   refreshGroup('drift');
 });
 document.querySelectorAll('[data-by]').forEach((b) => b.addEventListener('click', () => {
   state.by = b.dataset.by; pressed('#breakdown', 'data-by', state.by);
   refreshGroup('breakdown');
+}));
+document.getElementById('plans-period').addEventListener('change', (e) => {
+  state.period = e.target.value;
+  document.getElementById('f-period').value = state.period;
+  refresh();
+});
+document.getElementById('plans-sort').addEventListener('change', (e) => { state.plansSort = e.target.value; renderPlans(); });
+document.getElementById('plans-unit').addEventListener('change', (e) => { state.plansUnit = e.target.value; renderPlans(); });
+document.querySelectorAll('[data-plans-group]').forEach((b) => b.addEventListener('click', () => {
+  state.plansGroup = b.dataset.plansGroup; pressed('#plans', 'data-plans-group', state.plansGroup); renderPlans();
 }));
 
 let resizeTimer = 0;
@@ -2502,7 +3003,7 @@ new ResizeObserver(() => {
 restoreAutoRefresh();
 try {
   const savedView = sessionStorage.getItem(VIEW_STORE);
-  if (savedView === 'limits' || savedView === 'requests') showView(savedView);
+  if (savedView === 'limits' || savedView === 'plans' || savedView === 'requests') showView(savedView);
 } catch (_) { /* storage blocked: start on usage */ }
 managementKey = storedKey() || managementCenterKey();
 if (managementKey) refresh(); else showKeyForm('');

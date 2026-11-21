@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/marcusgrando/cpa-analytics/internal/pricing"
@@ -19,6 +20,7 @@ type Config struct {
 	RetentionDays  int                              `yaml:"retention_days"`
 	PriceOverrides map[string]pricing.PriceOverride `yaml:"price_overrides"`
 	PricingURL     string                           `yaml:"pricing_url"`
+	PlanCosts      map[string]float64               `yaml:"plan_costs"`
 }
 
 // ParseConfig reads the plugin config YAML sent by the host and applies defaults.
@@ -47,6 +49,14 @@ func ParseConfig(raw []byte) (Config, error) {
 		}
 		if o.Input < 0 || o.Output < 0 || negative(o.CacheRead) || negative(o.CacheWrite) {
 			return Config{}, fmt.Errorf("price_overrides.%s has a negative price", model)
+		}
+	}
+	for key, cost := range cfg.PlanCosts {
+		if strings.TrimSpace(key) == "" {
+			return Config{}, fmt.Errorf("plan_costs has an empty key")
+		}
+		if math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
+			return Config{}, fmt.Errorf("plan_costs.%s must be a non-negative number", key)
 		}
 	}
 	return cfg, nil

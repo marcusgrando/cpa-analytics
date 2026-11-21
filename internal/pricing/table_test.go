@@ -198,3 +198,80 @@ func TestBandGroupsInputsThatPriceAlike(t *testing.T) {
 		t.Errorf("BandSQL without long-context prices = %q, want 0", got)
 	}
 }
+
+func TestLookupStripsEffortAndVariantSuffixes(t *testing.T) {
+	tbl, err := ParseLiteLLM([]byte(`{
+		"gemini/gemini-3.8-flash": {"input_cost_per_token": 7.5e-07, "output_cost_per_token": 3.75e-06, "cache_read_input_token_cost": 7.5e-08},
+		"gemini/gemini-4-argon": {"input_cost_per_token": 2e-06, "output_cost_per_token": 1e-05, "cache_read_input_token_cost": 1e-07},
+		"gemini/gemini-4-neon": {"input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05, "cache_read_input_token_cost": 1.5e-07},
+		"gemini/gemini-4-hydrogen": {"input_cost_per_token": 1.5e-06, "output_cost_per_token": 7.5e-06, "cache_read_input_token_cost": 7.5e-08}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]float64{
+		"gemini-3.8-flash-n":      7.5e-07,
+		"gemini-3.8-flash-high":   7.5e-07,
+		"gemini-4-argon-trial":    2e-06,
+		"gemini-4-argon-high":     2e-06,
+		"gemini-4-neon-xhigh":     3e-06,
+		"gemini-4-hydrogen-xhigh": 1.5e-06,
+		"gemini-4-argon-20260101-high": 2e-06,
+	}
+	for model, wantInput := range cases {
+		r, src, ok := tbl.Lookup(model, "", 0)
+		if !ok || src != SourceLiteLLM || !near(r.Input, wantInput) {
+			t.Errorf("Lookup(%q) = %+v %q %v, want input %v", model, r, src, ok, wantInput)
+		}
+	}
+}
+
+func TestParseModelsDevAndOpenRouterAndMerge(t *testing.T) {
+	md, err := ParseModelsDev([]byte(`{
+		"google": {
+			"models": {
+				"gemini-4-neon": {"cost": {"input": 3, "output": 15, "cache_read": 0.15}}
+			}
+		},
+		"reseller": {
+			"models": {
+				"gemini-4-neon": {"cost": {"input": 9, "output": 45}}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _, ok := md.Lookup("gemini-4-neon", "", 0)
+	if !ok || !near(r.Input, 3e-06) || !near(r.Output, 1.5e-05) || !near(r.CacheRead, 1.5e-07) {
+		t.Fatalf("models.dev lookup = %+v %v", r, ok)
+	}
+
+	or, err := ParseOpenRouter([]byte(`{"data":[
+		{"id":"google/gemini-4-neon:free","pricing":{"prompt":"0","completion":"0"}},
+		{"id":"google/gemini-4-neon:batch","pricing":{"prompt":"0.0000015","completion":"0.0000075"}},
+		{"id":"x-ai/grok-4-fast","pricing":{"prompt":"0.0000005","completion":"0.000002","input_cache_read":"0.00000005"}}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := or.Lookup("gemini-4-neon", "", 0); ok {
+		t.Fatal("openrouter should skip :free and :batch entries")
+	}
+	r, _, ok = or.Lookup("grok-4-fast", "", 0)
+	if !ok || !near(r.Input, 5e-07) || !near(r.CacheRead, 5e-08) {
+		t.Fatalf("openrouter lookup = %+v %v", r, ok)
+	}
+
+	merged := Merge(sampleTable(t), md, or)
+	// Primary LiteLLM wins for existing models; fallbacks fill missing ones.
+	if r, _, ok := merged.Lookup("claude-opus-4-8", "", 0); !ok || !near(r.Input, 5e-06) {
+		t.Fatalf("merged primary = %+v %v", r, ok)
+	}
+	if r, _, ok := merged.Lookup("gemini-4-neon-xhigh", "", 0); !ok || !near(r.Input, 3e-06) {
+		t.Fatalf("merged models.dev = %+v %v", r, ok)
+	}
+	if r, _, ok := merged.Lookup("grok-4-fast", "", 0); !ok || !near(r.Input, 5e-07) {
+		t.Fatalf("merged openrouter = %+v %v", r, ok)
+	}
+}

@@ -81,3 +81,33 @@ func TestRefresherKeepsTableWhenFetchReturnsGarbage(t *testing.T) {
 		t.Fatal("parse error not reported")
 	}
 }
+
+func TestRefresherMergesFallbacksAndToleratesFallbackErrors(t *testing.T) {
+	litellmRaw, _ := os.ReadFile("testdata/litellm_sample.json")
+	modelsDevRaw := []byte(`{"google":{"models":{"gemini-4-neon":{"cost":{"input":3,"output":15,"cache_read":0.15}}}}}`)
+	kv := memKV{}
+	r := NewRefresher(func(u string) ([]byte, error) {
+		switch u {
+		case "https://primary":
+			return litellmRaw, nil
+		case "https://modelsdev":
+			return modelsDevRaw, nil
+		default:
+			return nil, errors.New("fallback down")
+		}
+	}, kv, "https://primary", time.Hour).WithFallbacks(
+		FallbackSource{Name: "modelsdev", URL: "https://modelsdev", Parse: ParseModelsDev},
+		FallbackSource{Name: "openrouter", URL: "https://openrouter", Parse: ParseOpenRouter},
+	)
+	r.Refresh()
+	if r.Status().LastError != "" {
+		t.Fatalf("primary succeeded but got error: %s", r.Status().LastError)
+	}
+	tbl, _ := r.Current()
+	if _, _, ok := tbl.Lookup("gpt-5.5", "", 0); !ok {
+		t.Fatal("missing primary model")
+	}
+	if _, _, ok := tbl.Lookup("gemini-4-neon-xhigh", "", 0); !ok {
+		t.Fatal("missing fallback model")
+	}
+}
