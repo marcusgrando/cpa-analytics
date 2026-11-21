@@ -50,7 +50,8 @@ body {
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
-header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+/* Reserves vertical room for the management center's floating top-right toolbar. */
+header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 48px; margin-bottom: 16px; }
 h1 { font-size: 18px; font-weight: 600; margin: 0; }
 h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .health { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12px; flex: 1; }

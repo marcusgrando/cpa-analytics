@@ -71,6 +71,9 @@ func TestIndexKeepsHeaderFreeOfControls(t *testing.T) {
 	if header := page[start:end]; strings.Contains(header, "<button") || strings.Contains(header, "<select") {
 		t.Errorf("header holds a control, it would sit under the management center toolbar:\n%s", header)
 	}
+	if !strings.Contains(page, `min-height: 48px;`) {
+		t.Error("header does not reserve room below the management center toolbar")
+	}
 	if !strings.Contains(page, `id="change-key"`) {
 		t.Error("page lost the change key button")
 	}
