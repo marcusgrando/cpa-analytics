@@ -109,38 +109,43 @@ type RequestsResult struct {
 }
 
 // Requests lists upstream calls in the filter. It ranks every call by its
-// summed tokens, priced cost and latency, then reads the details of the page.
+// summed tokens, priced cost and latency, then reads the details of the page
+// inside one read-only transaction.
 func Requests(db *sql.DB, f Filter, table *pricing.Table, rq RequestsQuery) (RequestsResult, error) {
-	calls, err := rankCalls(db, f, table, rq)
-	if err != nil {
-		return RequestsResult{}, err
-	}
-	res := RequestsResult{Total: len(calls), Calls: []Call{}}
-	if rq.Offset >= len(calls) {
-		return res, nil
-	}
-	page := calls[rq.Offset:min(rq.Offset+rq.Limit, len(calls))]
-	if err := callDetails(db, f, rq, page); err != nil {
-		return RequestsResult{}, err
-	}
-	for _, c := range page {
-		res.Calls = append(res.Calls, *c)
-	}
-	return res, nil
+	var res RequestsResult
+	err := withReadTx(db, func(q querier) error {
+		calls, err := rankCalls(q, f, table, rq)
+		if err != nil {
+			return err
+		}
+		res = RequestsResult{Total: len(calls), Calls: []Call{}}
+		if rq.Offset >= len(calls) {
+			return nil
+		}
+		page := calls[rq.Offset:min(rq.Offset+rq.Limit, len(calls))]
+		if err := callDetails(q, f, page); err != nil {
+			return err
+		}
+		for _, c := range page {
+			res.Calls = append(res.Calls, *c)
+		}
+		return nil
+	})
+	return res, err
 }
 
-func rankCalls(db *sql.DB, f Filter, table *pricing.Table, rq RequestsQuery) ([]*Call, error) {
+func rankCalls(db querier, f Filter, table *pricing.Table, rq RequestsQuery) ([]*Call, error) {
 	where, args := f.where(true)
 	rows, err := db.Query(`SELECT `+callExpr+`, (`+modelExpr+`), (`+tierExpr+`), (`+table.BandSQL(inputExpr)+`),
 		MIN(requested_at), MAX(latency_ms), MAX(failed), COUNT(*), `+tokenSums+`
-		FROM requests WHERE `+where+` AND `+requestOutcomes[rq.Outcome]+` GROUP BY 1, 2, 3, 4`, args...)
+		FROM requests WHERE `+where+` GROUP BY 1, 2, 3, 4`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("requests: %w", err)
 	}
 	defer rows.Close()
 	p := newPricer(table)
 	byID := map[string]*Call{}
-	var calls []*Call
+	var all []*Call
 	for rows.Next() {
 		var (
 			id, model, tier   string
@@ -154,9 +159,9 @@ func rankCalls(db *sql.DB, f Filter, table *pricing.Table, rq RequestsQuery) ([]
 		}
 		c := byID[id]
 		if c == nil {
-			c = &Call{ID: id, At: at}
+			c = &Call{ID: id, At: at, Models: []string{}}
 			byID[id] = c
-			calls = append(calls, c)
+			all = append(all, c)
 		}
 		c.At = min(c.At, at)
 		c.LatencyMs = max(c.LatencyMs, latency)
@@ -169,6 +174,16 @@ func rankCalls(db *sql.DB, f Filter, table *pricing.Table, rq RequestsQuery) ([]
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("requests rows: %w", err)
+	}
+	calls := make([]*Call, 0, len(all))
+	for _, c := range all {
+		if rq.Outcome == "failed" && !c.Failed {
+			continue
+		}
+		if rq.Outcome == "ok" && c.Failed {
+			continue
+		}
+		calls = append(calls, c)
 	}
 	first := requestSorts[rq.Sort]
 	sort.SliceStable(calls, func(i, j int) bool {
@@ -185,18 +200,25 @@ func rankCalls(db *sql.DB, f Filter, table *pricing.Table, rq RequestsQuery) ([]
 }
 
 // callDetails fills the metadata of the page's calls from their rows.
-func callDetails(db *sql.DB, f Filter, rq RequestsQuery, page []*Call) error {
+func callDetails(db querier, f Filter, page []*Call) error {
 	where, args := f.where(true)
 	byID := make(map[string]*Call, len(page))
+	filled := make(map[string]bool, len(page))
 	marks := make([]string, len(page))
+	minAt, maxAt := page[0].At, page[0].At
 	for i, c := range page {
 		byID[c.ID] = c
 		marks[i] = "?"
+		minAt = min(minAt, c.At)
+		maxAt = max(maxAt, c.At)
+	}
+	args = append(args, minAt, maxAt)
+	for _, c := range page {
 		args = append(args, c.ID)
 	}
 	rows, err := db.Query(`SELECT `+callExpr+`, (`+modelExpr+`), model, provider, (`+clientExpr+`), user_agent, api_key_hash,
 		auth_index, session_id, reasoning_effort, (`+tierExpr+`), stream, generate, status_code, ttft_ms
-		FROM requests WHERE `+where+` AND `+requestOutcomes[rq.Outcome]+` AND `+callExpr+` IN (`+strings.Join(marks, ", ")+`)
+		FROM requests WHERE `+where+` AND requested_at >= ? AND requested_at <= ? AND `+callExpr+` IN (`+strings.Join(marks, ", ")+`)
 		ORDER BY requested_at, id`, args...)
 	if err != nil {
 		return fmt.Errorf("request details: %w", err)
@@ -223,7 +245,8 @@ func callDetails(db *sql.DB, f Filter, rq RequestsQuery, page []*Call) error {
 		}
 		// The first row of a call is the scheduled request. Split-billing rows
 		// after it only add a model.
-		if c.Provider == "" {
+		if !filled[id] {
+			filled[id] = true
 			c.RequestedModel, c.Provider, c.Client, c.UserAgent, c.APIKeyHash = requested, provider, client, agent, key
 			c.Account, c.SessionID, c.ReasoningEffort, c.ServiceTier = account, session, effort, tier
 		}

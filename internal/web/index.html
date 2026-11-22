@@ -14,7 +14,7 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #d5d9e0;
   --provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;
-  --provider-antigravity: #008300; --provider-xai: #6d3ff0; --provider-kimi: #007d87; --provider-meta: #c2185b; --provider-devin: #9f5f00;
+  --provider-antigravity: #0d7c66; --provider-xai: #6d3ff0; --provider-kimi: #007d87; --provider-meta: #c2185b; --provider-devin: #9f5f00;
   --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
 }
 @media (prefers-color-scheme: dark) {
@@ -27,7 +27,7 @@
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
     --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-    --provider-antigravity: #13a065; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
+    --provider-antigravity: #2bb69a; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
     --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
   }
 }
@@ -40,7 +40,7 @@
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
   --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-  --provider-antigravity: #13a065; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
+  --provider-antigravity: #2bb69a; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
   --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
@@ -149,7 +149,14 @@ summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 .error { color: var(--critical); }
 .req-row { cursor: pointer; }
 .req-row:hover, .req-row[aria-expanded="true"] { background: var(--wash); }
-.req-row td:nth-child(2), .req-row td:nth-child(3), .req-row td:nth-child(4) { text-align: left; }
+#requests-table th:nth-child(2), #requests-table th:nth-child(3), #requests-table th:nth-child(4),
+.req-row td:nth-child(2), .req-row td:nth-child(3), .req-row td:nth-child(4),
+#plans-table th:nth-child(2), #plans-table td:nth-child(2), #plans-table th:nth-child(10), #plans-table td:nth-child(10),
+#burn-table th:nth-child(2), #burn-table td:nth-child(2), #burn-table th:nth-child(3), #burn-table td:nth-child(3),
+#leftover-table th:nth-child(2), #leftover-table td:nth-child(2), #leftover-table th:nth-child(3), #leftover-table td:nth-child(3),
+#breakdown-table table.errors-table th:nth-child(2), #breakdown-table table.errors-table td:nth-child(2),
+#breakdown-table table.errors-table th:nth-child(3), #breakdown-table table.errors-table td:nth-child(3),
+#breakdown-table table.errors-table th:nth-child(4), #breakdown-table table.errors-table td:nth-child(4) { text-align: left; }
 .req-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 16px; margin: 4px 0 8px; font-size: 12px; text-align: left; white-space: normal; }
 .req-fields dt { color: var(--muted); }
 .req-fields dd { margin: 0; overflow-wrap: anywhere; }
@@ -288,7 +295,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="card-head">
         <div>
           <h2 id="limits-title">Subscription limits</h2>
-          <p class="sub">With multiple accounts, the top bar pools them weighted by plan and each row below is one account against its own limit. The tick marks an even pace.</p>
+          <p class="sub">Multiple accounts pool into the top bar, weighted by plan, with each account shown below against its own limit. The vertical tick marks an even pace.</p>
         </div>
       </div>
       <div id="limits-body"></div>
@@ -298,7 +305,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="card-head">
         <div>
           <h2 id="plans-title">Plan value</h2>
-          <p class="sub">Recorded value prices the tokens each account served, including traffic after resets and account switches. The plan view groups accounts by their current tier and shows their average recorded value.</p>
+          <p class="sub">Compares subscription cost against API-priced value by tier or account. Recorded value covers all proxied traffic, including calls after early resets and account switches.</p>
         </div>
         <div class="controls">
           <label>Period
@@ -321,7 +328,7 @@ body.loading #refresh-now { opacity: 0.65; }
               <option value="cacheWrite">Cache write</option>
             </select>
           </label>
-          <label>Token basis
+          <label>Table tokens
             <select id="plans-unit">
               <option value="realized" selected>Per $1 (realized)</option>
               <option value="potential">Per $1 (potential)</option>
@@ -526,7 +533,7 @@ body.loading #refresh-now { opacity: 0.65; }
 
       <section id="burn" class="card" aria-labelledby="burn-title">
         <h2 id="burn-title">Value of the weekly limit</h2>
-        <p class="sub">How much API-priced work did each 1% of weekly quota buy? Compare days with a similar model and token mix. Covers Claude and Codex. The model, client and API key filters do not apply.</p>
+        <p class="sub">API-priced cost per 1% of weekly quota per day for Claude, Codex and Antigravity (by quota group). Compare days with a similar model and token mix. Model, client and API key filters do not apply.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
           <div id="burn-chart" class="chart"></div>
@@ -538,7 +545,7 @@ body.loading #refresh-now { opacity: 0.65; }
 
       <details id="leftover" class="card" aria-labelledby="leftover-title">
         <summary><h2 id="leftover-title">Quota left at reset</h2></summary>
-        <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. It does not carry over. Early means a new cycle began before the reset.</p>
+        <p class="sub">Weekly limit left unused when each cycle ended, priced at that cycle's cost per 1%. Unused quota does not carry over. Early means a new cycle began before the reset. Covers Claude, Codex and Antigravity. Model, client and API key filters do not apply.</p>
         <p class="section-status notice" role="status" hidden></p>
         <div class="section-content">
           <p id="leftover-total" class="hero-label"></p>
@@ -674,6 +681,7 @@ function forgetKey() {
   claudeProfiles.clear();
   antigravityPlans.clear();
   if (typeof detectedPlans !== 'undefined') detectedPlans.clear();
+  if (typeof healthLoaded !== 'undefined') healthLoaded = false;
   document.getElementById('health').replaceChildren();
   managementKey = '';
   try { sessionStorage.removeItem(KEY_STORE); } catch (_) { /* nothing stored */ }
@@ -736,7 +744,7 @@ function fmtUSD(v) {
   return '$' + v.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 const fmtSeconds = (ms) => (ms === 0 ? '0 s' : (ms / 1000).toFixed(ms >= 10000 ? 0 : ms >= 1000 ? 1 : 2) + ' s');
-const tzMs = () => -new Date().getTimezoneOffset() * 60000;
+const tzMs = () => (data.params && data.params.tz !== undefined && data.params.tz !== null ? data.params.tz * 60000 : -new Date().getTimezoneOffset() * 60000);
 const fmtDay = (t) => new Date(t + tzMs()).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const fmtHour = (t) => new Date(t + tzMs()).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 const totalTokens = (t) => t.uncached_input + t.cache_read + t.cache_write + t.output + t.reasoning + t.unclassified;
@@ -844,17 +852,19 @@ function niceStep(max, count) {
 function frame(container, xs, maxY, fmtY, fmtX, minStep = 0, right = 8, minY = 0) {
   const width = Math.max(280, container.clientWidth);
   const height = 240;
-  const m = { top: 22, right, bottom: 24, left: 52 };
-  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img' });
-  const plotW = width - m.left - m.right;
-  const plotH = height - m.top - m.bottom;
   const span = maxY - minY;
   const step = span > 0 ? Math.max(minStep, niceStep(span, 4)) : 1;
   const bottom = Math.floor(minY / step) * step;
   const top = Math.max(bottom + step, Math.ceil(maxY / step) * step);
+  const ticks = [];
+  for (let tick = Math.round(bottom / step); tick <= Math.round(top / step); tick++) ticks.push(tick * step);
+  const maxLabelChars = Math.max(0, ...ticks.map((v) => String(fmtY(v)).length));
+  const m = { top: 22, right, bottom: 24, left: Math.max(52, Math.min(88, maxLabelChars * 7 + 14)) };
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img' });
+  const plotW = width - m.left - m.right;
+  const plotH = height - m.top - m.bottom;
   const y = (v) => m.top + plotH - ((v - bottom) / (top - bottom)) * plotH;
-  for (let tick = Math.round(bottom / step); tick <= Math.round(top / step); tick++) {
-    const v = tick * step;
+  for (const v of ticks) {
     svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.append(svgEl('text', { x: m.left - 6, y: y(v) + 4, 'text-anchor': 'end', text: fmtY(v) }));
   }
@@ -897,6 +907,7 @@ function hitColumns(g, xs, onShow) {
     });
     const show = (e) => {
       const info = onShow(i);
+      if (!info.rows || !info.rows.length) { hide(); return; }
       hit.setAttribute('fill', 'var(--wash)');
       showTooltip(e, info.title, info.rows, hit.getBoundingClientRect());
     };
@@ -914,19 +925,26 @@ function buckets(size) {
   const off = tzMs();
   const start = (t) => t + off - (((t + off) % size) + size) % size - off;
   const out = [];
-  for (let t = start(from); t <= to; t += size) out.push(t);
+  for (let t = start(from); t < to; t += size) out.push(t);
+  if (!out.length && from < to) out.push(start(from));
   return out;
 }
 
 function legend(container, entries, shape) {
-  const fill = (e) => (e.dash ? `repeating-linear-gradient(90deg, ${e.color} 0 4px, transparent 4px 7px)` : e.color);
-  container.replaceChildren(...entries.map((e) => el('span', {},
-    el('span', { class: shape === 'line' ? 'key-line' : 'key-rect', style: 'background:' + fill(e) }), e.label)));
+  container.replaceChildren(...entries.map((e) => {
+    if (shape === 'line' && e.dash) {
+      const sw = svgEl('svg', { width: 16, height: 6, viewBox: '0 0 16 6', 'aria-hidden': 'true' });
+      sw.append(svgEl('line', { x1: 0, x2: 16, y1: 3, y2: 3, 'stroke-width': 2, 'stroke-dasharray': e.dash, style: 'stroke:' + e.color }));
+      return el('span', {}, sw, e.label);
+    }
+    return el('span', {},
+      el('span', { class: shape === 'line' ? 'key-line' : 'key-rect', style: 'background:' + e.color }), e.label);
+  }));
 }
 
 function segmentedBar(container, parts, fmtValue) {
   const total = parts.reduce((s, p) => s + p.value, 0);
-  if (total <= 0) { container.replaceChildren(el('div', { class: 'empty', text: 'No data in this range' })); return; }
+  if (total <= 0) { container.replaceChildren(el('div', { class: 'empty', text: 'No data in this range.' })); return; }
   const bar = el('div', { class: 'segbar', role: 'img', 'aria-label': parts.map((p) => `${p.label}: ${fmtValue(p.value)} (${fmtPct(p.value / total)})${p.note ? ', ' + p.note : ''}`).join('; ') });
   for (const p of parts) {
     if (p.value <= 0) continue;
@@ -1023,17 +1041,17 @@ function renderTotals() {
   const trend = (value, fmt) => ({ values: recordedValues(sums.map(value), xs, size, data.summary.data_since), xs, fmt, fmtX: size === DAY ? fmtDay : fmtHour });
   drawTrend(document.getElementById('t-cost-trend'), trend((b) => b.cost_usd || 0, fmtUSD), 'Cost');
   const sessionNote = t.median_requests_per_session > 0
-    ? `med ${fmtCompact(Math.round(t.median_requests_per_session))} req/session` + (t.median_peak_input_per_session > 0 ? `, ${fmtCompact(Math.round(t.median_peak_input_per_session))} peak in` : '')
+    ? `Median ${fmtCompact(Math.round(t.median_requests_per_session))} calls/session` + (t.median_peak_input_per_session > 0 ? `, ${fmtCompact(Math.round(t.median_peak_input_per_session))} peak input` : '')
     : '';
   document.getElementById('t-tiles').replaceChildren(
     tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact)),
     tile('Sessions', fmtCompact(t.sessions), sessionNote, change(() => relativeChange(t.sessions, prev.sessions))),
-    tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => relativeChange(perRequest(t), perRequest(prev))),
+    tile('Cost per request', t.requests > 0 ? fmtUSD(perRequest(t)) : '-', '', change(() => (t.requests > 0 ? relativeChange(perRequest(t), perRequest(prev)) : null)),
       trend((b) => (b.requests > 0 ? b.cost_usd / b.requests : null), fmtUSD)),
     tile('Processed tokens', fmtCompact(t.processed_tokens), perActiveBucket(t.processed_tokens),
       change(() => relativeChange(t.processed_tokens, prev.processed_tokens)), trend((b) => (b.records ? totalTokens(b) : 0), fmtCompact)),
-    tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct)),
-    tile('Cache savings', fmtUSD(t.cache_savings_usd)),
+    tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (t.processed_tokens > 0 && prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct)),
+    tile('Cache savings', fmtUSD(t.cache_savings_usd), 'vs uncached input', change(() => relativeChange(t.cache_savings_usd, prev.cache_savings_usd))),
     tile('Output incl. reasoning', fmtCompact(t.output + t.reasoning), '', change(() => relativeChange(t.output + t.reasoning, prev.output + prev.reasoning)),
       trend((b) => (b.output || 0) + (b.reasoning || 0), fmtCompact)),
     tile('Failed records', fmtCompact(t.failed), '', null, trend((b) => b.failed || 0, fmtCompact)),
@@ -1055,7 +1073,7 @@ function renderTotals() {
     { label: 'Input', value: t.uncached_input, color: 'var(--tone1)' },
     { label: 'Cache read', value: t.cache_read, color: 'var(--tone2)' },
     { label: 'Cache write', value: t.cache_write, color: 'var(--tone3)' },
-    { label: 'Output', value: t.output + t.reasoning, color: 'var(--tone4)' },
+    { label: 'Output incl. reasoning', value: t.output + t.reasoning, color: 'var(--tone4)' },
     { label: 'Unclassified', value: t.unclassified, color: 'var(--other)' },
   ], fmtCompact);
   segmentedBar(document.getElementById('t-tiers'),
@@ -1100,12 +1118,14 @@ function renderDaily() {
   const xs = buckets(size);
   const value = (p) => (state.dailyMode === 'cost' ? p.cost_usd : totalTokens(p));
   const fmtY = state.dailyMode === 'cost' ? fmtUSD : fmtCompact;
-  const keys = [...new Set(series.points.map((p) => p.key))];
+  const totalsByKey = new Map();
+  for (const p of series.points) totalsByKey.set(p.key, (totalsByKey.get(p.key) || 0) + value(p));
+  const keys = [...totalsByKey.keys()].sort((a, b) => (totalsByKey.get(b) - totalsByKey.get(a)) || a.localeCompare(b));
   const at = new Map(series.points.map((p) => [p.t + '|' + p.key, p]));
   const stackAt = (t) => keys.map((k) => ({ key: k, p: at.get(t + '|' + k) })).filter((s) => s.p);
   const subtitle = document.getElementById('daily-sub');
   if (!series.points.length) {
-    container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' }));
+    container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range.' }));
     document.getElementById('daily-legend').replaceChildren();
     document.getElementById('daily-table').replaceChildren();
     subtitle.textContent = '';
@@ -1118,7 +1138,8 @@ function renderDaily() {
     const peak = xs[totals.indexOf(maxY)];
     const lead = stackAt(peak).reduce((a, b) => value(a.p) >= value(b.p) ? a : b);
     const amount = fmtY(maxY) + (state.dailyMode === 'tokens' ? ' tokens' : '');
-    subtitle.textContent = `Peak ${unit} on ${fmtLabel(peak)} was ${amount}. Led by ${lead.key || 'unknown'} (${fmtY(value(lead.p))}).`;
+    const prep = size === DAY ? 'on' : 'at';
+    subtitle.textContent = `Peak ${unit} ${prep} ${fmtLabel(peak)} was ${amount}. Led by ${lead.key || 'unknown'} (${fmtY(value(lead.p))}).`;
   } else {
     subtitle.textContent = `Recorded ${unit} is zero throughout this period.`;
   }
@@ -1134,11 +1155,10 @@ function renderDaily() {
       base += v;
       const isTop = j === stack.length - 1;
       const gap = j > 0 ? 2 : 0;
-      const h = Math.max(0, y0 - y1 - gap);
-      if (h <= 0) return;
+      const h = Math.max(1, y0 - y1 - gap);
       const x0 = g.x(i) - barW / 2;
       const r = isTop ? Math.min(4, h, barW / 2) : 0;
-      const top = y0 - gap - h;
+      const top = g.m ? Math.max(g.m.top, y0 - gap - h) : y0 - gap - h;
       const d = `M${x0},${top + h} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x0 + barW - r} Q${x0 + barW},${top} ${x0 + barW},${top + r} V${top + h} Z`;
       g.svg.append(svgEl('path', { d, style: 'fill:' + colorFor('provider', e.key) }));
     });
@@ -1147,7 +1167,7 @@ function renderDaily() {
     const stack = stackAt(xs[i]);
     const total = stack.reduce((s, e) => s + value(e.p), 0);
     const title = fmtLabel(xs[i]) + ', total ' + fmtY(total);
-    return { title, label: title, rows: stack.map((e) => ({ color: colorFor('provider', e.key), value: fmtY(value(e.p)), label: e.key || 'unknown' })) };
+    return { title, label: title, rows: [...stack].reverse().map((e) => ({ color: colorFor('provider', e.key), value: fmtY(value(e.p)), label: e.key || 'unknown' })) };
   });
   legend(document.getElementById('daily-legend'), keys.map((k) => ({ color: colorFor('provider', k), label: k || 'unknown' })), 'rect');
   document.getElementById('daily-table').replaceChildren(table(
@@ -1159,29 +1179,30 @@ function renderDaily() {
 const MARKER_KINDS = { client_version: 'client version', response_model: 'reported model', reasoning_effort: 'reasoning effort' };
 const DRIFT_CADENCE = { day: 'Daily', hour: 'Hourly', minute: 'Per minute' };
 const DRIFT_MEASURE_NOTE = {
-  input: 'How much context does a call carry, including cached input?',
-  uncached_input: 'How many input tokens arrive uncached?',
-  cache_read: 'How much of the prompt comes from cache?',
-  cache_write: 'How much new context does each call write to cache?',
-  output: 'How many visible output tokens does a call produce?',
-  reasoning: 'How many tokens does a call spend on reasoning?',
-  output_total: 'How much output does a call generate, including reasoning?',
-  cost_usd: 'What would a call cost at API prices? Unpriced tokens count as $0.',
-  cache_hit_rate: 'What share of input tokens came from cache?',
-  latency_ms: 'How long does a successful call take to finish?',
-  ttft_ms: 'How long do streamed calls wait for their first token?',
-  tokens_per_sec: 'How quickly does a call generate output, including reasoning?',
+  input: 'Total prompt context per call, including cached input.',
+  uncached_input: 'Fresh input tokens per call, excluding cache reads and writes.',
+  cache_read: 'Input tokens served from cache per call.',
+  cache_write: 'New context written to cache per call.',
+  output: 'Visible output tokens per call, excluding reasoning.',
+  reasoning: 'Reasoning tokens per call.',
+  output_total: 'Combined visible output and reasoning tokens per call.',
+  cost_usd: 'Estimated API cost per call. Unpriced tokens count as $0.',
+  cache_hit_rate: 'Share of input tokens served from cache.',
+  latency_ms: 'Total duration of successful calls.',
+  ttft_ms: 'Time to first token on streamed calls.',
+  tokens_per_sec: 'Output generation speed including reasoning.',
 };
 const driftMetricLabel = () => document.querySelector('#drift-metric option:checked').textContent;
 
-function fmtMarkerImpact(impact) {
+function fmtMarkerImpact(impact, scopeLabel = '') {
   if (!impact) return '';
   const parts = [];
   if (impact.input && impact.input !== 'no change') parts.push('input ' + impact.input);
   if (impact.outputTotal && impact.outputTotal !== 'no change') parts.push('output ' + impact.outputTotal);
   if (impact.costUsd && impact.costUsd !== 'no change') parts.push('$/req ' + impact.costUsd);
   if (impact.cacheHit && impact.cacheHit !== 'no change') parts.push('cache ' + impact.cacheHit);
-  return parts.length ? ' — after vs before: ' + parts.join(', ') : '';
+  const prefix = scopeLabel ? ` (${scopeLabel}, after vs before: ` : ' (after vs before: ';
+  return parts.length ? prefix + parts.join(', ') + ')' : '';
 }
 
 function driftMarkerOwner(mk, group) {
@@ -1254,8 +1275,10 @@ function renderDrift() {
   document.getElementById('drift-note').textContent = notes.join(' ');
   const markersList = document.getElementById('drift-markers');
   markersList.replaceChildren(...matchingMarkers.map((mk) => {
-    const scope = group === 'client' ? drift.points.filter((p) => p.key === driftMarkerOwner(mk, group)) : drift.points;
-    const impact = fmtMarkerImpact(markerImpact(scope, mk, state.driftStat));
+    const scope = group === 'client'
+      ? drift.points.filter((p) => p.key.split('/')[0] === driftMarkerOwner(mk, group))
+      : drift.points;
+    const impact = fmtMarkerImpact(markerImpact(scope, mk, state.driftStat), group === 'client' ? '' : 'all groups');
     return el('li', {}, `${fmtBucket(mk.t)}: new ${MARKER_KINDS[mk.kind] || mk.kind} ${mk.value}`,
       impact ? el('span', { class: 'marker-impact', text: impact }) : null);
   }));
@@ -1265,7 +1288,7 @@ function renderDrift() {
     [size === DAY ? 'Day' : 'Time', 'Group', 'Measured calls', driftMetricLabel() + (isRate ? '' : ' (' + state.driftStat + ')')],
     drift.points.map(p => {
       const point = driftMeasurement(p, state.driftMetric, state.driftStat);
-      return [fmtBucket(p.t), p.key, fmtInt(point.n), point.n > 0 ? fmtY(point.value) : '—'];
+      return [fmtBucket(p.t), p.key, fmtInt(point.n), point.n > 0 ? fmtY(point.value) : '-'];
     }),
   ));
   legendEl.replaceChildren();
@@ -1401,7 +1424,7 @@ function renderBurn() {
   }
   const notes = [];
   if (points.some((p) => p.unpriced_tokens > 0)) notes.push('Some tokens have no price, so these values are low.');
-  if (points.some((p) => p.low_sample)) notes.push('Hollow circles (*) moved under 3% that day; integer header rounding makes them noisy.');
+  if (points.some((p) => p.low_sample)) notes.push('Hollow circles (*) mark days that moved under 3%, where small deltas are noisy.');
   note.textContent = notes.join(' ');
   const xs = buckets(DAY);
   const index = new Map(xs.map((t, i) => [t, i]));
@@ -1502,8 +1525,8 @@ function renderBreakdown() {
   const container = document.getElementById('breakdown-table');
   if (state.by === 'errors') {
     const e = data.errors;
-    if (!e || !e.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No failed records in this range' })); return; }
-    container.replaceChildren(table(
+    if (!e || !e.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No failed records in this range.' })); return; }
+    const tbl = table(
       ['Provider', 'Model', 'Account', 'HTTP status', 'Failed', 'Share', 'Last seen'],
       e.rows.map((r) => [
         el('span', {}, el('span', { class: 'key-rect', style: 'background:' + colorFor('provider', r.provider) }), ' ', r.provider || 'unknown'),
@@ -1514,11 +1537,13 @@ function renderBreakdown() {
         fmtPct(r.share),
         fmtStamp(r.last_at),
       ]),
-    ));
+    );
+    tbl.classList.add('errors-table');
+    container.replaceChildren(tbl);
     return;
   }
   const b = data.breakdown;
-  if (!b || !b.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range' })); return; }
+  if (!b || !b.rows.length) { container.replaceChildren(el('div', { class: 'empty', text: 'No usage in this range.' })); return; }
   const keyCell = (r) => {
     const key = r.key;
     if (b.by === 'provider') {
@@ -1606,7 +1631,7 @@ function renderCostWarning() {
 function renderQuality() {
   const q = data.summary.totals.cost_quality;
   segmentedBar(document.getElementById('q-bar'), [
-    { label: 'LiteLLM price', value: q.litellm_tokens, color: 'var(--tone2)' },
+    { label: 'Price catalog', value: q.litellm_tokens, color: 'var(--tone2)', note: 'LiteLLM, models.dev, OpenRouter' },
     { label: 'Override price', value: q.override_tokens, color: 'var(--tone4)' },
     { label: 'Unpriced', value: q.unpriced_tokens, color: 'var(--other)' },
   ], fmtCompact);
@@ -1637,6 +1662,7 @@ function renderHealth(h) {
   if (h.writer.dropped > 0) item('var(--warning)', fmtInt(h.writer.dropped) + ' rows dropped');
   if (h.writer.last_error) item('var(--warning)', 'Last write error: ' + h.writer.last_error);
   if (h.pricing.last_error) item('var(--warning)', 'Price refresh failed');
+  if (h.quota_poller && h.quota_poller.last_error) item('var(--warning)', 'Quota poll failed: ' + h.quota_poller.last_error);
   document.getElementById('health').replaceChildren(...items);
 }
 
@@ -1802,6 +1828,7 @@ async function loadLimits(current) {
   // drops the trend. A rejected key fails the credentials call below anyway.
   const history = api('limit-history', { from: started - TREND_PAST, to: started, tz: -new Date().getTimezoneOffset() })
     .catch(() => null);
+  const health = loadHealthIfNeeded(current);
   const creds = await management('/v8/management/credentials');
   const allFiles = creds.files || [];
   const active = allFiles.filter((f) => !f.disabled);
@@ -1819,6 +1846,7 @@ async function loadLimits(current) {
   });
   if (!current()) return;
   limitsData = { checkedAt: Date.now(), results, statusOnly, disabled: allFiles.length - active.length, history: await history };
+  await health;
   if (!current()) return;
   document.getElementById('key-form').hidden = true;
   document.getElementById('app').hidden = false;
@@ -1882,7 +1910,7 @@ function accountRow(m, share, r, now) {
     el('div', { class: 'acct-value' }, status));
 }
 
-function renderPool(pool, byAccount, now, readings, nameSingle = false) {
+function renderPool(pool, byAccount, now, readings, nameSingle = false, providerId = '') {
   const pace = PACE[pool.pace];
   const single = pool.members.length === 1;
   if (single) {
@@ -1919,19 +1947,21 @@ function renderPool(pool, byAccount, now, readings, nameSingle = false) {
     return el('div', { class: 'pool' },
       el('div', { class: 'pool-head' }, ...head),
       meter(m.used, m.blocked ? 0 : pool.expected, { big: true, color, label: barLabel }),
-      readings ? weeklyTrend(pool, byAccount, readings, now) : null);
+      readings ? weeklyTrend(pool, byAccount, readings, now, providerId) : null);
   }
   const next = pool.restores[0];
+  const full = pool.used >= LIMIT_REACHED;
   return el('div', { class: 'pool' },
     el('div', { class: 'pool-head' },
       el('strong', { text: pool.label }),
       el('span', { text: fmtShare(pool.used) + ' of the pool used' }),
-      pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
-        el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
+      full ? el('span', { class: 'status' }, el('span', { class: 'dot', style: 'background:var(--critical)' }), 'Limit reached')
+        : pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
+          el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
-    meter(pool.used, pool.expected, { big: true, color: 'var(--tone1)',
-      label: `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
-    readings ? weeklyTrend(pool, byAccount, readings, now) : null,
+    meter(pool.used, pool.expected, { big: true, color: full ? 'var(--critical)' : 'var(--tone1)',
+      label: full ? `${fmtShare(pool.used)} of the pool used, limit reached` : `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
+    readings ? weeklyTrend(pool, byAccount, readings, now, providerId) : null,
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
@@ -1962,6 +1992,16 @@ function renderStatusRow(account, now) {
   return el('div', { class: 'acct-status' }, ...parts);
 }
 
+function displayProviderName(provider) {
+  const known = {
+    claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity',
+    gemini: 'Gemini', 'gemini-cli': 'Gemini CLI', devin: 'Devin', kimi: 'Kimi',
+    openai: 'OpenAI', 'openai-compatibility': 'OpenAI-compatible',
+    'claude-api': 'Claude API', vertex: 'Vertex AI', qwen: 'Qwen', iflow: 'iFlow',
+  };
+  return known[provider] || provider.replace(/(^|[-_ ])([a-z])/g, (_, sep, ch) => (sep ? ' ' : '') + ch.toUpperCase());
+}
+
 function renderLimits() {
   const body = document.getElementById('limits-body');
   pendingTrends = [];
@@ -1973,14 +2013,14 @@ function renderLimits() {
     const ok = results.filter((r) => !r.error);
     const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
     const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
-    const weighted = list.length > 0 && list[0].weighted;
+    const weighted = ok.length > 1 && ok.every((r) => r.weight > 0);
     const only = ok.length === 1 ? ok[0] : null;
     const sub = only
       ? (results.length === 1
         ? [accountName(only.account), only.plan].filter(Boolean).join(', ')
         : [`1 of ${results.length} accounts read`, accountName(only.account), only.plan].filter(Boolean).join(', '))
       : `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
-    const creditNote = ok.filter((r) => r.credits).map((r) => `${accountName(r.account)} ${fmtInt(r.credits.amount)} AI credits`);
+    const creditNote = ok.filter((r) => r.credits).map((r) => `${accountName(r.account)} ${fmtInt(r.credits.amount)}`);
     const cooldownNotes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
       .filter(({ st }) => st.cooldowns.length > 0)
       .map(({ r, st }) => `${accountName(r.account)}: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : ''));
@@ -1998,7 +2038,7 @@ function renderLimits() {
     };
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now, readingsForPool(p), ok.length > 1)),
+      ...list.map((p) => renderPool(p, byAccount, now, readingsForPool(p), ok.length > 1, provider.id)),
       ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
       creditNote.length ? el('p', { class: 'notice', text: 'Google One AI credits: ' + creditNote.join(', ') }) : null,
       cooldownNotes.length ? el('p', { class: 'notice', text: 'CPA cooldowns: ' + cooldownNotes.join('; ') }) : null,
@@ -2012,8 +2052,8 @@ function renderLimits() {
   }
   for (const [provider, accounts] of [...byOtherProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     sections.push(el('div', { class: 'limits-provider' },
-      el('h2', { text: provider }),
-      el('p', { class: 'sub', text: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in CPA. This provider has no live quota percentage endpoint; showing CPA status and cooldowns.` }),
+      el('h2', { text: displayProviderName(provider) }),
+      el('p', { class: 'sub', text: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in CPA. No live quota API. Showing CPA status and cooldowns.` }),
       ...accounts.map((a) => renderStatusRow(a, now))));
   }
   if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
@@ -2030,10 +2070,13 @@ function drawTrends() {
 
 // weeklyTrend pools the recorded readings of the accounts in the live pool,
 // with the same weights, and projects the pool from each account's burn rate.
-function weeklyTrend(pool, byAccount, readings, now) {
+function weeklyTrend(pool, byAccount, readings, now, providerId = '') {
   const pointsOf = new Map(readings.map((a) => [a.auth_index, a.points]));
   if (!pool.members.some((m) => (pointsOf.get(m.account) || []).length)) {
-    return el('p', { class: 'sub', text: 'No readings yet. They are recorded from the traffic CPA proxies.' });
+    const emptyText = providerId === 'antigravity'
+      ? 'No readings yet. Antigravity quota is polled every 5 minutes in the background.'
+      : 'No readings yet. They are recorded from the traffic CPA proxies.';
+    return el('p', { class: 'sub', text: emptyText });
   }
   const members = pool.members.map((m) => ({
     account: m.account, weight: m.weight, lengthMs: m.lengthMs, points: withLiveReading(pointsOf.get(m.account) || [], m, now),
@@ -2063,7 +2106,7 @@ function weeklyTrend(pool, byAccount, readings, now) {
       el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
       el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
       el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
-      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : fmtWhen(projection.poolFull) })));
+      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : `in ${fmtDuration(projection.poolFull - now)} (${fmtWhen(projection.poolFull)})` })));
   const chart = el('div', { class: 'chart trend' });
   pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label, single));
   return el('div', {}, stats, chart,
@@ -2189,16 +2232,24 @@ async function detectAccountPlan(account) {
   return '';
 }
 
+const PLANS_PERIODS = new Set(['24h', '7d', '30d', '90d']);
+
+function plansEffectivePeriod() {
+  return PLANS_PERIODS.has(state.period) ? state.period : '7d';
+}
+
 function plansRangeParams() {
-  const period = PERIODS[state.period] ? state.period : '7d';
+  const period = plansEffectivePeriod();
   const to = Date.now();
   return { from: to - periodSpec(period).ms, to, tz: -new Date().getTimezoneOffset() };
 }
 
 async function loadPlans(current, quiet = false) {
+  const period = plansEffectivePeriod();
   const range = plansRangeParams();
   if (!quiet && !plansData) sectionState('plans', 'Loading…', true);
   try {
+    const health = loadHealthIfNeeded(current);
     const [val, creds] = await Promise.all([
       api('plan-value', range),
       management('/v8/management/credentials'),
@@ -2211,14 +2262,15 @@ async function loadPlans(current, quiet = false) {
       if (!current()) return;
       await detectAccountPlan(account);
     });
+    await health;
     if (!current()) return;
-    plansData = { range, val, credentials: allFiles, checkedAt: Date.now() };
+    plansData = { period, range, val, credentials: allFiles, checkedAt: Date.now() };
     data.credentials = allFiles;
     document.getElementById('key-form').hidden = true;
     document.getElementById('app').hidden = false;
     sectionState('plans');
     renderPlans();
-    document.getElementById('updated').textContent = 'Through ' + new Date(range.to).toLocaleTimeString();
+    document.getElementById('updated').textContent = 'Through ' + new Date(range.to).toLocaleTimeString() + ', every 5 min';
   } catch (err) {
     if (!current()) return;
     if (!quiet && !plansData) sectionState('plans', 'Could not load. Refresh to retry.');
@@ -2251,53 +2303,70 @@ function renderPlans() {
     const stats = statsById.get(id) || [null];
     const detected = detectedPlans.get(id);
     const plan = (detected && detected.plan) || '';
+    const sharedPlan = stats.length > 1 || (stats.length === 1 && Boolean(stats[0]?.group));
     for (const stat of stats) {
       const provider = (cred && providerOf(cred)) || (stat && stat.provider) || 'other';
       const isApiKey = cred ? !isOAuthAccount(cred) : false;
       items.push({
+        ...(stat || {}),
         authIndex: id,
         name: cred ? accountName(cred) : id,
         provider,
         plan,
         isApiKey,
-        ...(stat || {}),
+        sharedPlan,
       });
     }
   }
 
-  const opts = { effectiveDays, configCosts, sessionCosts };
-  const accountRows = items.map((it) => computeAccountPlanRow(it, opts));
-  const grouped = state.plansGroup === 'account' ? accountRows : groupPlanRows(accountRows, opts);
+  const tokenNames = { input: 'Uncached input tokens', output: 'Output tokens including reasoning', cacheRead: 'Cache read tokens', cacheWrite: 'Cache write tokens' };
+  const tokenMetric = tokenNames[state.plansSort];
   const unit = state.plansUnit;
+  const projected = state.plansSort === 'potential' || state.plansSort === 'cycleUSD' || (Boolean(tokenMetric) && unit !== 'realized');
+
+  const opts = { effectiveDays, configCosts, sessionCosts };
+  const wholeAccountRows = combineAccountGroupRows(items).map((it) => computeAccountPlanRow(it, opts));
+  const quotaAccountRows = items.map((it) => computeAccountPlanRow(it, opts));
+  const wholeGrouped = state.plansGroup === 'account' ? wholeAccountRows : groupPlanRows(wholeAccountRows, opts);
+  const quotaGrouped = state.plansGroup === 'account' ? quotaAccountRows : groupPlanRows(quotaAccountRows, opts);
+  // Multi-group providers (such as Antigravity's Gemini and Claude/GPT buckets)
+  // share one subscription fee, so realized metrics combine all groups per
+  // account while weekly-quota metrics compare each bucket separately.
+  const grouped = projected ? quotaGrouped : wholeGrouped;
   const ranked = rankPlanRows(grouped, state.plansSort, unit);
   const score = r => metricScore(r, state.plansSort, unit);
   const planGroupSuffix = (r) => (r.groupLabel || r.group ? ', ' + (r.groupLabel || r.group) : '');
 
-  // Summary tiles (deduplicate by authIndex so multi-group providers such as
-  // Antigravity count each paid account's monthly fee once).
-  const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost > 0);
-  const uniquePaid = new Map();
-  for (const r of knownSubs) if (!uniquePaid.has(r.authIndex)) uniquePaid.set(r.authIndex, r);
-  const paidAccounts = [...uniquePaid.values()];
+  // Map whole-plan rows to their constituent quota-group rows so the table's
+  // weekly-estimate column can list each bucket in realized mode.
+  const quotaByParent = new Map();
+  for (const qr of quotaGrouped) {
+    if (!qr.group) continue;
+    const parentKey = state.plansGroup === 'account' ? qr.authIndex : qr.planKey;
+    if (!quotaByParent.has(parentKey)) quotaByParent.set(parentKey, []);
+    quotaByParent.get(parentKey).push(qr);
+  }
+
+  // Summary tiles always use whole-account rows so every paid subscription is
+  // counted once with its complete realized API value.
+  const paidAccounts = wholeAccountRows.filter((r) => !r.isApiKey && r.monthlyCost > 0);
   const totalMonthly = paidAccounts.reduce((s, r) => s + r.monthlyCost, 0);
   const totalPeriodSub = paidAccounts.reduce((s, r) => s + (r.periodCost || 0), 0);
-  const totalRealizedAPI = knownSubs.reduce((s, r) => s + r.realized.costUSD, 0);
+  const totalRealizedAPI = paidAccounts.reduce((s, r) => s + r.realized.costUSD, 0);
   const overallRealized = totalPeriodSub > 0 ? totalRealizedAPI / totalPeriodSub : null;
   document.getElementById('plans-tiles').replaceChildren(
     tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(paidAccounts.length)} paid account${paidAccounts.length === 1 ? '' : 's'}`),
     tile('Usage on paid subscriptions', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} on ${fmtUSD(totalPeriodSub)} of subscriptions in this period` : ''),
-
   );
 
   const notes = [];
   if (clamped) notes.push(`Recording covers ${effectiveDays.toFixed(1)} days of this range, so realized subscription cost is scaled to match.`);
-  const unpricedCount = new Set(accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).map((r) => r.authIndex)).size;
+  const unpricedCount = wholeAccountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).length;
   if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the per-dollar ranking.`);
-  if (accountRows.some(r => r.unpricedTokens > 0)) notes.push('Unpriced tokens contribute $0 to the API estimate. See Cost quality in Usage.');
+  if (wholeAccountRows.some(r => r.unpricedTokens > 0)) notes.push('Unpriced tokens contribute $0 to the API estimate. See Cost quality in Usage.');
+  if (projected && quotaGrouped.some((r) => r.sharedPlan)) notes.push('Rows marked shared plan divide into separate weekly buckets under one subscription fee.');
   document.getElementById('plans-note').textContent = notes.join(' ');
 
-  const tokenNames = { input: 'Uncached input tokens', output: 'Output tokens including reasoning', cacheRead: 'Cache read tokens', cacheWrite: 'Cache write tokens' };
-  const tokenMetric = tokenNames[state.plansSort];
   const tokenBasis = unit === 'pct' ? 'per weekly quota point' : unit === 'potential' ? 'per subscription dollar at full weekly quota' : 'per subscription dollar in the period';
   const dollarTitles = {
     recordedUSD: 'Recorded API value per account in the period',
@@ -2307,13 +2376,16 @@ function renderPlans() {
   };
   const chartTitle = tokenMetric ? tokenMetric + ' ' + tokenBasis : dollarTitles[state.plansSort];
   document.getElementById('plans-chart-title').textContent = chartTitle;
-  const projected = state.plansSort === 'potential' || state.plansSort === 'cycleUSD' || (tokenMetric && unit !== 'realized');
   document.getElementById('plans-chart-basis').textContent = projected
     ? 'Uses recorded tokens between weekly quota readings. A full cycle assumes the same mix of models and tokens. Short-window limits can restrict when that quota is usable.'
-    : 'Uses traffic recorded in this period. A return of 10× means $10 at API rates per $1 of subscription cost, prorated to the period.';
+    : state.plansSort === 'realized'
+      ? 'Uses all traffic recorded in this period per subscription. A return of 10× means $10 at API rates per $1 of subscription cost, prorated to the period.'
+      : state.plansSort === 'recordedUSD'
+        ? 'Uses all traffic recorded in this period, averaged per account at API list prices.'
+        : 'Uses all tokens recorded in this period per $1 of subscription cost, prorated to the period.';
   const chartEl = document.getElementById('plans-chart');
   const barRows = ranked.filter(r => score(r) !== null);
-  const max = Math.max(1, ...barRows.map(score));
+  const max = Math.max(0, ...barRows.map(score));
   chartEl.replaceChildren(...barRows.map(r => {
     const value = score(r);
     const label = state.plansGroup === 'account'
@@ -2323,6 +2395,7 @@ function renderPlans() {
     const formatted = tokenMetric ? fmtCompact(value) : (state.plansSort === 'cycleUSD' || state.plansSort === 'recordedUSD') ? fmtUSD(value) : fmtMult(value);
     const detail = [];
     if (state.plansGroup === 'plan') detail.push(r.accountCount + (r.accountCount === 1 ? ' account' : ' accounts'));
+    if (projected && r.sharedPlan) detail.push('shared plan');
     if (r.unpricedTokens > 0 && !tokenMetric) detail.push('Partial API pricing');
     if (projected && r.potential?.lowSample) detail.push('Low sample: ' + r.quotaPoints.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' quota points');
     if (!projected && r.earlyResets) detail.push(fmtInt(r.earlyResets) + ' early weekly reset' + (r.earlyResets === 1 ? '' : 's'));
@@ -2331,16 +2404,16 @@ function renderPlans() {
       el('div', {}, el('div', { class: 'plan-bar-name', title: label }, el('span', { text: label })),
         detail.length ? el('span', { class: 'plan-sub', text: detail.join(', ') }) : null),
       el('div', { class: 'plan-bar-track', 'aria-hidden': 'true' },
-        el('div', { class: 'plan-bar-fill', style: `width:${100 * value / max}%;background:${color}` })),
+        el('div', { class: 'plan-bar-fill', style: `width:${max > 0 ? 100 * value / max : 0}%;background:${color}` })),
       el('strong', { class: 'plan-bar-val', text: formatted }));
   }));
   if (!barRows.length) chartEl.append(el('p', { class: 'notice', text: 'No subscription has data for this comparison.' }));
 
   if (projected && barRows.length) {
-    const missing = ranked.filter(r => !r.isApiKey && r.quotaPoints === null);
-    if (missing.length) chartEl.append(el('p', { class: 'notice', text: 'No weekly quota history for ' + missing.map(r => r.name || r.provider + ' ' + r.plan).join(', ') + '.' }));
+    const missing = ranked.filter(r => !r.isApiKey && !r.potential);
+    if (missing.length) chartEl.append(el('p', { class: 'notice', text: 'Insufficient weekly quota history for ' + missing.map(r => (r.name || r.provider + ' ' + r.plan) + planGroupSuffix(r)).join(', ') + '.' }));
   }
-  renderPlanRateLimits(val.rate_limits, grouped);
+  renderPlanRateLimits(val.rate_limits, quotaGrouped);
 
   // Ranking table
   const wrap = document.getElementById('plans-table');
@@ -2364,13 +2437,14 @@ function renderPlans() {
       const rankCell = score(r) !== null ? '#' + (index + 1) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
 
       const nameTitle = state.plansGroup === 'account' ? r.name + planGroupSuffix(r) : `${r.provider} ${r.plan}${planGroupSuffix(r)}`;
-      const nameSub = state.plansGroup === 'account'
+      const nameSubParts = [state.plansGroup === 'account'
         ? `${r.provider} ${r.plan}`
-        : `${fmtInt(r.accountCount)} account${r.accountCount === 1 ? '' : 's'}`;
+        : `${fmtInt(r.accountCount)} account${r.accountCount === 1 ? '' : 's'}`];
+      if (projected && r.sharedPlan) nameSubParts.push('shared plan');
       const nameCell = el('span', {},
         el('span', { class: 'dot', style: 'background:' + colorFor('provider', r.provider) + ';margin-right:6px' }),
         el('strong', { text: nameTitle }),
-        el('span', { class: 'plan-sub', text: nameSub }));
+        el('span', { class: 'plan-sub', text: nameSubParts.join(', ') }));
 
       let costCell;
       if (r.isApiKey) {
@@ -2389,6 +2463,9 @@ function renderPlans() {
         input.addEventListener('change', () => {
           const raw = input.value.trim();
           const n = Number(raw);
+          if (state.plansGroup === 'plan') {
+            for (const m of (r.accounts || [])) saveSessionPlanCost(m.authIndex, null);
+          }
           if (raw === '') saveSessionPlanCost(editKey, null);
           else if (Number.isFinite(n) && n >= 0) saveSessionPlanCost(editKey, n);
           renderPlans();
@@ -2400,13 +2477,31 @@ function renderPlans() {
       }
 
       let potCell;
+      const parentKey = state.plansGroup === 'account' ? r.authIndex : r.planKey;
+      const subGroups = !projected ? quotaByParent.get(parentKey) : null;
       if (r.isApiKey) {
-        potCell = '—';
+        potCell = '-';
       } else if (r.potential) {
         const main = r.potential.leverage !== null ? fmtMult(r.potential.leverage) : fmtUSD(r.potential.fullCycleUSD) + ' / wk';
         const sub = (r.potential.leverage !== null ? fmtUSD(r.potential.fullCycleUSD) + ' API / account / wk' : 'Set monthly price to calculate return')
           + (r.potential.lowSample ? ', low sample' : '');
         potCell = el('span', {}, el('strong', { text: main }), el('span', { class: 'plan-sub', text: sub }));
+      } else if (subGroups && subGroups.length) {
+        const withPot = subGroups.filter((g) => g.potential);
+        if (withPot.length) {
+          const lines = withPot.map((g) => {
+            const name = g.groupLabel || g.group;
+            const valText = g.potential.leverage !== null
+              ? `${fmtMult(g.potential.leverage)} (${fmtUSD(g.potential.fullCycleUSD)}/wk)`
+              : `${fmtUSD(g.potential.fullCycleUSD)}/wk`;
+            return `${name}: ${valText}`;
+          });
+          potCell = el('span', {},
+            el('strong', { text: 'By quota group' }),
+            el('span', { class: 'plan-sub', text: lines.join(', ') }));
+        } else {
+          potCell = el('span', { class: 'plan-sub', text: 'Insufficient measured quota or priced usage' });
+        }
       } else {
         potCell = el('span', { class: 'plan-sub', text: 'Insufficient measured quota or priced usage' });
       }
@@ -2471,7 +2566,7 @@ function renderPlanRateLimits(observations, groups) {
   if (!observations?.length) {
     chart.replaceChildren(el('p', { class: 'notice', text: Array.isArray(observations)
       ? 'No HTTP 429 calls recorded for these accounts in this period.'
-      : 'This management response has no historical 429 breakdown.' }));
+      : 'Historical 429 breakdown is not available from this plugin version.' }));
     return;
   }
   const windows = [
@@ -2481,20 +2576,35 @@ function renderPlanRateLimits(observations, groups) {
     ['below', 'Both below 100%', 'var(--tone4)'],
     ['incomplete', 'Incomplete readings', 'var(--tone5)'],
   ];
-  const label = row => (row.name || row.provider + ' ' + row.plan) + (row.groupLabel || row.group ? ', ' + (row.groupLabel || row.group) : '');
+  const groupSuffix = (row) => (row.groupLabel || row.group ? ', ' + (row.groupLabel || row.group) : '');
+  const label = (row) => (row.name
+    ? `${row.name} (${row.provider} ${row.plan}${groupSuffix(row)})`
+    : `${row.provider} ${row.plan}${groupSuffix(row)}`);
+  const windowName = (key, provider, fallback) => (key === 'session' && ['claude', 'codex', 'antigravity'].includes(provider) ? '5-hour window full' : fallback);
   const series = groupPlanRateLimits(observations, groups);
   const max = Math.max(1, ...series.map(r => r.total));
-  chart.replaceChildren(el('p', { class: 'sub', text: 'Each upstream call counts once. For Claude, the short window is 5 hours. A 429 can occur before either quota is full. Accounts that CPA skips produce no 429 for that attempt.' }));
+  chart.replaceChildren(el('p', { class: 'sub', text: 'Each upstream call counts once. Claude, Codex and Antigravity use a 5-hour short window. Antigravity readings come from the nearest polled quota snapshot. A 429 can occur before either quota is full, and accounts CPA skips produce no 429.' }));
   for (const r of series) {
     const shown = windows.filter(([key]) => r.windows[key]);
+    const rowLabel = label(r.row);
     const details = shown.map(([key, name, color]) => el('span', {},
       el('span', { class: 'dot', style: 'background:' + color, 'aria-hidden': 'true' }),
-      (key === 'session' && r.row.provider === 'claude' ? '5-hour window full' : name) + ' ' + fmtInt(r.windows[key])));
-    const track = el('div', { class: 'plan-bar-track plan-window-track', 'aria-hidden': 'true' },
-      ...shown.map(([key, , color]) => el('span', { style: `width:${100 * r.windows[key] / max}%;background:${color}` })));
+      windowName(key, r.row.provider, name) + ' ' + fmtInt(r.windows[key])));
+    const track = el('div', { class: 'plan-bar-track plan-window-track', role: 'img', 'aria-label': `${rowLabel}: ${fmtInt(r.total)} HTTP 429 calls` },
+      ...shown.map(([key, name, color]) => {
+        const wName = windowName(key, r.row.provider, name);
+        const count = r.windows[key];
+        const seg = el('span', { style: `width:${100 * count / max}%;background:${color}`, tabindex: 0 });
+        const tipRows = [{ color, value: fmtInt(count), label: `${wName} (${fmtPct(count / r.total)})` }];
+        seg.addEventListener('pointermove', (e) => showTooltip(e, rowLabel, tipRows));
+        seg.addEventListener('focus', (e) => showTooltip(e, rowLabel, tipRows));
+        seg.addEventListener('pointerleave', hideTooltip);
+        seg.addEventListener('blur', hideTooltip);
+        return seg;
+      }));
     const block = el('div', {},
       el('div', { class: 'plan-bar-row' },
-        el('strong', { text: label(r.row) }), track,
+        el('strong', { text: rowLabel }), track,
         el('strong', { class: 'plan-bar-val', text: fmtInt(r.total) })),
       el('div', { class: 'legend' }, ...details));
     if (r.following.size) {
@@ -2544,10 +2654,12 @@ function renderLatency() {
   }
   svg.append(svgEl('text', { x: width - m.right, y: height - 4, 'text-anchor': 'end', text: 'Time to first token' }));
   svg.append(svgEl('text', { x: m.left, y: m.top - 2, text: 'Total latency' }));
-  const p95x = sx(Math.max(xDomain[0], lat.p95_ttft_ms));
-  const p95y = sy(Math.max(yDomain[0], lat.p95_latency_ms));
+  const p95x = sx(Math.min(xDomain[1], Math.max(xDomain[0], lat.p95_ttft_ms)));
+  const p95y = sy(Math.min(yDomain[1], Math.max(yDomain[0], lat.p95_latency_ms)));
   svg.append(svgEl('line', { x1: p95x, x2: p95x, y1: m.top, y2: height - m.bottom, stroke: 'var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
   svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: p95y, y2: p95y, stroke: 'var(--muted)', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
+  svg.append(svgEl('text', { x: Math.min(p95x + 4, width - m.right - 22), y: m.top + 10, class: 'marker-label', text: 'p95' }));
+  svg.append(svgEl('text', { x: width - m.right - 2, y: Math.max(m.top + 10, p95y - 4), 'text-anchor': 'end', class: 'marker-label', text: 'p95' }));
   const screen = lat.points.map((pt) => ({ x: sx(pt.ttft_ms), y: sy(pt.latency_ms) }));
   const dots = svgEl('g', { 'aria-hidden': 'true' });
   lat.points.forEach((pt, i) => {
@@ -2586,10 +2698,10 @@ const expandedRequests = new Set();
 
 function requestDetail(c) {
   const pairs = [
-    ['Call', c.id], ['Provider', c.provider], ['Requested model', c.requested_model], ['Reported model', c.models.join(', ')],
+    ['Call', c.id], ['Provider', c.provider], ['Requested model', c.requested_model], ['Reported model', (c.models || []).join(', ')],
     ['Client', c.client], ['User-Agent', c.user_agent], ['API key hash', c.api_key_hash],
     ['Account', c.account ? accountWithProvider(c.account) : ''], ['Session', c.session_id],
-    ['Reasoning effort', c.reasoning_effort || 'unset'], ['Service tier', c.service_tier || 'standard'],
+    ['Reasoning effort', c.reasoning_effort || 'unset'], ['Service tier', c.service_tier || 'not reported'],
     ['Streamed', c.stream ? 'yes' : 'no'], ['HTTP status', c.status_code || ''],
     ['Time to first token', c.ttft_ms ? fmtSeconds(c.ttft_ms) : ''], ['Latency', c.latency_ms ? fmtSeconds(c.latency_ms) : ''],
     ['Uncached input', fmtInt(c.uncached_input)], ['Cache read', fmtInt(c.cache_read)], ['Cache write', fmtInt(c.cache_write)],
@@ -2605,7 +2717,9 @@ function renderRequests() {
   if (!res) return;
   const wrap = document.getElementById('requests-table');
   const shown = res.calls.length;
-  document.getElementById('req-range').textContent = res.total ? `${fmtInt(state.reqOffset + 1)} to ${fmtInt(state.reqOffset + shown)} of ${fmtInt(res.total)}` : '';
+  document.getElementById('req-range').textContent = res.total
+    ? (shown ? `${fmtInt(state.reqOffset + 1)} to ${fmtInt(state.reqOffset + shown)} of ${fmtInt(res.total)}` : `0 shown of ${fmtInt(res.total)}`)
+    : '';
   document.getElementById('req-prev').disabled = state.reqOffset === 0;
   document.getElementById('req-next').disabled = state.reqOffset + shown >= res.total;
   if (!shown) {
@@ -2616,7 +2730,7 @@ function renderRequests() {
   const body = el('tbody');
   for (const c of res.calls) {
     const cells = [
-      fmtStamp(c.at), c.models.join(' + ') || c.requested_model, c.client, c.account ? accountWithProvider(c.account) : '-',
+      fmtStamp(c.at), (c.models || []).join(' + ') || c.requested_model, c.client, c.account ? accountWithProvider(c.account) : '-',
       fmtCompact(c.uncached_input + c.cache_read + c.cache_write), fmtCompact(c.output + c.reasoning),
       c.unpriced_tokens && !c.cost_usd ? 'unpriced' : fmtUSD(c.cost_usd), c.latency_ms ? fmtSeconds(c.latency_ms) : '-',
       c.failed ? `Failed ${c.status_code || ''}`.trim() : String(c.status_code || 'OK'),
@@ -2643,6 +2757,16 @@ function reloadRequests() {
 
 /* ---------- loading ---------- */
 
+let healthLoaded = false;
+
+function loadHealthIfNeeded(current) {
+  if (healthLoaded) return Promise.resolve();
+  return api('health').then(
+    (h) => { if (current()) { healthLoaded = true; renderHealth(h); } },
+    () => {},
+  );
+}
+
 function fillSelect(id, values, current, allLabel, labelOf = (v) => v) {
   const select = document.getElementById(id);
   const all = new Set((values || []).filter(Boolean));
@@ -2667,6 +2791,8 @@ function showLoadError(err) {
     showKeyForm(err.message);
     return;
   }
+  document.getElementById('key-form').hidden = true;
+  document.getElementById('app').hidden = false;
   document.getElementById('load-error').textContent = 'Could not load analytics: ' + err.message;
 }
 
@@ -2688,6 +2814,7 @@ async function guarded(work, quiet) {
 let refreshPromise = null;
 let refreshPending = false;
 let refreshReuse = false;
+let refreshQuiet = false;
 let detailPromise = null;
 
 function refreshFilters() {
@@ -2697,27 +2824,32 @@ function refreshFilters() {
 
 function refresh(quiet, reuse = false) {
   clearTimeout(autoRefresh.timer);
+  const wantQuiet = Boolean(quiet);
   if (refreshPromise) {
     // A full refresh must still renew the range when filters change while
-    // it is queued. Finish in-flight SQLite work before starting that load.
+    // it is queued, and an interactive refresh must clear an earlier quiet
+    // tick. Finish in-flight SQLite work before starting that load.
     refreshReuse = refreshReuse && reuse;
+    refreshQuiet = refreshPending ? (refreshQuiet && wantQuiet) : wantQuiet;
     ++loadSeq;
     refreshPending = true;
     return refreshPromise;
   }
   refreshReuse = reuse;
+  refreshQuiet = wantQuiet;
   refreshPromise = (async () => {
     do {
       const reuseRange = refreshReuse;
+      const isQuiet = refreshQuiet;
       refreshPending = false;
       await guarded(async (current) => {
         if (detailPromise) await detailPromise;
         if (!current()) return;
         if (state.view === 'limits') await loadLimits(current);
-        else if (state.view === 'plans') await loadPlans(current, quiet);
-        else if (state.view === 'requests') await loadRequests(current, reuseRange, quiet);
-        else await loadUsage(current, reuseRange, quiet);
-      }, quiet);
+        else if (state.view === 'plans') await loadPlans(current, isQuiet);
+        else if (state.view === 'requests') await loadRequests(current, reuseRange, isQuiet);
+        else await loadUsage(current, reuseRange, isQuiet);
+      }, isQuiet);
     } while (refreshPending);
   })().finally(() => { refreshPromise = null; scheduleAutoRefresh(); });
   return refreshPromise;
@@ -2761,6 +2893,7 @@ async function loadRequests(current, reuse, quiet) {
   const range = { from: p.from, to: p.to, tz: p.tz };
   if (!quiet && !data.requests) sectionState('requests', 'Loading…', true);
   try {
+    const health = loadHealthIfNeeded(current);
     const req = await api('requests', { ...p, sort: state.reqSort, outcome: state.reqOutcome, offset: state.reqOffset, limit: REQUESTS_PAGE });
     if (!current()) return;
     data = { ...data, requests: req, params: p, period, options: prior?.options, credentials: data.credentials };
@@ -2771,15 +2904,15 @@ async function loadRequests(current, reuse, quiet) {
     if (data.options) renderOptions(data.options);
     const live = typeof reqRefreshSeconds === 'function' ? reqRefreshSeconds() : 0;
     document.getElementById('updated').textContent = 'Through ' + new Date(p.to).toLocaleTimeString() + (live > 0 ? `, every ${live} s` : '');
-    if (quiet) return;
     const jobs = [];
     if (!data.options) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
-    if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
+    if (!quiet && !data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
       data.credentials = files;
       if (data.options) renderOptions(data.options);
       if (data.requests) renderRequests();
     } });
     if (jobs.length) await mapLimit(jobs, 2, (job) => runUsageJob(job, current));
+    await health;
   } catch (err) {
     if (!current()) return;
     if (!quiet && !data.requests) sectionState('requests', 'Could not load. Refresh to retry.');
@@ -2787,9 +2920,9 @@ async function loadRequests(current, reuse, quiet) {
   }
 }
 
-async function runUsageJob(job, current, quiet = false) {
+async function runUsageJob(job, current, quiet = false, skipReady = true) {
   if (!current()) return true;
-  if (DETAIL_SECTIONS.includes(job.section) && (!document.getElementById(job.section).open || job.ready())) return true;
+  if (DETAIL_SECTIONS.includes(job.section) && (!document.getElementById(job.section).open || (skipReady && job.ready()))) return true;
   if (job.section && !quiet) sectionState(job.section, 'Loading…', true);
   try {
     const result = await job.load();
@@ -2824,7 +2957,7 @@ async function loadUsage(current, reuse, quiet = false) {
   const range = { from: p.from, to: p.to, tz: p.tz };
   const prevRange = previousPeriod(p);
   const health = prior ? Promise.resolve() : api('health').then(
-    (h) => { if (current()) renderHealth(h); },
+    (h) => { if (current()) { healthLoaded = true; renderHealth(h); } },
     (err) => { if (current()) showLoadError(err); },
   );
   try {
@@ -2865,7 +2998,7 @@ async function loadUsage(current, reuse, quiet = false) {
 
     const jobs = [];
     if (!data.options || (keepVisible && !prior)) jobs.push({ load: () => api('options', range), apply: (v) => { data.options = v; renderOptions(v); } });
-    if (!data.credentials) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
+    if (!data.credentials || (keepVisible && !prior)) jobs.push({ load: () => management('/v8/management/credentials').then((c) => c.files || []), apply: (files) => {
       data.credentials = files;
       if (typeof renderAccountWarning === 'function') renderAccountWarning();
       if (data.options) renderOptions(data.options);
@@ -2884,8 +3017,8 @@ async function loadUsage(current, reuse, quiet = false) {
         : { section: 'breakdown', load: () => api('breakdown', { ...p, by }), apply: (v) => { data.breakdown = v; renderBreakdown(); } },
     );
     if (!sameLimitScope) jobs.push({ section: 'burn', load: () => api('limit-burn', { ...range, provider: p.provider, account: p.account }), apply: (v) => { data.burn = v; renderBurn(); } });
-    for (const section of DETAIL_SECTIONS) if (document.getElementById(section).open) jobs.push(detailJob(section));
-    const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current, keepVisible));
+    for (const section of DETAIL_SECTIONS) if (document.getElementById(section).open && !(section === 'leftover' && sameLimitScope && data.leftover)) jobs.push(detailJob(section));
+    const results = await mapLimit(jobs, 2, (job) => runUsageJob(job, current, keepVisible, false));
     if (current()) document.getElementById('updated').textContent = results.includes(false)
       ? 'Some details could not be loaded' : 'Through ' + new Date(p.to).toLocaleTimeString();
   } finally {
@@ -2941,7 +3074,7 @@ async function refreshGroup(section) {
     sectionState(section, 'Could not load. Refresh to retry.');
     showLoadError(err);
   } finally {
-    if (seq === groupSeq[section]) card.setAttribute('aria-busy', 'false');
+    if (pageSeq === loadSeq && seq === groupSeq[section]) card.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -3006,7 +3139,7 @@ function showView(view) {
   for (const node of document.querySelectorAll('.requests-only')) node.hidden = view !== 'requests';
   if (view === 'plans') {
     const sel = document.getElementById('plans-period');
-    if (sel && [...sel.options].some((o) => o.value === state.period)) sel.value = state.period;
+    if (sel) sel.value = plansEffectivePeriod();
   }
 }
 
@@ -3025,10 +3158,16 @@ document.getElementById('key-form').addEventListener('submit', (e) => {
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => {
   if (state.view === b.dataset.view) return;
   showView(b.dataset.view);
-  const hasCached = (state.view === 'usage' && Boolean(data.summary))
+  const hasCached = (state.view === 'usage' && Boolean(data.summary) && matchesSelection())
     || (state.view === 'limits' && Boolean(limitsData))
-    || (state.view === 'plans' && Boolean(plansData))
-    || (state.view === 'requests' && Boolean(data.requests));
+    || (state.view === 'plans' && Boolean(plansData) && plansData.period === plansEffectivePeriod())
+    || (state.view === 'requests' && Boolean(data.requests) && matchesSelection());
+  if (state.view === 'usage' && data.summary && matchesSelection()) {
+    renderDaily(); renderDrift(); renderBurn();
+    if (document.getElementById('latency').open && data.latency) renderLatency();
+  } else if (state.view === 'limits' && limitsData) {
+    drawTrends();
+  }
   refresh(hasCached);
 }));
 document.getElementById('refresh-now').addEventListener('click', () => refresh());
@@ -3090,8 +3229,11 @@ document.getElementById('plans-period').addEventListener('change', (e) => {
 });
 document.getElementById('plans-sort').addEventListener('change', (e) => {
   state.plansSort = e.target.value;
-  if (state.plansSort === 'potential' || state.plansSort === 'realized') {
-    state.plansUnit = state.plansSort;
+  if (state.plansSort === 'potential' || state.plansSort === 'cycleUSD') {
+    state.plansUnit = 'potential';
+    document.getElementById('plans-unit').value = state.plansUnit;
+  } else if (state.plansSort === 'realized' || state.plansSort === 'recordedUSD') {
+    state.plansUnit = 'realized';
     document.getElementById('plans-unit').value = state.plansUnit;
   }
   renderPlans();
@@ -3105,8 +3247,11 @@ let resizeTimer = 0;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (data.summary) { renderDrift(); renderBurn(); renderDaily(); renderLatency(); }
-    if (limitsData) drawTrends();
+    if (state.view === 'usage' && data.summary) {
+      renderDrift(); renderBurn(); renderDaily();
+      if (document.getElementById('latency').open && data.latency) renderLatency();
+    }
+    if (state.view === 'limits' && limitsData) drawTrends();
   }, 100);
 }).observe(document.querySelector('.wrap'));
 

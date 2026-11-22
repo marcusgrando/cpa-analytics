@@ -141,7 +141,7 @@ func driftPoint(t int64, key string, calls []inbound) DriftPoint {
 		}
 		outTok := c.tokens.Output + c.tokens.Reasoning
 		genMs := c.latencyMs - c.ttftMs
-		if c.ttftMs == 0 || genMs <= 0 {
+		if c.ttftMs <= 0 || genMs <= 0 {
 			genMs = c.latencyMs
 		}
 		if outTok > 0 && genMs > 0 {
@@ -183,7 +183,7 @@ func markers(db *sql.DB, f Filter, mk markerSpec, size int64) ([]Marker, error) 
 	where, args := f.where(false)
 	out := []Marker{}
 	q := "SELECT " + mk.expr + ", MIN(requested_at) FROM requests WHERE " + where +
-		" AND generate = 1 AND NOT (" + mk.skip + ") GROUP BY 1 HAVING MIN(requested_at) >= ?"
+		" AND generate = 1 AND failed = 0 AND NOT (" + mk.skip + ") GROUP BY 1 HAVING MIN(requested_at) >= ?"
 	rows, err := db.Query(q, append(args, f.From.UnixMilli())...)
 	if err != nil {
 		return nil, fmt.Errorf("markers %s: %w", mk.kind, err)
@@ -237,8 +237,8 @@ func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string
 		return perRequest(db, f, keyExpr)
 	}
 	where, args := f.where(true)
-	q := "SELECT " + callExpr + ", CAST(" + keyExpr + " AS TEXT), (" + modelExpr + "), (" + tierExpr + "), MIN(requested_at), MAX(latency_ms), MAX(ttft_ms), " + tokenSums +
-		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY 1, 2, 3, 4"
+	q := "SELECT " + callExpr + ", CAST(" + keyExpr + " AS TEXT), (" + modelExpr + "), (" + tierExpr + "), (" + table.BandSQL(inputExpr) + "), MIN(requested_at), MAX(latency_ms), MAX(ttft_ms), " + tokenSums +
+		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY 1, 2, 3, 4, 5"
 	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("per request priced: %w", err)
@@ -250,11 +250,11 @@ func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string
 	var order []callKey
 	for rows.Next() {
 		var (
-			call, key, model, tier string
-			at, latency, ttft      int64
-			tok                    Tokens
+			call, key, model, tier   string
+			band, at, latency, ttft  int64
+			tok                      Tokens
 		)
-		targets := append([]any{&call, &key, &model, &tier, &at, &latency, &ttft}, tok.scanTargets()...)
+		targets := append([]any{&call, &key, &model, &tier, &band, &at, &latency, &ttft}, tok.scanTargets()...)
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("per request priced scan: %w", err)
 		}
@@ -276,7 +276,7 @@ func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string
 			}
 		}
 		in.tokens.add(tok)
-		cost, _ := p.price(model, tier, tok.input(), tok)
+		cost, _ := p.price(model, tier, band, tok)
 		in.costUSD += cost
 	}
 	if err := rows.Err(); err != nil {
@@ -295,7 +295,7 @@ func perRequestPriced(db *sql.DB, f Filter, table *pricing.Table, keyExpr string
 // of a call that land in two model groups count once in each. Failed attempts
 // are left out so an outage does not read as a drop in tokens per request.
 // MAX keeps one timing per call when its billing rows repeat it.
-func perRequest(db *sql.DB, f Filter, keyExpr string) ([]inbound, error) {
+func perRequest(db querier, f Filter, keyExpr string) ([]inbound, error) {
 	where, args := f.where(true)
 	q := "SELECT CAST(" + keyExpr + " AS TEXT), MIN(requested_at), MAX(latency_ms), MAX(ttft_ms), " + tokenSums +
 		" FROM requests WHERE " + where + " AND generate = 1 AND failed = 0 GROUP BY " + callExpr + ", 1"

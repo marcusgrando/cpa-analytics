@@ -310,8 +310,8 @@ test('health shows only collection or pricing failures, while unpriced tokens re
   vm.runInContext(page.slice(page.indexOf('function renderCostWarning()'), page.indexOf('/* ---------- limits ---------- */')), ctx);
   ctx.renderHealth({ writer: { written: 10, dropped: 0 }, trace_hits: 9, trace_misses: 2, pricing: {} });
   expect(node('health').children).toEqual([]);
-  ctx.renderHealth({ storage_error: 'disk full', writer: { dropped: 3, last_error: 'write failed' }, pricing: { last_error: 'offline' } });
-  expect(node('health').children.length).toBe(4);
+  ctx.renderHealth({ storage_error: 'disk full', writer: { dropped: 3, last_error: 'write failed' }, pricing: { last_error: 'offline' }, quota_poller: { last_error: 'HTTP 429' } });
+  expect(node('health').children.length).toBe(5);
   ctx.data = { summary: { totals: { cost_quality: { unpriced_tokens: 42 } } } };
   ctx.renderCostWarning();
   expect(node('cost-warning').hidden).toBe(false);
@@ -714,7 +714,7 @@ test('requests tab loads calls and quiet live ticks fetch only requests without 
   const { ctx, calls, credentialCalls, renders, node } = dashboard();
   ctx.state.view = 'requests';
   await ctx.refresh();
-  expect(calls.map((c) => c.route)).toEqual(['requests', 'options']);
+  expect(calls.map((c) => c.route)).toEqual(['health', 'requests', 'options']);
   expect(credentialCalls.length).toBe(1);
   expect(renders).toContain('requests');
   expect(node('requests .section-content').hidden).toBe(false);
@@ -729,6 +729,36 @@ test('requests tab loads calls and quiet live ticks fetch only requests without 
   expect(credentialCalls.length).toBe(0);
   expect(renders).toEqual(['requests']);
   expect(node('requests .section-content').hidden).toBe(false);
+});
+
+test('interactive refresh queued behind a quiet tick clears quiet mode', async () => {
+  const { ctx, node, calls } = dashboard();
+  await ctx.refresh();
+  const gate = deferred(), api = ctx.api;
+  let blocked = false;
+  ctx.api = (route, params) => {
+    if (route === 'drift' && !blocked) { blocked = true; return gate.promise; }
+    return api(route, params);
+  };
+  const quietTick = ctx.refresh(true);
+  await new Promise(setImmediate);
+  ctx.state.provider = 'claude';
+  const interactive = ctx.refresh(false, false);
+  gate.resolve({ points: [] });
+  await Promise.all([quietTick, interactive]);
+  expect(calls.filter((c) => c.route === 'summary').at(-1)?.params.provider).toBe('claude');
+  expect(node('drift .section-content').hidden).toBe(false);
+});
+
+test('quiet refresh on usage refreshes open leftover and credentials', async () => {
+  const { ctx, calls, credentialCalls, node } = dashboard();
+  node('leftover').open = true;
+  await ctx.refresh();
+  calls.length = credentialCalls.length = 0;
+  ctx.rangeParams = () => ({ from: 200, to: 300, tz: -300 });
+  await ctx.refresh(true);
+  expect(calls.map((c) => c.route)).toContain('limit-leftover');
+  expect(credentialCalls.length).toBe(1);
 });
 
 test('quiet refresh on usage keeps existing charts visible without flashing Loading', async () => {

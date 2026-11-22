@@ -89,6 +89,9 @@ describe('burn rate', () => {
   test('never goes negative when a reset refills the percent', () => {
     expect(burnRate([pt(now - 5 * HOUR, 60), pt(now, 10)], now, 3 * HOUR)).toBe(0);
   });
+  test('returns null instead of NaN when the first point sits at now', () => {
+    expect(burnRate([pt(now, 10), pt(now, 10)], now, 3 * HOUR)).toBeNull();
+  });
 });
 
 describe('projection', () => {
@@ -125,5 +128,9 @@ describe('projection', () => {
   test('an account already at its limit is the first one full, now', () => {
     const got = projectPool([{ account: 'a', weight: 1, used: 100, resetsAt: now + DAY, lengthMs: week, rate: 0 }], now, HOUR, HOUR);
     expect(got.firstFull).toEqual({ account: 'a', at: now });
+  });
+  test('does not loop or return NaN when lengthMs is zero or negative', () => {
+    const got = projectPool([{ account: 'a', weight: 1, used: 20, resetsAt: now - HOUR, lengthMs: 0, rate: 5 }], now, 2 * HOUR, HOUR);
+    expect(got.points.every((p) => Number.isFinite(p.used))).toBe(true);
   });
 });

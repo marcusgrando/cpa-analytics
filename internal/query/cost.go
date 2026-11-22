@@ -1,7 +1,6 @@
 package query
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -148,7 +147,7 @@ func (t *Tokens) scanTargets() []any {
 
 // aggregate sums every row in the filter, grouped by keyExprs plus model and
 // tier, and prices each group. Keys come back as text.
-func aggregate(db *sql.DB, f Filter, table *pricing.Table, keyExprs ...string) ([]costRow, error) {
+func aggregate(db querier, f Filter, table *pricing.Table, keyExprs ...string) ([]costRow, error) {
 	cols := make([]string, 0, len(keyExprs)+2)
 	for _, expr := range keyExprs {
 		cols = append(cols, "CAST("+expr+" AS TEXT)")

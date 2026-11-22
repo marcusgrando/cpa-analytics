@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"strings"
 
 	"github.com/marcusgrando/cpa-analytics/internal/pricing"
@@ -37,7 +38,8 @@ func ParseConfig(raw []byte) (Config, error) {
 	if cfg.PricingURL == "" {
 		cfg.PricingURL = defaultPricingURL
 	}
-	if !strings.HasPrefix(cfg.PricingURL, "https://") && !strings.HasPrefix(cfg.PricingURL, "http://") {
+	parsedURL, err := url.Parse(cfg.PricingURL)
+	if err != nil || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") || parsedURL.Host == "" {
 		return Config{}, fmt.Errorf("pricing_url must be an http(s) URL, got %q", cfg.PricingURL)
 	}
 	if cfg.RetentionDays < 0 {
@@ -47,19 +49,21 @@ func ParseConfig(raw []byte) (Config, error) {
 		if strings.TrimSpace(model) == "" {
 			return Config{}, fmt.Errorf("price_overrides has an empty model name")
 		}
-		if o.Input < 0 || o.Output < 0 || negative(o.CacheRead) || negative(o.CacheWrite) {
-			return Config{}, fmt.Errorf("price_overrides.%s has a negative price", model)
+		if invalidPrice(o.Input) || invalidPrice(o.Output) || invalidOptionalPrice(o.CacheRead) || invalidOptionalPrice(o.CacheWrite) {
+			return Config{}, fmt.Errorf("price_overrides.%s must have non-negative finite prices", model)
 		}
 	}
 	for key, cost := range cfg.PlanCosts {
 		if strings.TrimSpace(key) == "" {
 			return Config{}, fmt.Errorf("plan_costs has an empty key")
 		}
-		if math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
+		if invalidPrice(cost) {
 			return Config{}, fmt.Errorf("plan_costs.%s must be a non-negative number", key)
 		}
 	}
 	return cfg, nil
 }
 
-func negative(price *float64) bool { return price != nil && *price < 0 }
+func invalidPrice(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) || v < 0 }
+
+func invalidOptionalPrice(price *float64) bool { return price != nil && invalidPrice(*price) }

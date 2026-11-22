@@ -162,8 +162,8 @@ func TestAntigravityQuotaPollerFeedsHistoryBurnAndPlans(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Run a second poll after the requests.
-	qp.now = func() time.Time { return now.Add(2 * time.Second) }
+	// Run a second poll after the requests using the synchronized clock setter.
+	qp.setClock(func() time.Time { return now.Add(2 * time.Second) })
 	qp.pollAll(nil)
 
 	from := now.Add(-1 * time.Hour).UnixMilli()

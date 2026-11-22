@@ -60,7 +60,7 @@ function changeDrivers(current, previous) {
 function markerImpact(points, marker, stat = 'median') {
   if (!Array.isArray(points) || !marker) return null;
   const agg = (slice) => {
-    let reqs = 0, input = 0, outTotal = 0, cost = 0, hit = 0;
+    let reqs = 0, inputReqs = 0, input = 0, outTotal = 0, cost = 0, hit = 0;
     for (const p of slice) {
       const n = Number(p.requests) || 0;
       const st = p[stat];
@@ -69,10 +69,14 @@ function markerImpact(points, marker, stat = 'median') {
       input += (st.input || 0) * n;
       outTotal += (st.output_total !== undefined ? st.output_total : (st.output || 0) + (st.reasoning || 0)) * n;
       cost += (st.cost_usd || 0) * n;
-      hit += (p.cache_hit_rate || 0) * n;
+      const inN = p.input_requests !== undefined ? Number(p.input_requests) || 0 : n;
+      if (inN > 0) {
+        inputReqs += inN;
+        hit += (p.cache_hit_rate || 0) * inN;
+      }
     }
     if (!reqs) return null;
-    return { reqs, input: input / reqs, outputTotal: outTotal / reqs, costUsd: cost / reqs, cacheHit: hit / reqs };
+    return { reqs, input: input / reqs, outputTotal: outTotal / reqs, costUsd: cost / reqs, cacheHit: inputReqs > 0 ? hit / inputReqs : null };
   };
   const before = agg(points.filter((p) => p.t < marker.t));
   const after = agg(points.filter((p) => p.t >= marker.t));
@@ -83,7 +87,7 @@ function markerImpact(points, marker, stat = 'median') {
     input: relativeChange(after.input, before.input),
     outputTotal: relativeChange(after.outputTotal, before.outputTotal),
     costUsd: relativeChange(after.costUsd, before.costUsd),
-    cacheHit: pointChange(after.cacheHit, before.cacheHit),
+    cacheHit: before.cacheHit !== null && after.cacheHit !== null ? pointChange(after.cacheHit, before.cacheHit) : null,
   };
 }
 

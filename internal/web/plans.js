@@ -159,6 +159,7 @@ function computeAccountPlanRow(item, opts) {
     planKey: key,
     group,
     groupLabel,
+    sharedPlan: Boolean(item.sharedPlan),
     isApiKey: Boolean(item.isApiKey),
     accountCount: 1,
     monthlyCost,
@@ -183,6 +184,75 @@ function computeAccountPlanRow(item, opts) {
     afterEarlyResetUSD: item.after_early_reset_usd ?? null,
     measuredRaw: { costUSD: measuredCostUSD, tokens: measuredTokens },
   };
+}
+
+// combineAccountGroupRows merges multi-group rows belonging to the same account
+// (such as Antigravity Gemini + Claude and GPT) into one whole-subscription
+// account item so realized API value and per-dollar multiples compare fairly
+// against single-quota subscriptions like Claude and Codex.
+function combineAccountGroupRows(items) {
+  const byAccount = new Map();
+  for (const it of items) {
+    const k = JSON.stringify([normProvider(it.provider), it.authIndex]);
+    if (!byAccount.has(k)) byAccount.set(k, []);
+    byAccount.get(k).push(it);
+  }
+  const out = [];
+  for (const members of byAccount.values()) {
+    if (members.length === 1 && !members[0].group) {
+      out.push(members[0]);
+      continue;
+    }
+    const first = members[0];
+    const sum = (f) => members.reduce((s, m) => s + (Number(m[f]) || 0), 0);
+    const uncached_input = sum('uncached_input');
+    const cache_read = sum('cache_read');
+    const cache_write = sum('cache_write');
+    const output = sum('output');
+    const reasoning = sum('reasoning');
+    const unclassified = sum('unclassified');
+    const totalInput = uncached_input + cache_read + cache_write;
+    const cost_usd = sum('cost_usd');
+    const totalTok = totalInput + output + reasoning + unclassified;
+    const best = members.reduce((a, b) => {
+      const sa = cost_usd > 0 ? (Number(a.cost_usd) || 0) : tokenBuckets(a).total;
+      const sb = cost_usd > 0 ? (Number(b.cost_usd) || 0) : tokenBuckets(b).total;
+      return sb > sa ? b : a;
+    });
+    const bestShare = best.top_model
+      ? (cost_usd > 0 ? ((Number(best.cost_usd) || 0) * (Number(best.top_model_share) || 0)) / cost_usd
+        : (totalTok > 0 ? (tokenBuckets(best).total * (Number(best.top_model_share) || 0)) / totalTok : 0))
+      : 0;
+    out.push({
+      authIndex: first.authIndex,
+      name: first.name,
+      provider: first.provider,
+      plan: first.plan,
+      isApiKey: first.isApiKey,
+      requests: sum('requests'),
+      failed: sum('failed'),
+      uncached_input,
+      cache_read,
+      cache_write,
+      output,
+      reasoning,
+      unclassified,
+      cost_usd,
+      unpriced_tokens: sum('unpriced_tokens'),
+      cache_hit_rate: totalInput > 0 ? cache_read / totalInput : 0,
+      top_model: best.top_model || '',
+      top_model_share: bestShare,
+      early_resets: sum('early_resets'),
+      after_early_reset_usd: sum('after_early_reset_usd'),
+      quota_measured: false,
+      weekly_pct: 0,
+      measured_cost_usd: 0,
+      group: '',
+      group_label: '',
+      groupCount: members.length,
+    });
+  }
+  return out;
 }
 
 // groupPlanRows rolls accounts of the same (provider, plan) into one row so
@@ -266,6 +336,7 @@ function groupPlanRows(accountRows, opts) {
       planKey: first.planKey,
       group: first.group || '',
       groupLabel: first.groupLabel || '',
+      sharedPlan: members.some((m) => m.sharedPlan),
       isApiKey,
       accountCount: members.length,
       accounts: members,
@@ -333,7 +404,7 @@ function rankPlanRows(rows, sortBy = 'realized', unit = 'realized') {
       if (diff) return diff;
     }
     if (b.realized.costUSD !== a.realized.costUSD) return b.realized.costUSD - a.realized.costUSD;
-    return (a.planKey || a.id).localeCompare(b.planKey || b.id);
+    return (a.planKey || '').localeCompare(b.planKey || '') || (a.id || '').localeCompare(b.id || '');
   });
 }
 
@@ -379,6 +450,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     PLAN_MONTH_DAYS, PLAN_WEEK_DAYS, DEFAULT_PLAN_COSTS,
     normProvider, planKey, resolvePlanCost, effectiveRangeDays,
-    computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
+    computeAccountPlanRow, combineAccountGroupRows, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
   };
 }

@@ -248,6 +248,7 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* sparkline.js */": "function sparkline(values, height, pad)",
 		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
 		"/* scatter.js */":   "function nearestPoint(points, x, y, radius)",
+		"/* drift.js */":     "function driftSeries(points,",
 		"/* plans.js */":     "function rankPlanRows(rows,",
 	} {
 		if strings.Contains(page, placeholder) {
@@ -467,7 +468,7 @@ func TestIndexChartsTotalsPerBucket(t *testing.T) {
 		`<div id="t-cost-trend" class="spark hero-spark"></div>`,
 		"tile('Requests', fmtCompact(t.requests), '', change(() => relativeChange(t.requests, prev.requests)), trend((b) => b.requests || 0, fmtCompact))",
 		"tile('Failed records', fmtCompact(t.failed), '', null, trend((b) => b.failed || 0, fmtCompact))",
-		"tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct))",
+		"tile('Cache hit rate', fmtPct(t.cache_hit_rate), '', change(() => (t.processed_tokens > 0 && prev.processed_tokens > 0 ? pointChange(t.cache_hit_rate, prev.cache_hit_rate) : null)), trend(cacheHitOf, fmtPct))",
 		"sumBuckets(data.daily.points, xs)",
 	} {
 		if !strings.Contains(page, want) {

@@ -39,69 +39,100 @@ type AffinityResult struct {
 // that name both a session and a credential. Rows recorded before the plugin
 // kept the credential have none.
 func Affinity(db *sql.DB, f Filter, table *pricing.Table) (AffinityResult, error) {
-	where, args := f.where(true)
-	rows, err := db.Query(`SELECT provider, session_id, (`+modelExpr+`) AS m, (`+tierExpr+`), auth_index, MIN(requested_at) AS at, SUM(cache_write), SUM(`+inputExpr+`)
+	// When filtering by account, inspect all accounts across sessions touched
+	// by that account so cross-account switches are still visible.
+	targetAccount := f.Account
+	baseFilter := f
+	baseFilter.Account = ""
+	where, args := baseFilter.where(true)
+	rows, err := db.Query(`SELECT provider, session_id, (`+modelExpr+`) AS m, (`+tierExpr+`) AS t, (`+table.BandSQL(inputExpr)+`) AS b, auth_index, `+callExpr+`, MIN(requested_at) AS at, MIN(id) AS first_id, SUM(cache_write)
 		FROM requests WHERE generate = 1 AND failed = 0 AND session_id <> '' AND auth_index <> '' AND `+where+`
-		GROUP BY provider, session_id, m, `+callExpr+`, auth_index
-		ORDER BY provider, session_id, m, at`, args...)
+		GROUP BY provider, session_id, m, t, b, auth_index, `+callExpr+`
+		ORDER BY provider, session_id, m, at, first_id`, args...)
 	if err != nil {
 		return AffinityResult{}, fmt.Errorf("affinity: %w", err)
 	}
 	defer rows.Close()
 
-	p := newPricer(table)
-	byProvider := map[string]*AffinityRow{}
-	var (
-		pairKey, lastAccount string
-		pairCalls            int
-		pairSwitched         bool
-		row                  *AffinityRow
-	)
-	closePair := func() {
-		if row == nil || pairCalls < 2 {
-			return
-		}
-		row.Sessions++
-		if pairSwitched {
-			row.SwitchedSessions++
-		}
+	type callEntry struct {
+		account    string
+		cacheWrite int64
+		cost       float64
 	}
+	type pairEntry struct {
+		provider string
+		calls    []callEntry
+		hasAcct  bool
+	}
+	p := newPricer(table)
+	var pairs []*pairEntry
+	var cur *pairEntry
+	var curPairKey, curCallID string
 	for rows.Next() {
 		var (
-			provider, session, model, tier, account string
-			at, cacheWrite, input                   int64
+			provider, session, model, tier, account, callID string
+			band, at, firstID, cacheWrite                   int64
 		)
-		if err := rows.Scan(&provider, &session, &model, &tier, &account, &at, &cacheWrite, &input); err != nil {
+		if err := rows.Scan(&provider, &session, &model, &tier, &band, &account, &callID, &at, &firstID, &cacheWrite); err != nil {
 			return AffinityResult{}, fmt.Errorf("affinity scan: %w", err)
 		}
+		_ = at
+		_ = firstID
+		cost, _ := p.price(model, tier, band, Tokens{CacheWrite: cacheWrite})
 		key := provider + "\x1f" + session + "\x1f" + model
-		switched := key == pairKey && account != lastAccount
-		if key != pairKey {
-			closePair()
-			pairKey, pairCalls, pairSwitched = key, 0, false
+		if cur == nil || key != curPairKey {
+			cur = &pairEntry{provider: provider}
+			pairs = append(pairs, cur)
+			curPairKey = key
+			curCallID = ""
 		}
-		row = byProvider[provider]
-		if row == nil {
-			row = &AffinityRow{Provider: provider}
-			byProvider[provider] = row
+		if targetAccount == "" || account == targetAccount {
+			cur.hasAcct = true
 		}
-		cost, _ := p.price(model, tier, input, Tokens{CacheWrite: cacheWrite})
-		row.Calls++
-		row.CacheWrite += cacheWrite
-		row.CacheWriteUSD += cost
-		if switched {
-			row.Switches++
-			row.SwitchCacheWrite += cacheWrite
-			row.SwitchCacheWriteUSD += cost
-			pairSwitched = true
+		if len(cur.calls) > 0 && curCallID == callID && cur.calls[len(cur.calls)-1].account == account {
+			cur.calls[len(cur.calls)-1].cacheWrite += cacheWrite
+			cur.calls[len(cur.calls)-1].cost += cost
+		} else {
+			cur.calls = append(cur.calls, callEntry{account: account, cacheWrite: cacheWrite, cost: cost})
+			curCallID = callID
 		}
-		pairCalls++
-		lastAccount = account
 	}
 	if err := rows.Err(); err != nil {
 		return AffinityResult{}, fmt.Errorf("affinity rows: %w", err)
 	}
-	closePair()
+
+	byProvider := map[string]*AffinityRow{}
+	for _, pe := range pairs {
+		if !pe.hasAcct {
+			continue
+		}
+		row := byProvider[pe.provider]
+		if row == nil {
+			row = &AffinityRow{Provider: pe.provider}
+			byProvider[pe.provider] = row
+		}
+		var lastAccount string
+		pairSwitched := false
+		for i, c := range pe.calls {
+			switched := i > 0 && c.account != lastAccount
+			row.Calls++
+			row.CacheWrite += c.cacheWrite
+			row.CacheWriteUSD += c.cost
+			if switched {
+				row.Switches++
+				row.SwitchCacheWrite += c.cacheWrite
+				row.SwitchCacheWriteUSD += c.cost
+				pairSwitched = true
+			}
+			lastAccount = c.account
+		}
+		if len(pe.calls) >= 2 {
+			row.Sessions++
+			if pairSwitched {
+				row.SwitchedSessions++
+			}
+		}
+	}
 
 	res := AffinityResult{Providers: make([]AffinityRow, 0, len(byProvider))}
 	for _, r := range byProvider {

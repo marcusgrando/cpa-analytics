@@ -49,7 +49,10 @@ func Parse(ua string) (name, version string) {
 	if ua == "" {
 		return "", ""
 	}
-	product, _, _ := strings.Cut(ua, " ")
+	product := ua
+	if idx := strings.IndexAny(ua, " \t"); idx >= 0 {
+		product = ua[:idx]
+	}
 	productName, productVersion, _ := strings.Cut(product, "/")
 	lower := strings.ToLower(strings.TrimSpace(productName))
 	ver := cleanVersion(productVersion)

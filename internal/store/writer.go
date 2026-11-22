@@ -26,6 +26,10 @@ type Writer struct {
 	logf       func(string, ...any)
 
 	written, dropped atomic.Uint64
+	pendingCount     atomic.Int64
+
+	enqueueMu sync.RWMutex
+	closed    bool
 
 	mu          sync.Mutex
 	lastError   string
@@ -57,15 +61,23 @@ func newWriter(s *Store, capacity int, flushEvery time.Duration, batch int, logf
 }
 
 // Enqueue hands a row to the writer. It returns false and counts a drop when
-// the queue is full or the writer is nil.
+// the queue is full, the writer is closed, or the writer is nil.
 func (w *Writer) Enqueue(r Row) bool {
 	if w == nil {
 		return false
 	}
+	w.enqueueMu.RLock()
+	if w.closed {
+		w.enqueueMu.RUnlock()
+		w.dropped.Add(1)
+		return false
+	}
 	select {
 	case w.rows <- r:
+		w.enqueueMu.RUnlock()
 		return true
 	default:
+		w.enqueueMu.RUnlock()
 		w.dropped.Add(1)
 		return false
 	}
@@ -79,7 +91,7 @@ func (w *Writer) Stats() WriterStats {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return WriterStats{
-		Written: w.written.Load(), Dropped: w.dropped.Load(), Queued: len(w.rows),
+		Written: w.written.Load(), Dropped: w.dropped.Load(), Queued: len(w.rows) + int(w.pendingCount.Load()),
 		LastError: w.lastError, LastErrorAt: w.lastErrorAt,
 	}
 }
@@ -89,7 +101,12 @@ func (w *Writer) Close() {
 	if w == nil {
 		return
 	}
-	w.once.Do(func() { close(w.stop) })
+	w.once.Do(func() {
+		w.enqueueMu.Lock()
+		w.closed = true
+		w.enqueueMu.Unlock()
+		close(w.stop)
+	})
 	<-w.done
 }
 
@@ -102,6 +119,7 @@ func (w *Writer) run() {
 		select {
 		case r := <-w.rows:
 			pending = append(pending, r)
+			w.pendingCount.Store(int64(len(pending)))
 			if len(pending) >= w.batch {
 				pending = w.flush(pending)
 			}
@@ -112,6 +130,7 @@ func (w *Writer) run() {
 				select {
 				case r := <-w.rows:
 					pending = append(pending, r)
+					w.pendingCount.Store(int64(len(pending)))
 				default:
 					w.flush(pending)
 					return
@@ -123,6 +142,7 @@ func (w *Writer) run() {
 
 func (w *Writer) flush(pending []Row) []Row {
 	if len(pending) == 0 {
+		w.pendingCount.Store(0)
 		return pending
 	}
 	if err := w.store.InsertBatch(pending); err != nil {
@@ -136,11 +156,15 @@ func (w *Writer) flush(pending []Row) []Row {
 			w.lastLogAt = now
 		}
 		w.mu.Unlock()
-		if shouldLog {
+		if shouldLog && w.logf != nil {
 			w.logf("cpa-analytics: dropped %d usage rows: %v", len(pending), err)
 		}
 	} else {
 		w.written.Add(uint64(len(pending)))
+		w.mu.Lock()
+		w.lastError = ""
+		w.mu.Unlock()
 	}
+	w.pendingCount.Store(0)
 	return pending[:0]
 }

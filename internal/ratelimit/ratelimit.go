@@ -43,12 +43,16 @@ func FromHeaders(h http.Header, respondedAt time.Time) Snapshot {
 	}
 	s.Session = claudeWindow(h, "5h")
 	s.Weekly = claudeWindow(h, "7d")
+	var sessionMinutes int64
 	for _, name := range []string{"Primary", "Secondary"} {
 		w, minutes := codexWindow(h, name, respondedAt)
 		switch {
 		case w == nil:
 		case minutes <= sessionMaxMinutes:
-			s.Session = w
+			if s.Session == nil || minutes < sessionMinutes {
+				s.Session = w
+				sessionMinutes = minutes
+			}
 		case minutes >= weekMinutes && minutes < monthMinutes:
 			s.Weekly = w
 		}
@@ -87,7 +91,7 @@ func codexWindow(h http.Header, name string, respondedAt time.Time) (*Window, in
 	w := &Window{UsedPct: used}
 	if reset, ok := epochSeconds(h.Get(prefix + "Reset-At")); ok {
 		w.ResetAt = reset
-	} else if after, err := strconv.ParseInt(strings.TrimSpace(h.Get(prefix+"Reset-After-Seconds")), 10, 64); err == nil && after >= 0 {
+	} else if after, err := strconv.ParseInt(strings.TrimSpace(h.Get(prefix+"Reset-After-Seconds")), 10, 64); err == nil && after >= 0 && after <= math.MaxInt64/int64(time.Second) {
 		w.ResetAt = respondedAt.Add(time.Duration(after) * time.Second).UnixMilli()
 	}
 	return w, minutes

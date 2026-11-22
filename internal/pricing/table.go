@@ -161,7 +161,7 @@ func ParseModelsDev(raw []byte) (*Table, error) {
 				continue
 			}
 			key := idNorm
-			if !strings.Contains(key, "/") {
+			if !strings.HasPrefix(key, provNorm+"/") {
 				key = provNorm + "/" + idNorm
 			}
 			rates[key] = modelRate{standard: Rates{
@@ -341,7 +341,13 @@ func addBareAliases(rates map[string]modelRate) {
 		firstParty bool
 	}
 	candidates := map[string]candidate{}
-	for key, rate := range rates {
+	keys := make([]string, 0, len(rates))
+	for key := range rates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		rate := rates[key]
 		alias := bareName(key)
 		if alias == "" || alias == key {
 			continue
@@ -368,17 +374,24 @@ func addBareAliases(rates map[string]modelRate) {
 	}
 }
 
-func sameRate(a, b modelRate) bool {
-	if a.standard != b.standard || len(a.long) != len(b.long) {
+func sameTiers(a, b map[string]Rates) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for i := range a.long {
-		if a.long[i].above != b.long[i].above || a.long[i].standard != b.long[i].standard {
+	for tier, ra := range a {
+		if rb, ok := b[tier]; !ok || ra != rb {
 			return false
 		}
 	}
-	for tier, ra := range a.tiers {
-		if rb, ok := b.tiers[tier]; ok && ra != rb {
+	return true
+}
+
+func sameRate(a, b modelRate) bool {
+	if a.standard != b.standard || len(a.long) != len(b.long) || !sameTiers(a.tiers, b.tiers) {
+		return false
+	}
+	for i := range a.long {
+		if a.long[i].above != b.long[i].above || a.long[i].standard != b.long[i].standard || !sameTiers(a.long[i].tiers, b.long[i].tiers) {
 			return false
 		}
 	}
@@ -421,9 +434,13 @@ func number(v any) (float64, bool) {
 
 // WithOverrides returns a table where overrides (USD per 1M tokens) win over LiteLLM.
 func WithOverrides(t *Table, overrides map[string]PriceOverride) *Table {
-	out := &Table{rates: t.rates, thresholds: t.thresholds, overrides: make(map[string]Rates, len(overrides))}
+	out := &Table{overrides: make(map[string]Rates, len(overrides))}
+	if t != nil {
+		out.rates = t.rates
+		out.thresholds = t.thresholds
+	}
 	for model, o := range overrides {
-		out.overrides[normalize(model)] = Rates{
+		out.overrides[stripVariant(normalize(model))] = Rates{
 			Input:      o.Input / 1e6,
 			Output:     o.Output / 1e6,
 			CacheRead:  orInput(o.CacheRead, o.Input) / 1e6,

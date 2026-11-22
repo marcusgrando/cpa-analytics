@@ -276,9 +276,12 @@ describe('Claude extra usage', () => {
     expect(parseClaudeSpend({})).toBeNull();
   });
 
-  test('extra_usage is read when spend is missing', () => {
-    const body = { extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 1234.0, currency: 'USD', decimal_places: 2 } };
+  test('extra_usage is read when spend is missing, defaulting missing decimal_places to 2', () => {
+    const body = { extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 1234.0, currency: 'USD' } };
     expect(parseClaudeSpend(body)).toEqual({ used: 12.34, limit: 500, currency: 'USD' });
+    expect(parseClaudeSpend({ spend: { used: { amount_minor: 500, currency: 'USD' }, limit: null, enabled: true } })).toEqual({
+      used: 5, limit: null, currency: 'USD',
+    });
   });
 });
 
@@ -386,6 +389,20 @@ describe('other providers', () => {
       ['weekly:claude-and-gpt', 'Weekly, Claude and GPT', 0, null, 7 * DAY],
       ['weekly:gemini-4-argon', 'Weekly, Gemini 4 Argon', 0.2, Date.parse('2026-11-27T13:09:09Z'), 7 * DAY],
     ]);
+  });
+
+  test('Antigravity quota summary ignores null remainingFraction, trailing whitespace and empty slugs', () => {
+    const windows = parseAntigravityQuotaSummary({
+      groups: [
+        { displayName: '   ', buckets: [{ window: 'weekly', remainingFraction: 0.5 }] },
+        { displayName: '---', buckets: [{ window: 'weekly', remainingFraction: 0.5 }] },
+        { displayName: 'Gemini Models  ', buckets: [
+          { window: '5h', remainingFraction: null, resetTime: '2026-11-20T21:00:00Z' },
+          { window: 'weekly', remainingFraction: 0.75, resetTime: '2026-11-27T11:00:00Z' },
+        ] },
+      ],
+    });
+    expect(windows.map((w) => [w.id, w.label, w.used])).toEqual([['weekly:gemini', 'Weekly, Gemini', 25]]);
   });
 
   test('an Antigravity quota summary without groups fails so the page falls back to fetchAvailableModels', () => {
@@ -660,5 +677,33 @@ describe('limits rendering', () => {
     expect(walk([poolsRendered[1]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
     expect(walk([poolsRendered[2]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
     expect(walk(sections, (n) => hasClass(n, 'trend')).length).toBe(2);
+  });
+
+  test('multi-account pool at 100% renders critical red Limit reached and Antigravity empty trend explains polling', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: { accounts: [] },
+      results: [
+        {
+          account: { auth_index: 'ag1', provider: 'antigravity', email: 'one@example.com' },
+          plan: 'Pro',
+          weight: 5,
+          windows: [{ id: 'weekly:gemini', label: 'Weekly, Gemini', used: 100, resetsAt: now + 2 * DAY, lengthMs: 7 * DAY }],
+        },
+        {
+          account: { auth_index: 'ag2', provider: 'antigravity', email: 'two@example.com' },
+          plan: 'Pro',
+          weight: 5,
+          windows: [{ id: 'weekly:gemini', label: 'Weekly, Gemini', used: 100, resetsAt: now + 3 * DAY, lengthMs: 7 * DAY }],
+        },
+      ],
+    });
+    const pool = walk(sections, (n) => hasClass(n, 'pool'))[0];
+    const bigFill = walk([pool], (n) => hasClass(n, 'fill'))[0];
+    expect(bigFill.attrs.style).toContain('var(--critical)');
+    expect(textOf(pool)).toContain('Limit reached');
+    expect(textOf(pool)).toContain('polled every 5 minutes');
   });
 });

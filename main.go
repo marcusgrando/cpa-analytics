@@ -87,8 +87,12 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, api *C.cliproxy_plugin_api)
 	api.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
 	api.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
 	instanceMu.Lock()
+	prev := instance
 	instance = plugin.New(cHost{})
 	instanceMu.Unlock()
+	if prev != nil {
+		prev.Close()
+	}
 	return 0
 }
 
@@ -142,6 +146,7 @@ func cliproxyPluginShutdown() {
 	defer func() { _ = recover() }()
 	instanceMu.Lock()
 	p := instance
+	instance = nil
 	instanceMu.Unlock()
 	if p != nil {
 		p.Close()
@@ -174,8 +179,10 @@ func (cHost) Call(method string, req []byte) ([]byte, error) {
 	var resp C.cliproxy_buffer
 	rc := C.call_host_api(cMethod, reqPtr, C.size_t(len(req)), &resp)
 	var raw []byte
-	if resp.ptr != nil && resp.len > 0 {
-		raw = C.GoBytes(resp.ptr, C.int(resp.len))
+	if resp.ptr != nil {
+		if resp.len > 0 {
+			raw = C.GoBytes(resp.ptr, C.int(resp.len))
+		}
 		C.free_host_buffer(resp.ptr, resp.len)
 	}
 	var env struct {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   PLAN_MONTH_DAYS, PLAN_WEEK_DAYS,
-  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
+  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, combineAccountGroupRows, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
 } from './plans.js';
 
 describe('plan cost resolution', () => {
@@ -258,6 +258,37 @@ describe('cost-benefit and ranking', () => {
     expect(rl[0].windows).toEqual({ session: 3 });
     expect(rl[1].row.group).toBe('claude-and-gpt');
     expect(rl[1].windows).toEqual({ weekly: 1 });
+  });
+
+  test('combineAccountGroupRows merges Antigravity groups into one whole-subscription row for realized metrics', () => {
+    const opts = { effectiveDays: PLAN_WEEK_DAYS, configCosts: {}, sessionCosts: {} };
+    const combined = combineAccountGroupRows([
+      {
+        authIndex: 'ag1', name: 'ag@example.com', provider: 'antigravity', plan: 'Pro',
+        group: 'gemini', group_label: 'Gemini', requests: 20, cost_usd: 40,
+        uncached_input: 1000, cache_read: 9000, output: 500, top_model: 'gemini-4-neon', top_model_share: 0.75,
+      },
+      {
+        authIndex: 'ag1', name: 'ag@example.com', provider: 'antigravity', plan: 'Pro',
+        group: 'claude-and-gpt', group_label: 'Claude and GPT', requests: 10, cost_usd: 60,
+        uncached_input: 2000, cache_read: 8000, output: 1000, top_model: 'claude-sonnet-4-6', top_model_share: 1.0,
+      },
+    ]);
+    expect(combined.length).toBe(1);
+    const row = computeAccountPlanRow(combined[0], opts);
+    expect(row.group).toBe('');
+    expect(row.requests).toBe(30);
+    expect(row.realized.costUSD).toBe(100);
+    expect(row.topModel).toBe('claude-sonnet-4-6');
+    expect(row.topModelShare).toBeCloseTo(0.6, 6);
+    expect(row.realized.leverage).toBeCloseTo(100 / (20 * (PLAN_WEEK_DAYS / PLAN_MONTH_DAYS)), 6);
+  });
+
+  test('rankPlanRows breaks ties deterministically by planKey and id', () => {
+    const opts = { effectiveDays: 7 };
+    const a = computeAccountPlanRow({ authIndex: 'b', provider: 'codex', plan: 'Pro', cost_usd: 100 }, opts);
+    const b = computeAccountPlanRow({ authIndex: 'a', provider: 'claude', plan: 'Max 20x', cost_usd: 100 }, opts);
+    expect(rankPlanRows([a, b], 'realized').map((r) => r.planKey)).toEqual(['claude:Max 20x', 'codex:Pro']);
   });
 
   test('formats plan_costs YAML snippet cleanly', () => {

@@ -3,12 +3,30 @@
 package query
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// querier is satisfied by both *sql.DB and *sql.Tx so multi-query endpoints
+// can run inside a single read-only WAL transaction.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func withReadTx(db *sql.DB, fn func(querier) error) error {
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return fn(tx)
+}
 
 const (
 	defaultRange = 7 * 24 * time.Hour
@@ -125,7 +143,12 @@ func (f Filter) where(withFrom bool) (string, []any) {
 	}
 	add("provider", f.Provider)
 	add("("+modelExpr+")", f.Model)
-	add("client_name", f.Client)
+	if f.Client == "unknown" {
+		conds = append(conds, "("+clientNameExpr+") = ?")
+		args = append(args, f.Client)
+	} else {
+		add("client_name", f.Client)
+	}
 	add("auth_index", f.Account)
 	add("api_key_hash", f.APIKeyHash)
 	return strings.Join(conds, " AND "), args
@@ -145,10 +168,11 @@ func (f Filter) bucketStart(at, size int64) int64 {
 	return start - f.offsetMillis()
 }
 
-// bucketSQL is the SQL form of bucketStart for a non-negative requested_at.
+// bucketSQL is the SQL form of bucketStart, flooring negative remainders too.
 func (f Filter) bucketSQL(size int64) string {
 	off := f.offsetMillis()
-	return fmt.Sprintf("(((requested_at + %d) / %d) * %d - %d)", off, size, size, off)
+	return fmt.Sprintf("(CASE WHEN (requested_at + %d) < 0 AND (requested_at + %d) %% %d <> 0 THEN (((requested_at + %d) / %d) - 1) * %d - %d ELSE ((requested_at + %d) / %d) * %d - %d END)",
+		off, off, size, off, size, size, off, off, size, size, off)
 }
 
 const (

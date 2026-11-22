@@ -41,32 +41,93 @@ func classifyRateLimitWindow(sessionPct, weeklyPct sql.NullFloat64) string {
 	}
 }
 
-func nearestQuotaPct(db *sql.DB, provider, authIndex, groupID, windowKind string, at int64) sql.NullFloat64 {
-	var pct float64
-	err := db.QueryRow(`SELECT used_pct FROM quota_snapshots
-		WHERE provider = ? AND auth_index = ? AND group_id = ? AND window_kind = ?
-			AND recorded_at >= ? AND recorded_at <= ?
-		ORDER BY ABS(recorded_at - ?) LIMIT 1`,
-		provider, authIndex, groupID, windowKind, at-rateLimitSnapBefore, at+rateLimitSnapAfter, at).Scan(&pct)
-	if err != nil {
-		return sql.NullFloat64{}
-	}
-	return sql.NullFloat64{Float64: pct, Valid: true}
+type quotaSnapPoint struct {
+	at    int64
+	pct   float64
+	reset sql.NullInt64
 }
 
-func planRateLimits(db *sql.DB, f Filter) ([]PlanRateLimit, error) {
-	where, args := f.where(true)
-	knownGroups, err := loadKnownQuotaGroups(db, f)
+type quotaSnapKey struct {
+	provider, authIndex, group, windowKind string
+}
+
+// loadRateLimitSnapshots prefetches Antigravity quota snapshots covering the
+// filter range so 429 classification runs in memory without 2N queries.
+func loadRateLimitSnapshots(db querier, f Filter) (map[quotaSnapKey][]quotaSnapPoint, error) {
+	where, args := snapshotFilterWhere(f, f.From.UnixMilli()-rateLimitSnapBefore, f.To.UnixMilli()+rateLimitSnapAfter)
+	rows, err := db.Query(`SELECT lower(provider), auth_index, group_id, window_kind, recorded_at, used_pct, reset_at
+		FROM quota_snapshots WHERE `+where+` ORDER BY recorded_at, id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("plan rate limit snapshots: %w", err)
+	}
+	defer rows.Close()
+	out := map[quotaSnapKey][]quotaSnapPoint{}
+	for rows.Next() {
+		var k quotaSnapKey
+		var pt quotaSnapPoint
+		if err := rows.Scan(&k.provider, &k.authIndex, &k.group, &k.windowKind, &pt.at, &pt.pct, &pt.reset); err != nil {
+			return nil, fmt.Errorf("plan rate limit snapshots scan: %w", err)
+		}
+		out[k] = append(out[k], pt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("plan rate limit snapshots rows: %w", err)
+	}
+	return out, nil
+}
+
+// lookupRateLimitSnap picks the best polled snapshot for a 429 at timestamp at:
+// prefers the earliest post-429 snapshot within rateLimitSnapAfter (from the
+// debounced post-traffic poll), otherwise falls back to the latest non-expired
+// pre-429 snapshot within rateLimitSnapBefore.
+func lookupRateLimitSnap(snaps []quotaSnapPoint, at int64) sql.NullFloat64 {
+	var (
+		hasPost bool
+		postPct float64
+		hasPre  bool
+		prePct  float64
+	)
+	for _, s := range snaps {
+		if s.at >= at && s.at <= at+rateLimitSnapAfter {
+			if !hasPost {
+				hasPost = true
+				postPct = s.pct
+			}
+			break
+		}
+		if s.at < at && s.at >= at-rateLimitSnapBefore {
+			if s.reset.Valid && s.reset.Int64 <= at {
+				continue // window already reset before this 429
+			}
+			hasPre = true
+			prePct = s.pct
+		}
+	}
+	if hasPost {
+		return sql.NullFloat64{Float64: postPct, Valid: true}
+	}
+	if hasPre {
+		return sql.NullFloat64{Float64: prePct, Valid: true}
+	}
+	return sql.NullFloat64{}
+}
+
+func planRateLimits(db querier, f Filter) ([]PlanRateLimit, error) {
+	snaps, err := loadRateLimitSnapshots(db, f)
 	if err != nil {
 		return nil, err
 	}
+	where, args := f.where(true)
 	// Split billing can produce multiple rows for one call. Only snapshots
 	// on the 429 itself (or nearest polled quota snapshot for Antigravity)
 	// describe the limits it encountered.
 	rows, err := db.Query(`WITH failures AS (
-		SELECT provider, auth_index, trace_id, session_id, model, api_key_hash, requested_at,
+		SELECT provider, auth_index,
+			MIN(trace_id) AS trace_id, MIN(session_id) AS session_id,
+			MIN(model) AS model, MIN(api_key_hash) AS api_key_hash,
+			MIN(requested_at) AS requested_at,
 			MAX(`+modelExpr+`) AS reported_model,
-			requested_at + MAX(latency_ms) AS ended_at,
+			MIN(requested_at) + MAX(latency_ms) AS ended_at,
 			MAX(limit_session_pct) AS session_pct, MAX(limit_weekly_pct) AS weekly_pct
 		FROM requests
 		WHERE auth_index <> '' AND failed = 1 AND status_code = 429 AND `+where+`
@@ -103,12 +164,13 @@ func planRateLimits(db *sql.DB, f Filter) ([]PlanRateLimit, error) {
 		}
 		var group string
 		if strings.EqualFold(prov, "antigravity") {
-			group, _ = antigravityModelGroup(model, knownGroups[accountProviderKey{authIdx, prov}])
+			group, _ = antigravityModelGroup(model)
+			lp := strings.ToLower(prov)
 			if !sessionPct.Valid {
-				sessionPct = nearestQuotaPct(db, prov, authIdx, group, "session", at)
+				sessionPct = lookupRateLimitSnap(snaps[quotaSnapKey{lp, authIdx, group, "session"}], at)
 			}
 			if !weeklyPct.Valid {
-				weeklyPct = nearestQuotaPct(db, prov, authIdx, group, "weekly", at)
+				weeklyPct = lookupRateLimitSnap(snaps[quotaSnapKey{lp, authIdx, group, "weekly"}], at)
 			}
 		}
 		k := rlKey{prov, authIdx, group, classifyRateLimitWindow(sessionPct, weeklyPct), following}

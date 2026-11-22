@@ -1,13 +1,11 @@
 package plugin
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/marcusgrando/cpa-analytics/internal/pricing"
-	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -19,22 +17,15 @@ const (
 
 // fetchViaHost downloads a URL through host.http.do so CPA's proxy settings apply.
 func (p *Plugin) fetchViaHost(url string) ([]byte, error) {
-	if p.host == nil {
-		return nil, errors.New("host callbacks unavailable")
-	}
-	req, err := json.Marshal(pluginapi.HTTPRequest{Method: "GET", URL: url})
+	return p.fetchViaHostStop(url, nil)
+}
+
+func (p *Plugin) fetchViaHostStop(url string, stop <-chan struct{}) ([]byte, error) {
+	resp, err := doHostHTTP(p.host, pluginapi.HTTPRequest{Method: http.MethodGet, URL: url}, httpTimeout, stop)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := p.host.Call(pluginabi.MethodHostHTTPDo, req)
-	if err != nil {
-		return nil, err
-	}
-	var resp pluginapi.HTTPResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode host.http.do response: %w", err)
-	}
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
 	}
 	return resp.Body, nil
@@ -52,21 +43,28 @@ func (p *Plugin) prices() *pricing.Table {
 	return pricing.WithOverrides(tbl, overrides)
 }
 
-// startPricing (re)starts the background refresher for url.
+// startPricing (re)starts the background refresher for url. Callers hold p.lifecycleMu.
 func (p *Plugin) startPricing(url string, kv pricing.KV) {
 	p.mu.Lock()
-	old := p.refresher
-	p.refresher = nil
+	old, oldStop := p.refresher, p.pricingStop
+	p.refresher, p.pricingStop = nil, nil
 	p.mu.Unlock()
+	if oldStop != nil {
+		close(oldStop)
+	}
 	old.Stop()
-	r := pricing.NewRefresher(p.fetchViaHost, kv, url, pricingRefreshEvery).WithFallbacks(
+	stop := make(chan struct{})
+	r := pricing.NewRefresher(func(u string) ([]byte, error) {
+		return p.fetchViaHostStop(u, stop)
+	}, kv, url, pricingRefreshEvery).WithFallbacks(
 		pricing.FallbackSource{Name: "modelsdev", URL: modelsDevPricingURL, Parse: pricing.ParseModelsDev},
 		pricing.FallbackSource{Name: "openrouter", URL: openRouterModelsURL, Parse: pricing.ParseOpenRouter},
 	)
+	r.Start()
 	p.mu.Lock()
 	p.refresher = r
+	p.pricingStop = stop
 	p.mu.Unlock()
-	r.Start()
 }
 
 // pricingStatus reports the refresher state, or just the URL before it starts.

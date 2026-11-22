@@ -1,6 +1,6 @@
 # cpa-analytics: token usage analytics plugin for CLIProxyAPI
 
-Status: for owner approval. Date: 2026-11-14.
+Status: implemented (current design). Date: 2026-11-14 (updated 2026-11-22).
 CLIProxyAPI reference: `github.com/router-for-me/CLIProxyAPI/v8`, release `v8.0.71` (commit `bd9c766`), the version in production. File references below point into that tree. The plugin ABI, usage, accounting and interceptor files are identical to `e96d4c4`, where the analysis started.
 
 ## Why
@@ -60,13 +60,13 @@ The owner asked for the most integrated option, which is approach 1.
 
 - `usage_plugin`: converts each `UsageRecord` into a row and hands it to the writer.
 - `request_interceptor` before auth, with `request_interceptor_omit_body_before`: reads `User-Agent` and stores `TraceID -> User-Agent` in a bounded in-memory map with a TTL of 10 minutes (long streaming requests finish well inside that). It never modifies the request and returns an empty response.
-- `management_api`: data endpoints under `/v0/management/plugins/cpa-analytics/...` (exact base path comes from `ManagementRegistrationRequest.BasePath`) and one `ResourceRoute` serving the dashboard page, labelled "Analytics" in the CPA menu.
+- `management_api`: data endpoints under `/v0/management/cpa-analytics/...` and one `ResourceRoute` serving the dashboard page, labelled "Analytics" in the CPA menu.
 
 ### Storage
 
 SQLite via `modernc.org/sqlite` (pure Go, so the only cgo is the ABI shim). WAL mode. Path from config field `db_path`, default `/CLIProxyAPI/data/cpa-analytics.db`, which the owner maps to a Docker volume.
 
-One table of raw facts. Aggregates are computed at query time. At the expected volume (one owner, tens of thousands of requests per month) indexed scans over months of rows return in milliseconds. If that stops being true, add a daily rollup table then.
+Three tables: `requests` (raw request facts), `kv` (cached pricing catalogs), and `quota_snapshots` (polled Antigravity quota buckets). Aggregates are computed at query time. At the expected volume (one owner, tens of thousands of requests per month) indexed scans over months of rows return in milliseconds. If that stops being true, add a daily rollup table then.
 
 `requests` columns:
 
@@ -107,7 +107,7 @@ The port names the CPA release it was copied from. Table tests use fixtures take
 
 Every exported ABI entry point recovers from panics and returns an error envelope.
 
-`GET .../health` returns rows written, rows dropped, last write error, interceptor join hit rate, and pricing table age. The dashboard shows only storage errors, lost records, write errors and pricing refresh failures. Writer and interceptor counters describe the running process, not the selected period, so they stay out of the usage page.
+`GET .../health` returns rows written, rows dropped, last write error, interceptor join hit rate, pricing table status, and Antigravity quota poller status (`quota_poller`). The dashboard shows storage errors, lost records, write errors, pricing refresh failures, and quota poll failures. Writer and interceptor counters describe the running process, not the selected period, so they stay out of the usage page.
 
 ### Pricing and cost
 
@@ -131,7 +131,7 @@ Changing provider, model, client or API key keeps the displayed time range and r
 
 Account affinity, quota left at reset and cost quality use collapsed native disclosures after the main analyses. They query on expansion and retain the result for that selection. Closed sections do not query on refresh. Open sections refresh with the page, and later expansions wait for the active load before querying. Tokens without a price always show a warning next to the cost total, using the summary response. The previous-period summary is queried only when the current summary's `data_since` confirms that recording covers that entire period.
 
-Provider colors (owner's request, 2026-11-15): wherever the provider is the series (cost share by provider, usage over time, the provider mark in the model breakdown), Claude, Codex and Gemini wear their brand colors. Light: Claude `#d97757` (the logo orange), Codex `#3941ff` (the darkest stop of the Codex icon gradient), Gemini `#4796e3` (the start of the Gemini gradient). Dark: Claude `#d4704f` and Codex `#4549ff`, stepped into the dark lightness band and to 3:1 on the dark surface, and Gemini unchanged. The three pass the dataviz palette checks against each other in both themes. Any other provider takes one spare green (light `#008300`, dark `#13a065`), the only color that stays apart from all three for color-blind viewers, in order of first appearance. The rest share the overflow gray, and the legend and tables name them. Google's blue, Kimi's and Meta's blues, and the monochrome xAI and OpenAI marks would collide with these, so they get no brand color. The Limits view keeps neutral bars. Claude orange is too close to the critical red that marks a spent account to share a section with it. The value-of-the-weekly-limit chart draws each account in its provider's color, and a further account of the same provider takes the next dash pattern (in auth index order). Past four accounts of one provider the rest share the overflow gray.
+Provider colors (owner's request, 2026-11-15, updated 2026-11-22): wherever the provider is the series (cost share by provider, usage over time, the provider mark in the model breakdown), Claude, Codex, Gemini, and Antigravity wear dedicated brand colors. Light: Claude `#d97757`, Codex `#3941ff`, Gemini `#4796e3`, Antigravity `#0d7c66`. Dark: Claude `#d4704f`, Codex `#4549ff`, Gemini `#4796e3`, Antigravity `#2bb69a`. Any other provider takes one spare green (light `#008300`, dark `#13a065`) in order of first appearance, and the rest share the overflow gray while the legend and tables name them. The Limits view keeps neutral bars. Claude orange is too close to the critical red that marks a spent account to share a section with it. The value-of-the-weekly-limit chart draws each account in its provider's color, and a further account of the same provider takes the next dash pattern (in auth index order). Past four accounts of one provider the rest share the overflow gray.
 
 Hue is reserved (owner's request for fewer scattered colors, 2026-11-15). Color marks identity that recurs across the page (providers, and the categorical slots of the drift chart) and status (good, warning, critical). Everything that only splits one bar (token types, service tiers, price sources) and the Limits meters and trend use one cool gray ramp of five steps, light `#1e2633 #3f495b #626d81 #8590a3 #a9b2c1` on `#ffffff` and dark `#eceef2 #c4cad4 #9ba3b1 #77808f #5a6372` on `#181a1e`, validated as an ordinal ramp in both themes. Service tiers take every other step first so two or three tiers stay apart. No text sits on a colored fill: each legend entry carries the value and its share. Secondary text clears 4.5:1 on page and card in both themes.
 
@@ -158,7 +158,7 @@ Views:
 8. Quota left at reset: for each weekly cycle that ended in the range, what the account had not used, priced at that cycle's own cost per 1%. Unused quota does not carry over, so this is what the subscription paid for and nobody used. See below.
 9. Account affinity: per provider, how often a session moved to another account and how much cache it wrote again because of it. See below.
 10. Latency: one dot per successful streamed call, time to first token against total latency on log scales, colored by provider, with dashed lines at the 95th percentile. At most 3,000 calls are drawn, evenly sampled in time order. Percentiles cover every call.
-11. Requests: a dedicated third tab (`Usage | Limits | Requests`) sharing the top filters (period, provider, model, client, account, API key hash), with manual refresh and live polling every 3 s (configurable: 3 s, 10 s, 30 s, Off; CPA's plugin management ABI returns a buffered `ManagementResponse` rather than streaming HTTP). One row per upstream call (see "Unit of a request"), newest first or by cost, latency or tokens, all calls or failed or successful only, 50 per page. Selecting a row opens its metadata, tokens and cost in place and stays expanded across live refreshes. It never shows request or response content, which the plugin does not store.
+11. Requests: a dedicated fourth tab (`Usage | Limits | Plans | Requests`) sharing the top filters (period, provider, model, client, account, API key hash), with manual refresh and live polling every 3 s (configurable: 3 s, 10 s, 30 s, Off; CPA's plugin management ABI returns a buffered `ManagementResponse` rather than streaming HTTP). One row per upstream call (see "Unit of a request"), newest first or by cost, latency or tokens, all calls or failed or successful only, 50 per page. Selecting a row opens its metadata, tokens and cost in place and stays expanded across live refreshes. It never shows request or response content, which the plugin does not store.
 
 Short periods (15m, 1h, 6h) in the top Period filter replace the earlier separate "Right now" card (owner's request, 2026-11-20), so Totals, Usage over time, Per-request drift, Breakdown, Latency and Requests all cover short windows with previous-period comparisons and minute/hour buckets without duplicating tiles.
 
@@ -183,7 +183,7 @@ Decided 2026-11-15, expanded 2026-11-20 to cover all CPA providers. A second vie
 - Codex: `GET https://chatgpt.com/backend-api/wham/usage`, with `ChatGPT-Account-Id` from the credential's `id_token` when present. `rate_limit.primary_window` and `secondary_window` are named by `limit_window_seconds`: 30 days or more is monthly, 7 days or more weekly, shorter is a session. `plan_type` weighs `plus` 1, `prolite` 5, `pro` 20, and `business` (formerly `team`), `enterprise` and `edu` 1 each, since their seats get Plus-level limits.
 - Antigravity: `loadCodeAssist` gives the tier (`paidTier.id` first, then `currentTier.id`). `retrieveUserQuotaSummary` gives groups of models (Gemini, Claude and GPT, Gemini 4 Argon) whose buckets carry `window` (`5h` or `weekly`), `remainingFraction` and `resetTime`. Each becomes "5-hour, <group>" or "Weekly, <group>", and a spent weekly bucket blocks its own group's 5-hour window. A bucket nobody used reports a reset of now plus its window, so it reads as not started. Requests send the Antigravity Hub User-Agent of the pinned CPA tag, because Google leaves newer model groups out for older clients.
 - Without groups from the summary, the page falls back to `fetchAvailableModels`, one `quotaInfo` per model and no weekly figure. Models are grouped into Gemini (Pro and Flash collapse when they match), Claude & OSS and other. Pro and Ultra windows are "5-hour, <group>" and free-tier ones "Weekly, <group>". A paid group whose reset is more than 5 hours (plus 5 minutes of slack) away is held by the weekly cap and shows as "Weekly, <group>".
-- Antigravity weekly history and projection: because Antigravity responses carry no limit headers, the plugin backend polls `retrieveUserQuotaSummary` every 5 minutes (and debounced after Antigravity traffic, capped at 4 concurrent accounts) through `host.auth.list`, `host.auth.get` and `host.http.do`, storing per-group 5-hour and weekly readings in `quota_snapshots`. `limit-history`, `limit-burn`, `limit-leftover` and `plan-value` read `quota_snapshots` alongside response-header snapshots, keeping each Antigravity model group (`gemini`, `claude-and-gpt`, `gemini-4-argon`, etc.) separate so every weekly group gets its own consumption/projection chart in Limits and its own row in Plans. HTTP 429 calls for Antigravity are classified from the nearest `quota_snapshots` reading within 10 minutes before to 2 minutes after the call.
+- Antigravity weekly history and projection: because Antigravity responses carry no limit headers, the plugin backend polls `retrieveUserQuotaSummary` every 5 minutes (and debounced after Antigravity traffic, capped at 4 concurrent accounts) through `host.auth.list`, `host.auth.get`, and `host.http.do`, storing per-group 5-hour and weekly readings in `quota_snapshots`. `limit-history` returns every upstream bucket (including `gemini-4-argon`) so Limits renders each real bucket with its own consumption and projection chart. `limit-burn`, `limit-leftover`, `plan-value`, and 429 classification keep only two Antigravity groups: `gemini` (unifying all Gemini models, including Argon) and `claude-and-gpt`. On realized Plans views, both groups combine into one whole-subscription row per account. On weekly-quota Plans views, each group appears separately marked as a shared plan. HTTP 429 calls for Antigravity prefer the earliest post-429 snapshot within 2 minutes, falling back to an unexpired pre-429 snapshot within 10 minutes.
 - Gemini CLI quotas are daily, named "Daily, <model family>". Every window label starts with its length, as Claude's and Codex's do.
 - Claude extra usage, the credits bought past the plan limits, is listed per account under the pools as this month's spend and its limit, from `spend` (`amount_minor` / 10^`exponent`) or, in older responses, `extra_usage` (`used_credits` and `monthly_limit` / 10^`decimal_places`). Accounts with extra usage off are not listed.
 - Codex windows other than `primary_window` and `secondary_window`, such as code review, are not shown. The owner left them out until they are needed.
@@ -208,11 +208,12 @@ CPA keeps a session on one account, keyed by provider, session and model (`Pick`
 
 All `GET`, all behind the management key. All accept `from`, `to` (unix ms) and the filters above. Invalid parameters return `400` with a JSON error naming the parameter. Database faults return `503` with a distinct error code.
 
-- `options`: distinct non-empty provider, reported-model and client names in the filter, sorted alphabetically.
+- `options`: distinct non-empty provider, reported-model, client and account names in the filter, sorted alphabetically.
 - `summary`: totals, cost by provider, token type and service tier, and `data_since`, the first recorded row of any filter.
 - `timeseries?bucket=day|hour|minute&group=provider|model|client`: tokens, cost, requests and failed records per bucket.
 - `drift?group=response_model|client|client_version|reasoning_effort&bucket=day|hour|minute`: medians and p90 per bucket, plus change markers scoped to the active grouping.
-- `breakdown?by=model|client|day|api_key|reasoning_effort|account`
+- `breakdown?by=provider|model|client|user_agent|day|api_key|reasoning_effort|account`
+- `errors`: failed records grouped by provider, model, account and HTTP status.
 - `health`
 - `pricing`: table age, unmatched models, overrides in use.
 - `limit-burn`: per day and account, the weekly limit points used, their cost and the cost per point.
@@ -229,7 +230,7 @@ Under `plugins.configs.cpa-analytics`, declared as `ConfigFields`: `enabled`, `p
 
 ### Distribution
 
-GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds under `plugins.store-sources` (`internal/config/config_types.go:35`). Installation through the CPA plugin store.
+GitHub releases with `linux/amd64` `.so` and `darwin/arm64` `.dylib` archives, `checksums.txt`, and `registry.json` added under `plugins.store-sources` (`internal/config/config_types.go:35`). Installation through the CPA plugin store.
 
 ### Testing
 
@@ -245,7 +246,7 @@ GitHub releases with the linux/amd64 `.so` and a `registry.json` the owner adds 
 - API-rate cost estimate in the first version.
 - No changes to CPA. The plugin works with stock CPA releases so CPA upgrades stay routine. An upstream PR adding `TokenBreakdown` and `UserAgent` to the plugin usage record was considered and rejected for that reason. Consequences: the plugin keeps its own port of the accounting rules and reads `User-Agent` through the request interceptor.
 - Target host: CPA `v8.0.71`, plugin ABI schema 10.
-- Limits view (2026-11-15): pooled subscription limits per account, like T3 Code's Limits page. The browser reads them through CPA's `api-call`, so tokens stay in CPA. Rejected: a plugin backend reading tokens with `host.auth.get` and calling out with `host.http.do`. First version covers Claude and Codex only. Claude accounts are weighted by plan, at the cost of one profile call per account per page load.
+- Limits view (2026-11-15, updated 2026-11-22): pooled subscription limits per account, like T3 Code's Limits page. Live checks go from the browser through CPA's `api-call`, so tokens stay in CPA and per-credential proxies apply. Claude and Codex tokens are never read by the backend. For Antigravity only, because its generation responses carry no limit headers, the backend polls `retrieveUserQuotaSummary` via `host.auth.list`, `host.auth.get`, and `host.http.do` to build weekly history in `quota_snapshots` (skipping credentials with `proxy_url`, `runtime_only`, or expired tokens, relying on CPA's proactive background refresh).
 - Limit history (2026-11-15): the plugin keeps the limit snapshot each response reports in its headers, and the dashboard prices each point of the weekly limit to show when a provider changes it. Rejected: response interceptors, which receive bodies with no opt-out, run per stream chunk and sit in the delivery path. Not chosen: snapshots taken by the dashboard page from the Limits view, which would record only while the page is open.
 - Previous-period comparison on the totals and total input as the default drift measure (2026-11-15). Alerts were deferred.
 - After comparing the plugin with Theo's CPA setup (the prox dashboard and T3 Code's Limits page), 2026-11-15: add the weekly pool history and projection, quota left at reset, account affinity and the breakdown by account. The Limits view keeps its live reading and gains the history, since both matter.

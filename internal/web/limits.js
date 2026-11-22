@@ -62,13 +62,23 @@ function parseClaudeSpend(body) {
   const spend = body && body.spend;
   if (spend) {
     if (!spend.enabled || !spend.used) return null;
-    const major = (m) => Number(m.amount_minor) / 10 ** Number(m.exponent);
-    return { used: major(spend.used), limit: spend.limit ? major(spend.limit) : null, currency: spend.used.currency };
+    const major = (m) => {
+      const exp = m.exponent === undefined || m.exponent === null ? 2 : Number(m.exponent);
+      return Number(m.amount_minor) / 10 ** exp;
+    };
+    const used = major(spend.used);
+    if (!Number.isFinite(used)) return null;
+    const limit = spend.limit ? major(spend.limit) : null;
+    return { used, limit: limit !== null && Number.isFinite(limit) ? limit : null, currency: spend.used.currency };
   }
   const extra = body && body.extra_usage;
   if (!extra || !extra.is_enabled) return null;
-  const major = (v) => Number(v) / 10 ** Number(extra.decimal_places);
-  return { used: major(extra.used_credits), limit: extra.monthly_limit == null ? null : major(extra.monthly_limit), currency: extra.currency };
+  const dec = extra.decimal_places === undefined || extra.decimal_places === null ? 2 : Number(extra.decimal_places);
+  const major = (v) => Number(v) / 10 ** dec;
+  const used = major(extra.used_credits);
+  if (!Number.isFinite(used)) return null;
+  const limit = extra.monthly_limit == null ? null : major(extra.monthly_limit);
+  return { used, limit: limit !== null && Number.isFinite(limit) ? limit : null, currency: extra.currency };
 }
 
 function codexWindow(raw) {
@@ -184,13 +194,15 @@ const ANTIGRAVITY_BUCKETS = {
 function parseAntigravityQuotaSummary(body) {
   const windows = [];
   for (const group of (body && Array.isArray(body.groups) ? body.groups : [])) {
-    const label = String((group && group.displayName) || '').replace(/\s+models$/i, '').trim();
+    const label = String((group && group.displayName) || '').trim().replace(/\s+models$/i, '').trim();
     if (!label) continue;
     const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (!id) continue;
     const buckets = Array.isArray(group.buckets) ? group.buckets : [];
     for (const kind of ['5h', 'weekly']) {
       const b = buckets.find((x) => x && x.window === kind);
-      const rem = b ? Number(b.remainingFraction) : NaN;
+      if (!b || b.remainingFraction === null || b.remainingFraction === undefined || b.remainingFraction === '') continue;
+      const rem = Number(b.remainingFraction);
       if (!Number.isFinite(rem)) continue;
       const spec = ANTIGRAVITY_BUCKETS[kind];
       windows.push(limitWindow(spec.prefix + ':' + id, spec.label + ', ' + label, clampPct((1 - rem) * 100),
@@ -486,7 +498,7 @@ function burnRate(points, now, windowMs) {
     base = { t: start, pct: before.weekly_pct };
   } else {
     const first = points.find((p) => p.t > start && p.t <= now && sameCycle(p, latest));
-    if (!first || first === latest) return null;
+    if (!first || first === latest || !(now > first.t)) return null;
     base = { t: first.t, pct: first.weekly_pct };
   }
   return Math.max(0, (latest.weekly_pct - base.pct) / ((now - base.t) / LIMIT_HOUR));
@@ -498,7 +510,7 @@ function projectedUsed(m, now, t) {
   let base = m.used;
   let from = now;
   let reset = m.resetsAt;
-  while (reset !== null && reset > from && t >= reset) {
+  while (reset !== null && m.lengthMs > 0 && reset > from && t >= reset) {
     base = 0;
     from = reset;
     reset += m.lengthMs;

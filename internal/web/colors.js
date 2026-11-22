@@ -1,8 +1,7 @@
-// Provider colors. Claude, Codex and Gemini wear their brand colors, stepped
-// for each theme in the page's CSS and validated together for color-blind
-// separation. Any other provider takes the one spare color that still clears
-// that check against all three, in order of first appearance, and the rest
-// share the overflow gray, so the legend and tables carry their identity.
+// Provider colors. Known providers wear their brand colors from BRAND_COLORS,
+// stepped for each theme in the page's CSS. Any unlisted provider takes the
+// spare color (--provider-next) on first appearance, and further unlisted
+// providers share the overflow gray (--other).
 
 const BRAND_COLORS = {
   claude: 'var(--provider-claude)',

@@ -46,13 +46,15 @@ type Refresher struct {
 
 	mu          sync.Mutex
 	table       *Table
+	hasPrimary  bool
 	fetchedAt   time.Time
 	lastAttempt time.Time
 	lastError   string
+	started     bool
+	stopped     bool
 
 	stop chan struct{}
 	done chan struct{}
-	once sync.Once
 }
 
 // WithFallbacks attaches secondary catalogs fetched on each refresh to fill
@@ -69,13 +71,24 @@ type storedTable struct {
 
 // NewRefresher builds a refresher. Call Start to refresh in the background.
 func NewRefresher(fetch func(string) ([]byte, error), kv KV, url string, every time.Duration) *Refresher {
-	return &Refresher{fetch: fetch, kv: kv, url: url, every: every, now: time.Now}
+	return &Refresher{
+		fetch: fetch, kv: kv, url: url, every: every, now: time.Now,
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
 }
 
 // Start refreshes now and then every interval until Stop.
 func (r *Refresher) Start() {
-	r.stop = make(chan struct{})
-	r.done = make(chan struct{})
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.started || r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	r.started = true
+	r.mu.Unlock()
 	go func() {
 		defer close(r.done)
 		r.Refresh()
@@ -94,10 +107,20 @@ func (r *Refresher) Start() {
 
 // Stop ends background refreshes. Safe to call more than once and without Start.
 func (r *Refresher) Stop() {
-	if r == nil || r.stop == nil {
+	if r == nil {
 		return
 	}
-	r.once.Do(func() { close(r.stop) })
+	r.mu.Lock()
+	wasStopped := r.stopped
+	wasStarted := r.started
+	r.stopped = true
+	if !wasStopped {
+		close(r.stop)
+		if !wasStarted {
+			close(r.done)
+		}
+	}
+	r.mu.Unlock()
 	<-r.done
 }
 
@@ -106,23 +129,43 @@ func (r *Refresher) Refresh() {
 	now := r.now()
 	primary, err := r.fetchTable()
 	fallbackTables := r.refreshFallbacks(now)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.lastAttempt = now
 	if err == nil {
-		r.table = Merge(primary.table, fallbackTables...)
-		r.fetchedAt, r.lastError = now, ""
+		var saveErr string
 		if raw, errMarshal := json.Marshal(storedTable{FetchedAt: now, Body: primary.raw}); errMarshal == nil && r.kv != nil {
 			if errSave := r.kv.SaveKV(kvKey, raw); errSave != nil {
-				r.lastError = errSave.Error()
+				saveErr = errSave.Error()
 			}
 		}
+		merged := Merge(primary.table, fallbackTables...)
+		r.mu.Lock()
+		r.lastAttempt = now
+		r.table = merged
+		r.hasPrimary = true
+		r.fetchedAt = now
+		r.lastError = saveErr
+		r.mu.Unlock()
 		return
 	}
-	r.lastError = err.Error()
-	if r.table == nil {
-		r.loadStoredLocked(fallbackTables)
+
+	r.mu.Lock()
+	needStored := r.table == nil || !r.hasPrimary
+	r.mu.Unlock()
+
+	var loaded *Table
+	var loadedAt time.Time
+	var loadedPrimary bool
+	if needStored {
+		loaded, loadedAt, loadedPrimary = r.loadStored(fallbackTables)
 	}
+	r.mu.Lock()
+	r.lastAttempt = now
+	r.lastError = err.Error()
+	if loaded != nil && (r.table == nil || !r.hasPrimary) {
+		r.table = loaded
+		r.fetchedAt = loadedAt
+		r.hasPrimary = loadedPrimary
+	}
+	r.mu.Unlock()
 }
 
 func (r *Refresher) refreshFallbacks(now time.Time) []*Table {
@@ -182,22 +225,22 @@ func (r *Refresher) fetchTable() (fetchedTable, error) {
 	return fetchedTable{table: tbl, raw: raw}, nil
 }
 
-func (r *Refresher) loadStoredLocked(fallbacks []*Table) {
+func (r *Refresher) loadStored(fallbacks []*Table) (*Table, time.Time, bool) {
 	if r.kv != nil {
 		raw, err := r.kv.LoadKV(kvKey)
 		if err == nil && len(raw) > 0 {
 			var stored storedTable
 			if json.Unmarshal(raw, &stored) == nil {
 				if tbl, err := ParseLiteLLM(stored.Body); err == nil {
-					r.table, r.fetchedAt = Merge(tbl, fallbacks...), stored.FetchedAt
-					return
+					return Merge(tbl, fallbacks...), stored.FetchedAt, true
 				}
 			}
 		}
 	}
 	if len(fallbacks) > 0 {
-		r.table, r.fetchedAt = Merge(nil, fallbacks...), r.now()
+		return Merge(nil, fallbacks...), r.now(), false
 	}
+	return nil, time.Time{}, false
 }
 
 // Current returns the table in use and when it was fetched. With no table at

@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,7 +106,11 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+	dsn := (&url.URL{
+		Scheme:   "file",
+		Path:     path,
+		RawQuery: "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)",
+	}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -129,45 +134,53 @@ func migrate(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("read migrations: %w", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
+	type migration struct {
+		version string
+		sqlFile string
+		fn      func(*sql.Tx) error
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		version := strings.TrimSuffix(name, ".sql")
+	all := make([]migration, 0, len(entries)+2)
+	for _, e := range entries {
+		all = append(all, migration{version: strings.TrimSuffix(e.Name(), ".sql"), sqlFile: e.Name()})
+	}
+	all = append(all,
+		migration{version: "004_reparse_clients", fn: reparseClients},
+		migration{version: "005_meta_devin_accounting", fn: reclassifyMetaDevin},
+	)
+	sort.Slice(all, func(i, j int) bool { return all[i].version < all[j].version })
+	for _, m := range all {
+		if m.fn != nil {
+			if err := runGoMigration(db, m.version, m.fn); err != nil {
+				return err
+			}
+			continue
+		}
 		var exists int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&exists); err != nil {
-			return fmt.Errorf("check migration %s: %w", version, err)
+		if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, m.version).Scan(&exists); err != nil {
+			return fmt.Errorf("check migration %s: %w", m.version, err)
 		}
 		if exists > 0 {
 			continue
 		}
-		body, err := migrations.ReadFile("migrations/" + name)
+		body, err := migrations.ReadFile("migrations/" + m.sqlFile)
 		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
+			return fmt.Errorf("read migration %s: %w", m.sqlFile, err)
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			return fmt.Errorf("begin migration %s: %w", version, err)
+			return fmt.Errorf("begin migration %s: %w", m.version, err)
 		}
 		if _, err := tx.Exec(string(body)); err != nil {
 			tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", version, err)
+			return fmt.Errorf("apply migration %s: %w", m.version, err)
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
 			tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", version, err)
+			return fmt.Errorf("record migration %s: %w", m.version, err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", version, err)
+			return fmt.Errorf("commit migration %s: %w", m.version, err)
 		}
-	}
-	if err := runGoMigration(db, "004_reparse_clients", reparseClients); err != nil {
-		return err
-	}
-	if err := runGoMigration(db, "005_meta_devin_accounting", reclassifyMetaDevin); err != nil {
-		return err
 	}
 	return nil
 }
@@ -374,18 +387,35 @@ func (s *Store) InsertQuotaSnapshots(snaps []QuotaSnapshot) (err error) {
 	return nil
 }
 
+const pruneChunkSize = 5000
+
 // Prune deletes rows requested before the cutoff and polled quota snapshots
-// recorded before it.
+// recorded before it, in bounded chunks so live writes can interleave.
 func (s *Store) Prune(before time.Time) (int64, error) {
 	cutoff := before.UnixMilli()
-	res, err := s.db.Exec(`DELETE FROM requests WHERE requested_at < ?`, cutoff)
-	if err != nil {
-		return 0, fmt.Errorf("prune requests: %w", err)
+	var total int64
+	for _, spec := range []struct {
+		name, query string
+	}{
+		{"requests", `DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE requested_at < ? LIMIT ?)`},
+		{"quota snapshots", `DELETE FROM quota_snapshots WHERE rowid IN (SELECT rowid FROM quota_snapshots WHERE recorded_at < ? LIMIT ?)`},
+	} {
+		for {
+			res, err := s.db.Exec(spec.query, cutoff, pruneChunkSize)
+			if err != nil {
+				return total, fmt.Errorf("prune %s: %w", spec.name, err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return total, fmt.Errorf("prune %s count: %w", spec.name, err)
+			}
+			total += n
+			if n < pruneChunkSize {
+				break
+			}
+		}
 	}
-	if _, err := s.db.Exec(`DELETE FROM quota_snapshots WHERE recorded_at < ?`, cutoff); err != nil {
-		return 0, fmt.Errorf("prune quota snapshots: %w", err)
-	}
-	return res.RowsAffected()
+	return total, nil
 }
 
 // SaveKV stores a value under key, replacing any previous value.

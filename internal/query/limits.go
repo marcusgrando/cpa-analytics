@@ -28,7 +28,7 @@ type BurnPoint struct {
 	// CostUSD understates the spend.
 	UnpricedTokens int64 `json:"unpriced_tokens"`
 	// LowSample flags days whose weekly percent moved less than lowSampleBurnPct,
-	// where integer header rounding makes USDPerPct noisy.
+	// where small deltas make USDPerPct noisy.
 	LowSample bool `json:"low_sample,omitempty"`
 }
 
@@ -67,7 +67,7 @@ const (
 	// minBurnPct leaves out days whose weekly percent moved too little to
 	// give a stable ratio.
 	minBurnPct = 1.0
-	// lowSampleBurnPct marks days with small integer-percent movement as noisy.
+	// lowSampleBurnPct marks days with small percent movement as noisy.
 	lowSampleBurnPct = 3.0
 	// resetJitterMillis tolerates resets a provider recomputes per response.
 	resetJitterMillis = int64(60 * 60 * 1000)
@@ -110,9 +110,15 @@ func withCycleLookback(f Filter) Filter {
 }
 
 func rejectPartialAccountFilters(f Filter) error {
-	for param, value := range map[string]string{"model": f.Model, "client": f.Client, "api_key": f.APIKeyHash} {
-		if value != "" {
-			return &ParamError{Param: param, Reason: "the weekly limit covers the whole account, so it can only be filtered by provider"}
+	for _, check := range []struct {
+		param, value string
+	}{
+		{"model", f.Model},
+		{"client", f.Client},
+		{"api_key", f.APIKeyHash},
+	} {
+		if check.value != "" {
+			return &ParamError{Param: check.param, Reason: "the weekly limit covers the whole account, so it can only be filtered by provider or account"}
 		}
 	}
 	return nil
@@ -123,7 +129,7 @@ func rejectPartialAccountFilters(f Filter) error {
 // reading whose reset moved by more than resetJitterMillis starts a new cycle.
 // Within a cycle, a pair whose percent went down, as when a Claude reset
 // refills it, is dropped and the next pair starts from the lower reading.
-func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64) ([]weeklyCycle, error) {
+func weeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom int64) ([]weeklyCycle, error) {
 	where, args := f.where(true)
 	if f.From.UnixMilli() < measureFrom {
 		// Only the last complete reading before the period can establish a reset at its start.
@@ -210,22 +216,17 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64)
 	return cycles, nil
 }
 
-type accountProviderKey struct {
-	authIndex string
-	provider  string
-}
-
 type groupKey struct {
 	authIndex string
-	provider  string
+	provider  string // lowercased for joins
 	group     string
 }
 
-func snapshotFilterWhere(f Filter, fromMs int64) (string, []any) {
+func snapshotFilterWhere(f Filter, fromMs, toMs int64) (string, []any) {
 	where := "recorded_at >= ? AND recorded_at < ?"
-	args := []any{fromMs, f.To.UnixMilli()}
+	args := []any{fromMs, toMs}
 	if f.Provider != "" {
-		where += " AND provider = ?"
+		where += " AND lower(provider) = lower(?)"
 		args = append(args, f.Provider)
 	}
 	if f.Account != "" {
@@ -235,92 +236,21 @@ func snapshotFilterWhere(f Filter, fromMs int64) (string, []any) {
 	return where, args
 }
 
-// loadKnownQuotaGroups returns group_id -> group_label per (auth_index, provider)
-// from quota_snapshots so model-to-group matching recognizes any new group Google
-// introduces without hardcoding every model family.
-func loadKnownQuotaGroups(db *sql.DB, f Filter) (map[accountProviderKey]map[string]string, error) {
-	where := "1=1"
-	var args []any
-	if f.Provider != "" {
-		where += " AND provider = ?"
-		args = append(args, f.Provider)
-	}
-	if f.Account != "" {
-		where += " AND auth_index = ?"
-		args = append(args, f.Account)
-	}
-	rows, err := db.Query(`SELECT auth_index, provider, group_id, MAX(group_label)
-		FROM quota_snapshots WHERE `+where+` GROUP BY auth_index, provider, group_id`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("known quota groups: %w", err)
-	}
-	defer rows.Close()
-	out := map[accountProviderKey]map[string]string{}
-	for rows.Next() {
-		var acct, prov, gid, label string
-		if err := rows.Scan(&acct, &prov, &gid, &label); err != nil {
-			return nil, fmt.Errorf("known quota groups scan: %w", err)
-		}
-		k := accountProviderKey{acct, prov}
-		if out[k] == nil {
-			out[k] = map[string]string{}
-		}
-		out[k][gid] = label
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("known quota groups rows: %w", err)
-	}
-	return out, nil
-}
-
-// antigravityModelGroup maps a model name to its Antigravity quota group ID and
-// display label. Known groups observed in quota_snapshots are matched longest
-// slug first so model-specific groups (such as gemini-4-argon) win over the
-// broader gemini bucket.
-func antigravityModelGroup(model string, known map[string]string) (string, string) {
+// antigravityModelGroup maps every Antigravity model into two quota families
+// for Plans, Burn, Leftover, and 429 attribution: Gemini (all Gemini models,
+// including Argon/Neon/Pro/Flash) and Claude and GPT (all 3P Claude/GPT models).
+// Individual upstream buckets (such as Gemini 4 Argon) are still preserved in
+// LimitHistory so the Limits tab reflects every bucket Google reports.
+func antigravityModelGroup(model string) (string, string) {
 	m := strings.ToLower(strings.TrimSpace(model))
-	if m == "" {
+	switch {
+	case strings.Contains(m, "claude") || strings.Contains(m, "gpt"):
+		return "claude-and-gpt", "Claude and GPT"
+	case strings.Contains(m, "gemini"):
+		return "gemini", "Gemini"
+	default:
 		return "other", "Other"
 	}
-	if len(known) > 0 {
-		ids := make([]string, 0, len(known))
-		for id := range known {
-			if id == "" || id == "gemini" || id == "other" || id == "claude-and-gpt" {
-				continue
-			}
-			ids = append(ids, id)
-		}
-		sort.Slice(ids, func(i, j int) bool {
-			if len(ids[i]) != len(ids[j]) {
-				return len(ids[i]) > len(ids[j])
-			}
-			return ids[i] < ids[j]
-		})
-		for _, id := range ids {
-			if strings.Contains(m, id) {
-				label := known[id]
-				if label == "" {
-					label = id
-				}
-				return id, label
-			}
-		}
-	}
-	var id, label string
-	switch {
-	case strings.Contains(m, "argon"):
-		id, label = "gemini-4-argon", "Gemini 4 Argon"
-	case strings.Contains(m, "claude") || strings.Contains(m, "gpt"):
-		id, label = "claude-and-gpt", "Claude and GPT"
-	case strings.Contains(m, "gemini"):
-		id, label = "gemini", "Gemini"
-	default:
-		id, label = "other", "Other"
-	}
-	if known != nil && known[id] != "" {
-		label = known[id]
-	}
-	return id, label
 }
 
 type polledReading struct {
@@ -338,12 +268,15 @@ type polledReq struct {
 
 // polledWeeklyCycles builds weekly cycles from polled quota_snapshots paired
 // with each group's requests, using the same cycle, refill and early-reset
-// rules as weeklyCycles.
-func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64) ([]weeklyCycle, error) {
-	where, args := snapshotFilterWhere(f, f.From.UnixMilli())
+// rules as weeklyCycles. For Antigravity, only the two primary groups (gemini
+// and claude-and-gpt) are walked so Gemini sub-buckets (like gemini-4-argon)
+// are not split out from Gemini in Plans, Burn, or Leftover.
+func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom int64) ([]weeklyCycle, error) {
+	where, args := snapshotFilterWhere(f, f.From.UnixMilli(), f.To.UnixMilli())
 	snapRows, err := db.Query(`SELECT auth_index, provider, group_id, group_label, recorded_at, used_pct, reset_at
-		FROM quota_snapshots WHERE window_kind = 'weekly' AND `+where+`
-		ORDER BY auth_index, provider, group_id, recorded_at, id`, args...)
+		FROM quota_snapshots
+		WHERE window_kind = 'weekly' AND (lower(provider) <> 'antigravity' OR group_id IN ('gemini', 'claude-and-gpt')) AND `+where+`
+		ORDER BY auth_index, lower(provider), group_id, recorded_at, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("polled weekly cycles: %w", err)
 	}
@@ -351,7 +284,7 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 
 	readings := map[groupKey][]polledReading{}
 	labels := map[groupKey]string{}
-	knownByAcct := map[accountProviderKey]map[string]string{}
+	origProvider := map[groupKey]string{}
 	var orderedKeys []groupKey
 	for snapRows.Next() {
 		var acct, prov, gid, label string
@@ -359,19 +292,15 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 		if err := snapRows.Scan(&acct, &prov, &gid, &label, &r.at, &r.pct, &r.reset); err != nil {
 			return nil, fmt.Errorf("polled weekly cycles scan: %w", err)
 		}
-		gk := groupKey{acct, prov, gid}
+		gk := groupKey{acct, strings.ToLower(prov), gid}
 		if _, seen := readings[gk]; !seen {
 			orderedKeys = append(orderedKeys, gk)
+			origProvider[gk] = prov
 		}
 		readings[gk] = append(readings[gk], r)
 		if label != "" {
 			labels[gk] = label
 		}
-		ak := accountProviderKey{acct, prov}
-		if knownByAcct[ak] == nil {
-			knownByAcct[ak] = map[string]string{}
-		}
-		knownByAcct[ak][gid] = label
 	}
 	if err := snapRows.Err(); err != nil {
 		return nil, fmt.Errorf("polled weekly cycles rows: %w", err)
@@ -387,7 +316,7 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 	reqWhere, reqArgs := reqFilter.where(true)
 	reqRows, err := db.Query(`SELECT auth_index, provider, requested_at, (`+modelExpr+`), (`+tierExpr+`), `+
 		`uncached_input, cache_read, cache_write, output_non_reasoning, output_reasoning, unclassified
-		FROM requests WHERE auth_index <> '' AND `+reqWhere+` ORDER BY auth_index, provider, requested_at, id`, reqArgs...)
+		FROM requests WHERE auth_index <> '' AND `+reqWhere+` ORDER BY auth_index, lower(provider), requested_at, id`, reqArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("polled weekly requests: %w", err)
 	}
@@ -402,13 +331,8 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 		if err := reqRows.Scan(append([]any{&acct, &prov, &at, &model, &tier}, tokens.scanTargets()...)...); err != nil {
 			return nil, fmt.Errorf("polled weekly requests scan: %w", err)
 		}
-		ak := accountProviderKey{acct, prov}
-		known := knownByAcct[ak]
-		if known == nil {
-			continue
-		}
-		gid, _ := antigravityModelGroup(model, known)
-		gk := groupKey{acct, prov, gid}
+		gid, _ := antigravityModelGroup(model)
+		gk := groupKey{acct, strings.ToLower(prov), gid}
 		if _, has := readings[gk]; !has {
 			continue
 		}
@@ -424,8 +348,11 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 		snaps := readings[gk]
 		reqs := reqsByGroup[gk]
 		label := labels[gk]
+		prov := origProvider[gk]
 		var (
 			cur        *weeklyCycle
+			zeroAt     int64
+			hasZero    bool
 			earlyUntil int64
 			spanCost   float64
 			spanUnpr   int64
@@ -447,35 +374,76 @@ func polledWeeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom 
 			}
 		}
 		for _, sn := range snaps {
-			for ri < len(reqs) && reqs[ri].at <= sn.at {
+			// Consume requests strictly before sn.at into the preceding span.
+			for ri < len(reqs) && reqs[ri].at < sn.at {
 				consumeReq(reqs[ri])
 				ri++
 			}
-			hasReading := sn.reset.Valid
-			sameCycle := hasReading && cur != nil && abs(sn.reset.Int64-cur.reset) <= resetJitterMillis
-			if hasReading && cur != nil && !sameCycle && sn.at < cur.reset {
-				earlyUntil = max(earlyUntil, cur.reset)
-			}
-			if sn.at < measureFrom {
-				if hasReading {
-					cur = &weeklyCycle{account: gk.authIndex, provider: gk.provider, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
-				}
-				continue
-			}
-			if hasReading {
-				if sameCycle {
-					if cur.lastAt >= measureFrom && sn.pct >= cur.lastPct {
-						cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
-					}
-					cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
-				} else {
+			// Untouched 0% snapshots carry reset_at = NULL because Google reports
+			// a rolling now+7d reset for unused buckets. Treat them as a 0%
+			// cycle baseline / reset anchor so opening 0%->X% burn is captured
+			// and early resets to 0% close the previous cycle promptly.
+			if !sn.reset.Valid {
+				if sn.pct == 0 {
 					if cur != nil {
+						if sn.at < cur.reset {
+							earlyUntil = max(earlyUntil, cur.reset)
+						}
 						cur.nextAt = sn.at
 						flush()
 					}
-					cur = &weeklyCycle{account: gk.authIndex, provider: gk.provider, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+					hasZero = true
+					zeroAt = sn.at
+					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 				}
-				spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+				for ri < len(reqs) && reqs[ri].at == sn.at {
+					consumeReq(reqs[ri])
+					ri++
+				}
+				continue
+			}
+
+			sameCycle := cur != nil && abs(sn.reset.Int64-cur.reset) <= resetJitterMillis
+			isEarlyReset := cur != nil && !sameCycle && sn.at < cur.reset
+			if isEarlyReset {
+				earlyUntil = max(earlyUntil, cur.reset)
+			}
+			// Requests at sn.at belong to the old span unless this snapshot
+			// starts a new cycle via early reset (in which case they count
+			// toward the new cycle's afterEarlyResetUSD, matching weeklyCycles).
+			if !isEarlyReset {
+				for ri < len(reqs) && reqs[ri].at == sn.at {
+					consumeReq(reqs[ri])
+					ri++
+				}
+			}
+			if sn.at < measureFrom {
+				cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+				hasZero = false
+				continue
+			}
+			if sameCycle {
+				if cur.lastAt >= measureFrom && sn.pct >= cur.lastPct {
+					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+				}
+				cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
+			} else {
+				if cur != nil {
+					cur.nextAt = sn.at
+					flush()
+				}
+				cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+				if hasZero && zeroAt >= measureFrom && sn.pct > 0 {
+					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+				}
+			}
+			hasZero = false
+			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+			if isEarlyReset {
+				for ri < len(reqs) && reqs[ri].at == sn.at {
+					consumeReq(reqs[ri])
+					ri++
+				}
 			}
 		}
 		for ri < len(reqs) {
@@ -493,24 +461,31 @@ func LimitBurn(db *sql.DB, f Filter, table *pricing.Table) (BurnResult, error) {
 	if err := rejectPartialAccountFilters(f); err != nil {
 		return BurnResult{}, err
 	}
-	cycles, err := weeklyCycles(db, f, table, f.From.UnixMilli())
-	if err != nil {
+	var cycles []weeklyCycle
+	if err := withReadTx(db, func(q querier) error {
+		headerCycles, err := weeklyCycles(q, f, table, f.From.UnixMilli())
+		if err != nil {
+			return err
+		}
+		polled, err := polledWeeklyCycles(q, f, table, f.From.UnixMilli())
+		if err != nil {
+			return err
+		}
+		cycles = append(headerCycles, polled...)
+		return nil
+	}); err != nil {
 		return BurnResult{}, err
 	}
-	polled, err := polledWeeklyCycles(db, f, table, f.From.UnixMilli())
-	if err != nil {
-		return BurnResult{}, err
-	}
-	cycles = append(cycles, polled...)
 	type key struct {
-		day     int64
-		account string
-		group   string
+		day      int64
+		account  string
+		provider string
+		group    string
 	}
 	byDay := map[key]*BurnPoint{}
 	for _, c := range cycles {
 		for _, pair := range c.pairs {
-			k := key{f.bucketStart(pair.at, dayMillis), c.account, c.group}
+			k := key{f.bucketStart(pair.at, dayMillis), c.account, strings.ToLower(c.provider), c.group}
 			bp := byDay[k]
 			if bp == nil {
 				bp = &BurnPoint{T: k.day, AuthIndex: c.account, Provider: c.provider, Group: c.group, GroupLabel: c.groupLabel}
@@ -540,6 +515,9 @@ func LimitBurn(db *sql.DB, f Filter, table *pricing.Table) (BurnResult, error) {
 		if a.AuthIndex != b.AuthIndex {
 			return a.AuthIndex < b.AuthIndex
 		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
 		return a.Group < b.Group
 	})
 	return res, nil
@@ -554,15 +532,21 @@ func LimitLeftover(db *sql.DB, f Filter, table *pricing.Table, now time.Time) (L
 		return LeftoverResult{}, err
 	}
 	history := withCycleLookback(f)
-	cycles, err := weeklyCycles(db, history, table, history.From.UnixMilli())
-	if err != nil {
+	var cycles []weeklyCycle
+	if err := withReadTx(db, func(q querier) error {
+		headerCycles, err := weeklyCycles(q, history, table, history.From.UnixMilli())
+		if err != nil {
+			return err
+		}
+		polled, err := polledWeeklyCycles(q, history, table, history.From.UnixMilli())
+		if err != nil {
+			return err
+		}
+		cycles = append(headerCycles, polled...)
+		return nil
+	}); err != nil {
 		return LeftoverResult{}, err
 	}
-	polled, err := polledWeeklyCycles(db, history, table, history.From.UnixMilli())
-	if err != nil {
-		return LeftoverResult{}, err
-	}
-	cycles = append(cycles, polled...)
 	res := LeftoverResult{Cycles: []LeftoverCycle{}}
 	for _, c := range cycles {
 		end, early := c.reset, false
@@ -594,6 +578,9 @@ func LimitLeftover(db *sql.DB, f Filter, table *pricing.Table, now time.Time) (L
 		}
 		if a.AuthIndex != b.AuthIndex {
 			return a.AuthIndex < b.AuthIndex
+		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
 		}
 		return a.Group < b.Group
 	})
@@ -649,91 +636,94 @@ func LimitHistory(db *sql.DB, f Filter) (HistoryResult, error) {
 	if span := f.To.Sub(f.From).Milliseconds(); span/maxHistoryBuckets > bucket {
 		bucket = (span/maxHistoryBuckets/60000 + 1) * 60000
 	}
-	where, args := f.where(false)
-	rows, err := db.Query(`SELECT auth_index, provider, requested_at, limit_weekly_pct, COALESCE(limit_weekly_reset, 0)
-		FROM requests WHERE auth_index <> '' AND limit_weekly_pct IS NOT NULL AND requested_at >= ? AND `+where+`
-		ORDER BY auth_index, requested_at, id`, append([]any{f.From.UnixMilli() - cycleLookbackMillis}, args...)...)
-	if err != nil {
-		return HistoryResult{}, fmt.Errorf("limit history: %w", err)
-	}
-	defer rows.Close()
-
 	res := HistoryResult{BucketMs: bucket, Accounts: []HistoryAccount{}}
-	from := f.From.UnixMilli()
-	var cur *HistoryAccount
-	// beforeRange is the bucket of every reading before the range, so only the
-	// last of them stays. bucketStart never returns it.
-	const beforeRange = math.MinInt64 + 1
-	lastBucket := int64(math.MinInt64)
-	for rows.Next() {
-		var (
-			acct, provider string
-			pt             HistoryPoint
-		)
-		if err := rows.Scan(&acct, &provider, &pt.T, &pt.WeeklyPct, &pt.WeeklyReset); err != nil {
-			return HistoryResult{}, fmt.Errorf("limit history scan: %w", err)
+	err := withReadTx(db, func(q querier) error {
+		where, args := f.where(false)
+		rows, err := q.Query(`SELECT auth_index, provider, requested_at, limit_weekly_pct, COALESCE(limit_weekly_reset, 0)
+			FROM requests WHERE auth_index <> '' AND limit_weekly_pct IS NOT NULL AND requested_at >= ? AND `+where+`
+			ORDER BY auth_index, provider, requested_at, id`, append([]any{f.From.UnixMilli() - cycleLookbackMillis}, args...)...)
+		if err != nil {
+			return fmt.Errorf("limit history: %w", err)
 		}
-		if cur == nil || cur.AuthIndex != acct {
-			res.Accounts = append(res.Accounts, HistoryAccount{AuthIndex: acct, Provider: provider})
-			cur = &res.Accounts[len(res.Accounts)-1]
-			lastBucket = math.MinInt64
-		}
-		b := int64(beforeRange)
-		if pt.T >= from {
-			b = f.bucketStart(pt.T, bucket)
-		}
-		if b == lastBucket {
-			cur.Points[len(cur.Points)-1] = pt
-			continue
-		}
-		cur.Points = append(cur.Points, pt)
-		lastBucket = b
-	}
-	if err := rows.Err(); err != nil {
-		return HistoryResult{}, fmt.Errorf("limit history rows: %w", err)
-	}
+		defer rows.Close()
 
-	snapWhere, snapArgs := snapshotFilterWhere(f, f.From.UnixMilli()-cycleLookbackMillis)
-	snapRows, err := db.Query(`SELECT auth_index, provider, group_id, group_label, recorded_at, used_pct, COALESCE(reset_at, 0)
-		FROM quota_snapshots WHERE window_kind = 'weekly' AND `+snapWhere+`
-		ORDER BY auth_index, group_id, recorded_at, id`, snapArgs...)
-	if err != nil {
-		return HistoryResult{}, fmt.Errorf("limit history snapshots: %w", err)
-	}
-	defer snapRows.Close()
+		from := f.From.UnixMilli()
+		var cur *HistoryAccount
+		// beforeRange is the bucket of every reading before the range, so only the
+		// last of them stays. bucketStart never returns it.
+		const beforeRange = math.MinInt64 + 1
+		lastBucket := int64(math.MinInt64)
+		for rows.Next() {
+			var (
+				acct, provider string
+				pt             HistoryPoint
+			)
+			if err := rows.Scan(&acct, &provider, &pt.T, &pt.WeeklyPct, &pt.WeeklyReset); err != nil {
+				return fmt.Errorf("limit history scan: %w", err)
+			}
+			if cur == nil || cur.AuthIndex != acct || cur.Provider != provider {
+				res.Accounts = append(res.Accounts, HistoryAccount{AuthIndex: acct, Provider: provider})
+				cur = &res.Accounts[len(res.Accounts)-1]
+				lastBucket = math.MinInt64
+			}
+			b := int64(beforeRange)
+			if pt.T >= from {
+				b = f.bucketStart(pt.T, bucket)
+			}
+			if b == lastBucket {
+				cur.Points[len(cur.Points)-1] = pt
+				continue
+			}
+			cur.Points = append(cur.Points, pt)
+			lastBucket = b
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("limit history rows: %w", err)
+		}
 
-	cur = nil
-	lastBucket = int64(math.MinInt64)
-	for snapRows.Next() {
-		var (
-			acct, provider, gid, label string
-			pt                         HistoryPoint
-		)
-		if err := snapRows.Scan(&acct, &provider, &gid, &label, &pt.T, &pt.WeeklyPct, &pt.WeeklyReset); err != nil {
-			return HistoryResult{}, fmt.Errorf("limit history snapshots scan: %w", err)
+		snapWhere, snapArgs := snapshotFilterWhere(f, f.From.UnixMilli()-cycleLookbackMillis, f.To.UnixMilli())
+		snapRows, err := q.Query(`SELECT auth_index, provider, group_id, group_label, recorded_at, used_pct, COALESCE(reset_at, 0)
+			FROM quota_snapshots WHERE window_kind = 'weekly' AND `+snapWhere+`
+			ORDER BY auth_index, lower(provider), group_id, recorded_at, id`, snapArgs...)
+		if err != nil {
+			return fmt.Errorf("limit history snapshots: %w", err)
 		}
-		if cur == nil || cur.AuthIndex != acct || cur.Group != gid {
-			res.Accounts = append(res.Accounts, HistoryAccount{AuthIndex: acct, Provider: provider, Group: gid, GroupLabel: label})
-			cur = &res.Accounts[len(res.Accounts)-1]
-			lastBucket = math.MinInt64
-		} else if label != "" && cur.GroupLabel == "" {
-			cur.GroupLabel = label
+		defer snapRows.Close()
+
+		cur = nil
+		lastBucket = int64(math.MinInt64)
+		for snapRows.Next() {
+			var (
+				acct, provider, gid, label string
+				pt                         HistoryPoint
+			)
+			if err := snapRows.Scan(&acct, &provider, &gid, &label, &pt.T, &pt.WeeklyPct, &pt.WeeklyReset); err != nil {
+				return fmt.Errorf("limit history snapshots scan: %w", err)
+			}
+			if cur == nil || cur.AuthIndex != acct || !strings.EqualFold(cur.Provider, provider) || cur.Group != gid {
+				res.Accounts = append(res.Accounts, HistoryAccount{AuthIndex: acct, Provider: provider, Group: gid, GroupLabel: label})
+				cur = &res.Accounts[len(res.Accounts)-1]
+				lastBucket = math.MinInt64
+			} else if label != "" {
+				cur.GroupLabel = label
+			}
+			b := int64(beforeRange)
+			if pt.T >= from {
+				b = f.bucketStart(pt.T, bucket)
+			}
+			if b == lastBucket {
+				cur.Points[len(cur.Points)-1] = pt
+				continue
+			}
+			cur.Points = append(cur.Points, pt)
+			lastBucket = b
 		}
-		b := int64(beforeRange)
-		if pt.T >= from {
-			b = f.bucketStart(pt.T, bucket)
+		if err := snapRows.Err(); err != nil {
+			return fmt.Errorf("limit history snapshots rows: %w", err)
 		}
-		if b == lastBucket {
-			cur.Points[len(cur.Points)-1] = pt
-			continue
-		}
-		cur.Points = append(cur.Points, pt)
-		lastBucket = b
-	}
-	if err := snapRows.Err(); err != nil {
-		return HistoryResult{}, fmt.Errorf("limit history snapshots rows: %w", err)
-	}
-	return res, nil
+		return nil
+	})
+	return res, err
 }
 
 // AccountValue summarizes one account's realized usage over the selected range
@@ -745,7 +735,7 @@ type AccountValue struct {
 	Group      string `json:"group,omitempty"`
 	GroupLabel string `json:"group_label,omitempty"`
 	Requests   int64  `json:"requests"`
-	Failed    int64  `json:"failed"`
+	Failed     int64  `json:"failed"`
 	Tokens
 	CostUSD                float64 `json:"cost_usd"`
 	UnpricedTokens         int64   `json:"unpriced_tokens"`
@@ -775,157 +765,174 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 	if err := rejectPartialAccountFilters(f); err != nil {
 		return PlanValueResult{}, err
 	}
-	since, err := dataSince(db)
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	rows, err := aggregate(db, f, table, "auth_index", "provider")
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	knownGroups, err := loadKnownQuotaGroups(db, f)
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	type acctKey struct {
-		authIndex string
-		provider  string
-		group     string
-	}
-	type modelMix struct {
-		cost   float64
-		tokens int64
-	}
-	byAcct := map[acctKey]*AccountValue{}
-	modelsByAcct := map[acctKey]map[string]*modelMix{}
-	for _, r := range rows {
-		if r.keys[0] == "" {
-			continue
+	var res PlanValueResult
+	err := withReadTx(db, func(q querier) error {
+		since, err := dataSince(q)
+		if err != nil {
+			return err
 		}
-		var gid, glabel string
-		if strings.EqualFold(r.keys[1], "antigravity") {
-			gid, glabel = antigravityModelGroup(r.model, knownGroups[accountProviderKey{r.keys[0], r.keys[1]}])
+		rows, err := aggregate(q, f, table, "auth_index", "provider")
+		if err != nil {
+			return err
 		}
-		k := acctKey{r.keys[0], r.keys[1], gid}
-		av := byAcct[k]
-		if av == nil {
-			av = &AccountValue{AuthIndex: k.authIndex, Provider: k.provider, Group: gid, GroupLabel: glabel}
-			byAcct[k] = av
-			modelsByAcct[k] = map[string]*modelMix{}
+		type acctKey struct {
+			authIndex string
+			provider  string // lowercased for joins
+			group     string
 		}
-		av.Failed += r.failed
-		av.Tokens.add(r.tokens)
-		av.CostUSD += r.cost
-		av.UnpricedTokens += r.quality.UnpricedTokens
-		mm := modelsByAcct[k][r.model]
-		if mm == nil {
-			mm = &modelMix{}
-			modelsByAcct[k][r.model] = mm
+		type modelMix struct {
+			cost   float64
+			tokens int64
 		}
-		mm.cost += r.cost
-		mm.tokens += r.tokens.total()
-	}
+		byAcct := map[acctKey]*AccountValue{}
+		modelsByAcct := map[acctKey]map[string]*modelMix{}
+		for _, r := range rows {
+			if r.keys[0] == "" {
+				continue
+			}
+			var gid, glabel string
+			if strings.EqualFold(r.keys[1], "antigravity") {
+				gid, glabel = antigravityModelGroup(r.model)
+			}
+			k := acctKey{r.keys[0], strings.ToLower(r.keys[1]), gid}
+			av := byAcct[k]
+			if av == nil {
+				av = &AccountValue{AuthIndex: k.authIndex, Provider: r.keys[1], Group: gid, GroupLabel: glabel}
+				byAcct[k] = av
+				modelsByAcct[k] = map[string]*modelMix{}
+			}
+			av.Failed += r.failed
+			av.Tokens.add(r.tokens)
+			av.CostUSD += r.cost
+			av.UnpricedTokens += r.quality.UnpricedTokens
+			mm := modelsByAcct[k][r.model]
+			if mm == nil {
+				mm = &modelMix{}
+				modelsByAcct[k][r.model] = mm
+			}
+			mm.cost += r.cost
+			mm.tokens += r.tokens.total()
+		}
 
-	where, args := f.where(true)
-	reqRows, err := db.Query(`SELECT auth_index, provider,
-		CASE WHEN lower(provider) = 'antigravity' THEN (`+modelExpr+`) ELSE '' END AS model_key,
-		COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END)
-		FROM requests WHERE auth_index <> '' AND `+where+` GROUP BY auth_index, provider, model_key`, args...)
-	if err != nil {
-		return PlanValueResult{}, fmt.Errorf("plan value requests: %w", err)
-	}
-	defer reqRows.Close()
-	for reqRows.Next() {
-		var authIdx, prov, modelKey string
-		var reqs int64
-		if err := reqRows.Scan(&authIdx, &prov, &modelKey, &reqs); err != nil {
-			return PlanValueResult{}, fmt.Errorf("plan value requests scan: %w", err)
+		// Count distinct generating successful calls per account (and per
+		// Antigravity quota group, deduplicating multi-model split-billing
+		// rows of one call in Go).
+		where, args := f.where(true)
+		reqRows, err := q.Query(`SELECT auth_index, provider,
+			CASE WHEN lower(provider) = 'antigravity' THEN (`+modelExpr+`) ELSE '' END AS model_key,
+			CASE WHEN lower(provider) = 'antigravity' THEN (`+callExpr+`) ELSE '' END AS call_key,
+			COUNT(DISTINCT `+callExpr+`)
+			FROM requests WHERE auth_index <> '' AND generate = 1 AND failed = 0 AND `+where+`
+			GROUP BY auth_index, provider, model_key, call_key`, args...)
+		if err != nil {
+			return fmt.Errorf("plan value requests: %w", err)
 		}
-		var gid string
-		if strings.EqualFold(prov, "antigravity") {
-			gid, _ = antigravityModelGroup(modelKey, knownGroups[accountProviderKey{authIdx, prov}])
+		defer reqRows.Close()
+		seenAGCalls := map[acctKey]map[string]struct{}{}
+		for reqRows.Next() {
+			var authIdx, prov, modelKey, callKey string
+			var reqs int64
+			if err := reqRows.Scan(&authIdx, &prov, &modelKey, &callKey, &reqs); err != nil {
+				return fmt.Errorf("plan value requests scan: %w", err)
+			}
+			lp := strings.ToLower(prov)
+			if lp == "antigravity" {
+				gid, _ := antigravityModelGroup(modelKey)
+				k := acctKey{authIdx, lp, gid}
+				if av := byAcct[k]; av != nil {
+					if seenAGCalls[k] == nil {
+						seenAGCalls[k] = map[string]struct{}{}
+					}
+					if _, dup := seenAGCalls[k][callKey]; !dup {
+						seenAGCalls[k][callKey] = struct{}{}
+						av.Requests++
+					}
+				}
+				continue
+			}
+			if av := byAcct[acctKey{authIdx, lp, ""}]; av != nil {
+				av.Requests += reqs
+			}
 		}
-		if av := byAcct[acctKey{authIdx, prov, gid}]; av != nil {
-			av.Requests += reqs
+		if err := reqRows.Err(); err != nil {
+			return fmt.Errorf("plan value requests rows: %w", err)
 		}
-	}
-	if err := reqRows.Err(); err != nil {
-		return PlanValueResult{}, fmt.Errorf("plan value requests rows: %w", err)
-	}
 
-	cycles, err := weeklyCycles(db, withCycleLookback(f), table, f.From.UnixMilli())
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	polled, err := polledWeeklyCycles(db, withCycleLookback(f), table, f.From.UnixMilli())
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	cycles = append(cycles, polled...)
-	for _, c := range cycles {
-		k := acctKey{c.account, c.provider, c.group}
-		av := byAcct[k]
-		if av == nil {
-			continue // Only seen before the selected period.
+		cycles, err := weeklyCycles(q, withCycleLookback(f), table, f.From.UnixMilli())
+		if err != nil {
+			return err
 		}
-		av.AfterEarlyResetUSD += c.afterEarlyResetUSD
-		if c.endedEarly() {
-			av.EarlyResets++
+		polled, err := polledWeeklyCycles(q, withCycleLookback(f), table, f.From.UnixMilli())
+		if err != nil {
+			return err
 		}
-		for _, pair := range c.pairs {
-			av.QuotaMeasured = true
-			av.WeeklyPct += pair.pct
-			av.MeasuredCostUSD += pair.cost
-			av.MeasuredUnpricedTokens += pair.unpriced
-			av.MeasuredTokens.add(pair.tokens)
+		cycles = append(cycles, polled...)
+		for _, c := range cycles {
+			k := acctKey{c.account, strings.ToLower(c.provider), c.group}
+			av := byAcct[k]
+			if av == nil {
+				continue // Only seen before the selected period.
+			}
+			av.AfterEarlyResetUSD += c.afterEarlyResetUSD
+			if c.endedEarly() {
+				av.EarlyResets++
+			}
+			for _, pair := range c.pairs {
+				av.QuotaMeasured = true
+				av.WeeklyPct += pair.pct
+				av.MeasuredCostUSD += pair.cost
+				av.MeasuredUnpricedTokens += pair.unpriced
+				av.MeasuredTokens.add(pair.tokens)
+			}
 		}
-	}
 
-	limits, err := planRateLimits(db, f)
-	if err != nil {
-		return PlanValueResult{}, err
-	}
-	res := PlanValueResult{DataSince: since, RateLimits: limits, Accounts: make([]AccountValue, 0, len(byAcct))}
-	for k, av := range byAcct {
-		av.CacheHitRate = cacheHitRate(av.Tokens)
-		if av.WeeklyPct > 0 && av.WeeklyPct < lowSampleBurnPct {
-			av.LowSample = true
+		limits, err := planRateLimits(q, f)
+		if err != nil {
+			return err
 		}
-		if mix := modelsByAcct[k]; len(mix) > 0 {
-			useCost := av.CostUSD > 0
-			var bestModel string
-			var bestScore float64
-			for model, mm := range mix {
-				score := float64(mm.tokens)
+		res = PlanValueResult{DataSince: since, RateLimits: limits, Accounts: make([]AccountValue, 0, len(byAcct))}
+		for k, av := range byAcct {
+			av.CacheHitRate = cacheHitRate(av.Tokens)
+			if av.WeeklyPct > 0 && av.WeeklyPct < lowSampleBurnPct {
+				av.LowSample = true
+			}
+			if mix := modelsByAcct[k]; len(mix) > 0 {
+				useCost := av.CostUSD > 0
+				var bestModel string
+				var bestScore float64
+				for model, mm := range mix {
+					score := float64(mm.tokens)
+					if useCost {
+						score = mm.cost
+					}
+					if bestModel == "" || score > bestScore || (score == bestScore && model < bestModel) {
+						bestModel = model
+						bestScore = score
+					}
+				}
+				av.TopModel = bestModel
 				if useCost {
-					score = mm.cost
-				}
-				if bestModel == "" || score > bestScore || (score == bestScore && model < bestModel) {
-					bestModel = model
-					bestScore = score
+					av.TopModelShare = ratio(bestScore, av.CostUSD)
+				} else {
+					av.TopModelShare = ratio(bestScore, float64(av.Tokens.total()))
 				}
 			}
-			av.TopModel = bestModel
-			if useCost {
-				av.TopModelShare = ratio(bestScore, av.CostUSD)
-			} else {
-				av.TopModelShare = ratio(bestScore, float64(av.Tokens.total()))
+			res.Accounts = append(res.Accounts, *av)
+		}
+		sort.Slice(res.Accounts, func(i, j int) bool {
+			a, b := res.Accounts[i], res.Accounts[j]
+			if a.CostUSD != b.CostUSD {
+				return a.CostUSD > b.CostUSD
 			}
-		}
-		res.Accounts = append(res.Accounts, *av)
-	}
-	sort.Slice(res.Accounts, func(i, j int) bool {
-		a, b := res.Accounts[i], res.Accounts[j]
-		if a.CostUSD != b.CostUSD {
-			return a.CostUSD > b.CostUSD
-		}
-		if a.AuthIndex != b.AuthIndex {
-			return a.AuthIndex < b.AuthIndex
-		}
-		if a.Provider != b.Provider {
-			return a.Provider < b.Provider
-		}
-		return a.Group < b.Group
+			if a.AuthIndex != b.AuthIndex {
+				return a.AuthIndex < b.AuthIndex
+			}
+			if a.Provider != b.Provider {
+				return a.Provider < b.Provider
+			}
+			return a.Group < b.Group
+		})
+		return nil
 	})
-	return res, nil
+	return res, err
 }

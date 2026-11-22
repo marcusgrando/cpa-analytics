@@ -164,6 +164,9 @@ func (p *Plugin) managementHandle(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode management request: %w", err)
 	}
 	if req.Path == dashboardPath {
+		if req.Method != http.MethodGet {
+			return jsonResponse(http.StatusMethodNotAllowed, map[string]any{"error": map[string]string{"code": "method_not_allowed", "message": req.Method + " is not supported, use GET"}})
+		}
 		return json.Marshal(pluginapi.ManagementResponse{
 			StatusCode: http.StatusOK,
 			Headers: http.Header{

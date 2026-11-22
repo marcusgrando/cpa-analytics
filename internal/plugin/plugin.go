@@ -4,7 +4,10 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,7 +22,7 @@ import (
 
 const (
 	pluginName    = "cpa-analytics"
-	pluginVersion = "0.4.0"
+	pluginVersion = "0.4.1"
 	// minHostSchema is the first host schema that honors
 	// request_interceptor_omit_body_before, so request bodies never reach the plugin.
 	minHostSchema uint32 = 7
@@ -30,6 +33,8 @@ const (
 	flushEvery    = time.Second
 	batchSize     = 500
 	pruneEvery    = 24 * time.Hour
+	httpTimeout   = 30 * time.Second
+	logQueueSize  = 64
 )
 
 // Host calls back into CLIProxyAPI (host.http.do, host.log).
@@ -46,14 +51,23 @@ type Plugin struct {
 
 	traces *client.Traces
 
-	mu         sync.Mutex
-	cfg        Config
-	store      *store.Store
-	writer     *store.Writer
-	storageErr string
-	refresher  *pricing.Refresher
-	poller     *quotaPoller
-	pruneStop  chan struct{}
+	lifecycleMu sync.Mutex
+	closed      bool
+
+	logMu   sync.Mutex
+	logCh   chan []byte
+	logDone chan struct{}
+	logOff  bool
+
+	mu          sync.Mutex
+	cfg         Config
+	store       *store.Store
+	writer      *store.Writer
+	storageErr  string
+	refresher   *pricing.Refresher
+	pricingStop chan struct{}
+	poller      *quotaPoller
+	pruneStop   chan struct{}
 	// pruning counts running prune jobs. Close waits for them before it
 	// closes the store, so no query outlives the plugin.
 	pruning sync.WaitGroup
@@ -87,7 +101,39 @@ func New(host Host) *Plugin {
 		pluginabi.MethodManagementRegister:     p.managementRegister,
 		pluginabi.MethodManagementHandle:       p.managementHandle,
 	}
+	if host != nil {
+		p.logCh = make(chan []byte, logQueueSize)
+		p.logDone = make(chan struct{})
+		go p.runLogger()
+	}
 	return p
+}
+
+func (p *Plugin) runLogger() {
+	defer close(p.logDone)
+	for raw := range p.logCh {
+		func() {
+			defer func() { _ = recover() }()
+			_, _ = p.host.Call(pluginabi.MethodHostLog, raw)
+		}()
+	}
+}
+
+func (p *Plugin) stopLogger() {
+	p.logMu.Lock()
+	if p.logCh == nil || p.logOff {
+		done := p.logDone
+		p.logMu.Unlock()
+		if done != nil {
+			<-done
+		}
+		return
+	}
+	p.logOff = true
+	close(p.logCh)
+	done := p.logDone
+	p.logMu.Unlock()
+	<-done
 }
 
 // Handle runs one ABI method and always returns an envelope, including after a panic.
@@ -114,14 +160,27 @@ func (p *Plugin) Handle(method string, req []byte) (out []byte) {
 
 // Close flushes queued rows and closes the database. Safe to call more than once.
 func (p *Plugin) Close() {
+	p.lifecycleMu.Lock()
+	p.closed = true
+	p.closeResourcesLocked()
+	p.lifecycleMu.Unlock()
+	p.stopLogger()
+}
+
+// closeResourcesLocked stops background jobs and closes the store. Callers must
+// hold p.lifecycleMu.
+func (p *Plugin) closeResourcesLocked() {
 	p.mu.Lock()
-	w, s, r, qp, prune := p.writer, p.store, p.refresher, p.poller, p.pruneStop
-	p.writer, p.store, p.refresher, p.poller, p.pruneStop = nil, nil, nil, nil, nil
+	w, s, r, pStop, qp, prune := p.writer, p.store, p.refresher, p.pricingStop, p.poller, p.pruneStop
+	p.writer, p.store, p.refresher, p.pricingStop, p.poller, p.pruneStop = nil, nil, nil, nil, nil, nil
 	p.mu.Unlock()
 	if prune != nil {
 		close(prune)
 	}
 	p.pruning.Wait()
+	if pStop != nil {
+		close(pStop)
+	}
 	qp.Stop()
 	r.Stop()
 	w.Close()
@@ -181,16 +240,17 @@ func (p *Plugin) planCosts() map[string]float64 {
 	return out
 }
 
-// openStorage (re)opens the database when the path changed or a previous
+// openStorageLocked (re)opens the database when the path changed or a previous
 // open failed. A failure is recorded for health and never fails registration.
-func (p *Plugin) openStorage(path string) {
+// Callers must hold p.lifecycleMu.
+func (p *Plugin) openStorageLocked(path string) {
 	p.mu.Lock()
 	if p.store != nil && p.cfg.DBPath == path {
 		p.mu.Unlock()
 		return
 	}
 	p.mu.Unlock()
-	p.Close()
+	p.closeResourcesLocked()
 	s, err := store.Open(path)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -206,7 +266,8 @@ func (p *Plugin) openStorage(path string) {
 	})
 }
 
-// logf sends a log line through host.log. It never fails the caller.
+// logf sends a log line through host.log via a bounded queue. It never blocks
+// or fails the caller.
 func (p *Plugin) logf(level, format string, args ...any) {
 	if p.host == nil {
 		return
@@ -215,10 +276,80 @@ func (p *Plugin) logf(level, format string, args ...any) {
 	if err != nil {
 		return
 	}
-	go func() {
-		defer func() { _ = recover() }()
-		_, _ = p.host.Call(pluginabi.MethodHostLog, raw)
-	}()
+	p.logMu.Lock()
+	if p.logCh != nil && !p.logOff {
+		select {
+		case p.logCh <- raw:
+		default:
+		}
+	}
+	p.logMu.Unlock()
+}
+
+type hostHTTPRequestWithOp struct {
+	OperationID string      `json:"operation_id,omitempty"`
+	Method      string      `json:"method,omitempty"`
+	URL         string      `json:"url,omitempty"`
+	Headers     http.Header `json:"headers,omitempty"`
+	Body        []byte      `json:"body,omitempty"`
+}
+
+// doHostHTTP performs an outbound HTTP call via host.http.do with a per-request
+// timeout and cancellation via host.http.operation_open / host.http.cancel when
+// supported by the host.
+func doHostHTTP(host Host, req pluginapi.HTTPRequest, timeout time.Duration, stop <-chan struct{}) (pluginapi.HTTPResponse, error) {
+	if host == nil {
+		return pluginapi.HTTPResponse{}, errors.New("host callbacks unavailable")
+	}
+	var opID string
+	if openRaw, err := host.Call(pluginabi.MethodHostHTTPOperationOpen, []byte("{}")); err == nil && len(openRaw) > 0 {
+		var openResp struct {
+			OperationID string `json:"operation_id"`
+		}
+		if json.Unmarshal(openRaw, &openResp) == nil {
+			opID = strings.TrimSpace(openResp.OperationID)
+		}
+	}
+	payload, err := json.Marshal(hostHTTPRequestWithOp{
+		OperationID: opID,
+		Method:      req.Method,
+		URL:         req.URL,
+		Headers:     req.Headers,
+		Body:        req.Body,
+	})
+	if err != nil {
+		return pluginapi.HTTPResponse{}, err
+	}
+	done := make(chan struct{})
+	if opID != "" && (timeout > 0 || stop != nil) {
+		go func() {
+			var timer *time.Timer
+			var timerCh <-chan time.Time
+			if timeout > 0 {
+				timer = time.NewTimer(timeout)
+				timerCh = timer.C
+				defer timer.Stop()
+			}
+			select {
+			case <-done:
+				return
+			case <-timerCh:
+			case <-stop:
+			}
+			cancelReq, _ := json.Marshal(map[string]string{"operation_id": opID})
+			_, _ = host.Call(pluginabi.MethodHostHTTPCancel, cancelReq)
+		}()
+	}
+	raw, err := host.Call(pluginabi.MethodHostHTTPDo, payload)
+	close(done)
+	if err != nil {
+		return pluginapi.HTTPResponse{}, err
+	}
+	var resp pluginapi.HTTPResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return pluginapi.HTTPResponse{}, fmt.Errorf("decode host.http.do response: %w", err)
+	}
+	return resp, nil
 }
 
 type lifecycleRequest struct {
@@ -254,7 +385,12 @@ func (p *Plugin) register(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, &codedError{code: "invalid_config", msg: err.Error()}
 	}
-	p.openStorage(cfg.DBPath)
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.closed {
+		return nil, &codedError{code: "plugin_closed", msg: "plugin is closed"}
+	}
+	p.openStorageLocked(cfg.DBPath)
 	p.mu.Lock()
 	restartPricing := p.refresher == nil || p.cfg.PricingURL != cfg.PricingURL
 	p.cfg = cfg

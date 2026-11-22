@@ -46,13 +46,13 @@ type quotaPoller struct {
 	host  Host
 	store *store.Store
 	logf  func(level, format string, args ...any)
-	now   func() time.Time
 	every time.Duration
 
 	polls     atomic.Uint64
 	snapshots atomic.Uint64
 
 	mu          sync.Mutex
+	nowFn       func() time.Time
 	projects    map[string]string
 	lastPolled  map[string]time.Time
 	pending     map[string]struct{}
@@ -72,7 +72,7 @@ func newQuotaPoller(host Host, s *store.Store, logf func(string, string, ...any)
 		host:       host,
 		store:      s,
 		logf:       logf,
-		now:        time.Now,
+		nowFn:      time.Now,
 		every:      quotaPollEvery,
 		projects:   map[string]string{},
 		lastPolled: map[string]time.Time{},
@@ -81,6 +81,22 @@ func newQuotaPoller(host Host, s *store.Store, logf func(string, string, ...any)
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}
+}
+
+func (qp *quotaPoller) currentTime() time.Time {
+	qp.mu.Lock()
+	fn := qp.nowFn
+	qp.mu.Unlock()
+	if fn == nil {
+		return time.Now()
+	}
+	return fn()
+}
+
+func (qp *quotaPoller) setClock(fn func() time.Time) {
+	qp.mu.Lock()
+	qp.nowFn = fn
+	qp.mu.Unlock()
 }
 
 func (qp *quotaPoller) Start() {
@@ -99,6 +115,15 @@ func (qp *quotaPoller) Stop() {
 	}
 	qp.once.Do(func() { close(qp.stop) })
 	<-qp.done
+}
+
+func (qp *quotaPoller) isStopped() bool {
+	select {
+	case <-qp.stop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (qp *quotaPoller) Notify(provider, authIndex string) {
@@ -153,6 +178,14 @@ func (qp *quotaPoller) run() {
 			debounce = nil
 		}
 	}
+	armTimer := func(d time.Duration) {
+		if d < time.Millisecond {
+			d = time.Millisecond
+		}
+		stopTimer()
+		timer = time.NewTimer(d)
+		debounce = timer.C
+	}
 	defer stopTimer()
 
 	for {
@@ -165,15 +198,17 @@ func (qp *quotaPoller) run() {
 			qp.pollAll(nil)
 		case <-qp.trigger:
 			if timer == nil {
-				timer = time.NewTimer(quotaTriggerDebounce)
-				debounce = timer.C
+				armTimer(quotaTriggerDebounce)
 			}
 		case <-debounce:
 			timer = nil
 			debounce = nil
-			targets := qp.takeDuePending()
+			targets, retryIn := qp.takeDuePending()
 			if len(targets) > 0 {
 				qp.pollAll(targets)
+			}
+			if retryIn > 0 {
+				armTimer(retryIn)
 			}
 		}
 	}
@@ -185,31 +220,47 @@ func (qp *quotaPoller) clearPending() {
 	qp.mu.Unlock()
 }
 
-func (qp *quotaPoller) takeDuePending() map[string]struct{} {
-	now := qp.now()
+// takeDuePending pops pending accounts past quotaTriggerMinGap and leaves
+// cooldown-deferred ones queued, returning when the earliest deferred account
+// becomes due.
+func (qp *quotaPoller) takeDuePending() (map[string]struct{}, time.Duration) {
+	now := qp.currentTime()
 	qp.mu.Lock()
 	defer qp.mu.Unlock()
 	due := map[string]struct{}{}
+	var nextRetry time.Duration
 	for id := range qp.pending {
-		delete(qp.pending, id)
-		if last, ok := qp.lastPolled[id]; ok && now.Sub(last) < quotaTriggerMinGap {
-			continue
+		if last, ok := qp.lastPolled[id]; ok {
+			if rem := quotaTriggerMinGap - now.Sub(last); rem > 0 {
+				if nextRetry == 0 || rem < nextRetry {
+					nextRetry = rem
+				}
+				continue
+			}
 		}
+		delete(qp.pending, id)
 		due[id] = struct{}{}
 	}
-	return due
+	return due, nextRetry
 }
 
 // pollAll polls active Antigravity credentials. When only is non-nil, only
 // credentials in that set are polled.
 func (qp *quotaPoller) pollAll(only map[string]struct{}) {
-	if qp == nil || qp.host == nil || qp.store == nil {
+	if qp == nil || qp.host == nil || qp.store == nil || qp.isStopped() {
 		return
 	}
 	creds, err := qp.listAntigravityCredentials()
 	if err != nil {
 		qp.recordError(fmt.Errorf("list credentials: %w", err))
 		return
+	}
+	if only == nil {
+		active := make(map[string]struct{}, len(creds))
+		for _, c := range creds {
+			active[c.AuthIndex] = struct{}{}
+		}
+		qp.pruneCaches(active)
 	}
 	var targets []pluginapi.HostAuthFileEntry
 	for _, c := range creds {
@@ -221,6 +272,11 @@ func (qp *quotaPoller) pollAll(only map[string]struct{}) {
 		targets = append(targets, c)
 	}
 	if len(targets) == 0 {
+		if only == nil {
+			qp.mu.Lock()
+			qp.lastError = ""
+			qp.mu.Unlock()
+		}
 		return
 	}
 
@@ -230,14 +286,14 @@ func (qp *quotaPoller) pollAll(only map[string]struct{}) {
 	var allSnaps []store.QuotaSnapshot
 	var firstErr error
 
+loop:
 	for _, c := range targets {
 		select {
 		case <-qp.stop:
-			return
-		default:
+			break loop
+		case sem <- struct{}{}:
 		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(entry pluginapi.HostAuthFileEntry) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -251,14 +307,19 @@ func (qp *quotaPoller) pollAll(only map[string]struct{}) {
 				allSnaps = append(allSnaps, snaps...)
 			}
 			mu.Unlock()
+			polledAt := qp.currentTime()
 			qp.mu.Lock()
-			qp.lastPolled[entry.AuthIndex] = qp.now()
+			qp.lastPolled[entry.AuthIndex] = polledAt
 			qp.mu.Unlock()
 		}(c)
 	}
 	wg.Wait()
 
-	now := qp.now()
+	if qp.isStopped() {
+		return
+	}
+
+	now := qp.currentTime()
 	qp.polls.Add(1)
 	qp.mu.Lock()
 	qp.lastPollAt = now
@@ -280,8 +341,23 @@ func (qp *quotaPoller) pollAll(only map[string]struct{}) {
 	qp.mu.Unlock()
 }
 
+func (qp *quotaPoller) pruneCaches(active map[string]struct{}) {
+	qp.mu.Lock()
+	defer qp.mu.Unlock()
+	for id := range qp.projects {
+		if _, ok := active[id]; !ok {
+			delete(qp.projects, id)
+		}
+	}
+	for id := range qp.lastPolled {
+		if _, ok := active[id]; !ok {
+			delete(qp.lastPolled, id)
+		}
+	}
+}
+
 func (qp *quotaPoller) recordError(err error) {
-	now := qp.now()
+	now := qp.currentTime()
 	qp.mu.Lock()
 	qp.lastError = err.Error()
 	qp.lastErrorAt = now
@@ -308,7 +384,7 @@ func (qp *quotaPoller) listAntigravityCredentials() ([]pluginapi.HostAuthFileEnt
 	}
 	out := make([]pluginapi.HostAuthFileEntry, 0)
 	for _, f := range resp.Files {
-		if f.Disabled || strings.TrimSpace(f.AuthIndex) == "" {
+		if f.Disabled || f.RuntimeOnly || strings.TrimSpace(f.AuthIndex) == "" {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(f.Provider), "antigravity") {
@@ -321,7 +397,31 @@ func (qp *quotaPoller) listAntigravityCredentials() ([]pluginapi.HostAuthFileEnt
 type antigravityCredential struct {
 	AccessToken string `json:"access_token"`
 	ProjectID   string `json:"project_id"`
+	ProxyURL    string `json:"proxy_url"`
+	Expired     string `json:"expired"`
+	Timestamp   int64  `json:"timestamp"`
+	ExpiresIn   int64  `json:"expires_in"`
 }
+
+func (c antigravityCredential) isExpired(now time.Time) bool {
+	if s := strings.TrimSpace(c.Expired); s != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, s); err == nil && !ts.IsZero() {
+			return !ts.After(now)
+		}
+	}
+	if c.Timestamp > 0 && c.ExpiresIn > 0 {
+		// CPA stores timestamp in Unix ms and expires_in in seconds.
+		expMs := c.Timestamp + c.ExpiresIn*1000
+		return expMs <= now.UnixMilli()
+	}
+	return false
+}
+
+type httpStatusError struct {
+	code int
+}
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.code) }
 
 func (qp *quotaPoller) pollAccount(entry pluginapi.HostAuthFileEntry) ([]store.QuotaSnapshot, error) {
 	reqRaw, err := json.Marshal(pluginapi.HostAuthGetRequest{AuthIndex: entry.AuthIndex})
@@ -340,9 +440,15 @@ func (qp *quotaPoller) pollAccount(entry pluginapi.HostAuthFileEntry) ([]store.Q
 	if err := json.Unmarshal(authResp.JSON, &cred); err != nil {
 		return nil, fmt.Errorf("decode credential json: %w", err)
 	}
+	if strings.TrimSpace(cred.ProxyURL) != "" {
+		return nil, nil // host.http.do does not apply per-credential proxy_url
+	}
 	token := strings.TrimSpace(cred.AccessToken)
 	if token == "" {
 		return nil, errors.New("credential has no access_token")
+	}
+	if cred.isExpired(qp.currentTime()) {
+		return nil, nil // wait for CPA's proactive background refresh
 	}
 
 	project := strings.TrimSpace(entry.ProjectID)
@@ -355,7 +461,11 @@ func (qp *quotaPoller) pollAccount(entry pluginapi.HostAuthFileEntry) ([]store.Q
 		qp.mu.Unlock()
 	}
 	if project == "" {
-		if p, err := qp.fetchAntigravityProject(token); err == nil && p != "" {
+		p, err := qp.fetchAntigravityProject(token)
+		if err != nil {
+			return nil, fmt.Errorf("loadCodeAssist: %w", err)
+		}
+		if p != "" {
 			project = p
 			qp.mu.Lock()
 			qp.projects[entry.AuthIndex] = p
@@ -369,9 +479,15 @@ func (qp *quotaPoller) pollAccount(entry pluginapi.HostAuthFileEntry) ([]store.Q
 	}
 	body, err := qp.postAntigravity(antigravityQuotaSummaryURL, token, payload)
 	if err != nil {
+		var se httpStatusError
+		if errors.As(err, &se) && se.code >= 400 && se.code < 500 {
+			qp.mu.Lock()
+			delete(qp.projects, entry.AuthIndex)
+			qp.mu.Unlock()
+		}
 		return nil, err
 	}
-	return parseAntigravityQuotaSummary(body, "antigravity", entry.AuthIndex, qp.now().UnixMilli())
+	return parseAntigravityQuotaSummary(body, "antigravity", entry.AuthIndex, qp.currentTime().UnixMilli())
 }
 
 func (qp *quotaPoller) fetchAntigravityProject(token string) (string, error) {
@@ -380,17 +496,29 @@ func (qp *quotaPoller) fetchAntigravityProject(token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var doc struct {
-		Project string `json:"cloudaicompanionProject"`
-	}
+	var doc map[string]any
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(doc.Project), nil
+	for _, key := range []string{"cloudaicompanionProject", "projectId", "project"} {
+		switch v := doc[key].(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return s, nil
+			}
+		case map[string]any:
+			if id, ok := v["id"].(string); ok {
+				if s := strings.TrimSpace(id); s != "" {
+					return s, nil
+				}
+			}
+		}
+	}
+	return "", nil
 }
 
 func (qp *quotaPoller) postAntigravity(url, token string, body []byte) ([]byte, error) {
-	req, err := json.Marshal(pluginapi.HTTPRequest{
+	resp, err := doHostHTTP(qp.host, pluginapi.HTTPRequest{
 		Method: http.MethodPost,
 		URL:    url,
 		Headers: http.Header{
@@ -399,20 +527,12 @@ func (qp *quotaPoller) postAntigravity(url, token string, body []byte) ([]byte, 
 			"User-Agent":    {antigravityUserAgent},
 		},
 		Body: body,
-	})
+	}, httpTimeout, qp.stop)
 	if err != nil {
 		return nil, err
-	}
-	raw, err := qp.host.Call(pluginabi.MethodHostHTTPDo, req)
-	if err != nil {
-		return nil, err
-	}
-	var resp pluginapi.HTTPResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode host.http.do: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, httpStatusError{code: resp.StatusCode}
 	}
 	return resp.Body, nil
 }
@@ -438,6 +558,10 @@ func parseAntigravityQuotaSummary(raw []byte, provider, authIndex string, record
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode quota summary: %w", err)
 	}
+	type dedupKey struct {
+		groupID, windowKind string
+	}
+	seen := map[dedupKey]bool{}
 	var snaps []store.QuotaSnapshot
 	for _, g := range doc.Groups {
 		label := strings.TrimSpace(trailingModelsRe.ReplaceAllString(strings.TrimSpace(g.DisplayName), ""))
@@ -451,6 +575,10 @@ func parseAntigravityQuotaSummary(raw []byte, provider, authIndex string, record
 		for _, kind := range []struct {
 			api, stored string
 		}{{"5h", "session"}, {"weekly", "weekly"}} {
+			dk := dedupKey{id, kind.stored}
+			if seen[dk] {
+				continue
+			}
 			for _, b := range g.Buckets {
 				if b.Window != kind.api || b.RemainingFraction == nil {
 					continue
@@ -462,10 +590,11 @@ func parseAntigravityQuotaSummary(raw []byte, provider, authIndex string, record
 				used := math.Min(100, math.Max(0, (1-rem)*100))
 				var reset sql.NullInt64
 				if rem < 1 {
-					if ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(b.ResetTime)); err == nil && !ts.IsZero() {
+					if ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(b.ResetTime)); err == nil && ts.UnixMilli() > 0 {
 						reset = sql.NullInt64{Int64: ts.UnixMilli(), Valid: true}
 					}
 				}
+				seen[dk] = true
 				snaps = append(snaps, store.QuotaSnapshot{
 					RecordedAt: recordedAt,
 					Provider:   provider,

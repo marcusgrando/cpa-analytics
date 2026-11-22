@@ -461,3 +461,68 @@ func TestAntigravityQuotaSnapshotsFeedHistoryBurnLeftoverPlanValueAnd429(t *test
 		t.Fatalf("PlanValue rate_limits = %+v, want 1 gemini session 429", pv.RateLimits)
 	}
 }
+
+func TestAntigravityGroupsAllGeminiTogetherAndSeparatesClaudeGPT(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-groups.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset := day3.Add(6 * time.Hour)
+	// Include a 0% baseline snapshot (reset_at NULL), an Argon bucket snapshot, and a post-429 snapshot.
+	snaps := []store.QuotaSnapshot{
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 10, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		// Real upstream Argon bucket stays visible in LimitHistory, not as a 3rd group in Plans/Burn.
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini-4-argon", GroupLabel: "Gemini 4 Argon", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini-4-argon", GroupLabel: "Gemini 4 Argon", WindowKind: "weekly", UsedPct: 5, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		// Pre-429 expired snapshot vs post-429 fresh snapshot.
+		{RecordedAt: day1.Add(3*time.Hour + 1*time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "session", UsedPct: 20, ResetAt: sql.NullInt64{Int64: day1.Add(3*time.Hour + 2*time.Minute).UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(3*time.Hour + 4*time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "session", UsedPct: 100, ResetAt: sql.NullInt64{Int64: day1.Add(8 * time.Hour).UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.Row{
+		{RequestID: "ar1", TraceID: "ar1", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "antigravity", Model: "gemini-4-argon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},
+		{RequestID: "ar-429", TraceID: "ar-429", RequestedAt: day1.Add(3*time.Hour + 3*time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-argon", AuthIndex: "ag1", Generate: true, Failed: true, StatusCode: 429},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-4-argon": {Input: 2.0, Output: 10.0},
+	})
+
+	// LimitHistory keeps both Gemini and Gemini 4 Argon buckets for Limits trends.
+	hist, err := LimitHistory(s.DB(), rangeFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Accounts) != 2 {
+		t.Fatalf("LimitHistory accounts = %d, want 2 (gemini + gemini-4-argon): %+v", len(hist.Accounts), hist.Accounts)
+	}
+
+	// Burn and PlanValue unify all Gemini models (including gemini-4-argon) under "gemini"
+	// and capture the 0% (NULL reset_at) -> 10% opening burn.
+	burn, err := LimitBurn(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(burn.Points) != 1 || burn.Points[0].Group != "gemini" || !near(burn.Points[0].WeeklyPct, 10) || !near(burn.Points[0].CostUSD, 2.0) {
+		t.Fatalf("LimitBurn = %+v, want 1 gemini point (+10%%, $2)", burn.Points)
+	}
+
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 1 || pv.Accounts[0].Group != "gemini" || !near(pv.Accounts[0].WeeklyPct, 10) || !near(pv.Accounts[0].MeasuredCostUSD, 2.0) {
+		t.Fatalf("PlanValue accounts = %+v, want 1 unified gemini row", pv.Accounts)
+	}
+	// The 429 ignores the expired pre-429 snapshot and classifies via the post-429 snapshot (session 100%).
+	if len(pv.RateLimits) != 1 || pv.RateLimits[0].Group != "gemini" || pv.RateLimits[0].Window != "session" {
+		t.Fatalf("PlanValue rate_limits = %+v, want gemini session 429", pv.RateLimits)
+	}
+}

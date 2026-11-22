@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/marcusgrando/cpa-analytics/internal/accounting"
 	"github.com/marcusgrando/cpa-analytics/internal/client"
@@ -19,7 +20,11 @@ import (
 // inbound User-Agent joined by trace ID, empty when unknown.
 func RowFromRecord(rec pluginapi.UsageRecord, ua string) store.Row {
 	b := accounting.Normalize(rec.Provider, rec.ExecutorType, rec.Detail)
-	limits := ratelimit.FromHeaders(rec.ResponseHeaders, rec.RequestedAt.Add(rec.Latency))
+	requestedAt := rec.RequestedAt
+	if requestedAt.IsZero() {
+		requestedAt = time.Now().UTC()
+	}
+	limits := ratelimit.FromHeaders(rec.ResponseHeaders, requestedAt.Add(rec.Latency))
 	name, version := client.Parse(ua)
 	status := 0
 	if rec.Failed {
@@ -28,7 +33,7 @@ func RowFromRecord(rec pluginapi.UsageRecord, ua string) store.Row {
 	row := store.Row{
 		RequestID:            rec.RequestID,
 		TraceID:              rec.TraceID,
-		RequestedAt:          rec.RequestedAt.UnixMilli(),
+		RequestedAt:          requestedAt.UnixMilli(),
 		Provider:             rec.Provider,
 		ExecutorType:         rec.ExecutorType,
 		AuthType:             rec.AuthType,
@@ -120,7 +125,9 @@ func (p *Plugin) interceptBefore(raw []byte) ([]byte, error) {
 	if len(ua) > maxUserAgentBytes {
 		ua = ""
 	}
-	p.traces.Put(req.TraceID, ua)
+	if ua != "" {
+		p.traces.Put(req.TraceID, ua)
+	}
 	return nil, nil
 }
 

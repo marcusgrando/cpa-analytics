@@ -275,3 +275,32 @@ func TestParseModelsDevAndOpenRouterAndMerge(t *testing.T) {
 		t.Fatalf("merged openrouter = %+v %v", r, ok)
 	}
 }
+
+func TestParseModelsDevPreventsResellerSlashSpoofingAndNilWithOverrides(t *testing.T) {
+	md, err := ParseModelsDev([]byte(`{
+		"reseller": {
+			"models": {
+				"openai/gpt-5": {"cost": {"input": 99, "output": 99}}
+			}
+		},
+		"openai": {
+			"models": {
+				"gpt-5": {"cost": {"input": 1.25, "output": 10}}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _, ok := md.Lookup("gpt-5", "", 0)
+	if !ok || !near(r.Input, 1.25e-06) {
+		t.Fatalf("reseller spoofed first-party price: %+v %v", r, ok)
+	}
+
+	ov := WithOverrides(nil, map[string]PriceOverride{
+		"my-model-20260101-high": {Input: 2, Output: 8},
+	})
+	if r, src, ok := ov.Lookup("my-model-20260101-high", "", 0); !ok || src != SourceOverride || !near(r.Input, 2e-06) {
+		t.Fatalf("WithOverrides(nil) lookup = %+v %q %v", r, src, ok)
+	}
+}

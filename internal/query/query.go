@@ -67,7 +67,7 @@ type SummaryResult struct {
 }
 
 // dataSince returns the first recorded row in Unix milliseconds, or 0 with no rows.
-func dataSince(db *sql.DB) (int64, error) {
+func dataSince(db querier) (int64, error) {
 	var first sql.NullInt64
 	if err := db.QueryRow("SELECT MIN(requested_at) FROM requests").Scan(&first); err != nil {
 		return 0, fmt.Errorf("first row: %w", err)
@@ -77,92 +77,92 @@ func dataSince(db *sql.DB) (int64, error) {
 
 // Summary returns totals and the per-provider cost share.
 func Summary(db *sql.DB, f Filter, table *pricing.Table) (SummaryResult, error) {
-	rows, err := aggregate(db, f, table, "provider")
-	if err != nil {
-		return SummaryResult{}, err
-	}
 	var res SummaryResult
-	byProvider := map[string]*ProviderShare{}
-	byTier := map[string]*TierCost{}
-	for _, r := range rows {
-		res.Totals.Tokens.add(r.tokens)
-		res.Totals.CostUSD += r.cost
-		res.Totals.Records += r.records
-		res.Totals.CostQuality.add(r.quality)
-		res.Totals.CostByType.Add(r.byType)
-		res.Totals.CacheSavingsUSD += r.cacheSavings
-		tc := byTier[r.tier]
-		if tc == nil {
-			tc = &TierCost{Tier: r.tier}
-			byTier[r.tier] = tc
+	err := withReadTx(db, func(q querier) error {
+		rows, err := aggregate(q, f, table, "provider")
+		if err != nil {
+			return err
 		}
-		tc.CostUSD += r.cost
-		tc.StandardCostUSD += r.standardCost
-		tc.Tokens += r.tokens.total()
-		ps := byProvider[r.keys[0]]
-		if ps == nil {
-			ps = &ProviderShare{Provider: r.keys[0]}
-			byProvider[r.keys[0]] = ps
+		byProvider := map[string]*ProviderShare{}
+		byTier := map[string]*TierCost{}
+		for _, r := range rows {
+			res.Totals.Tokens.add(r.tokens)
+			res.Totals.CostUSD += r.cost
+			res.Totals.Records += r.records
+			res.Totals.CostQuality.add(r.quality)
+			res.Totals.CostByType.Add(r.byType)
+			res.Totals.CacheSavingsUSD += r.cacheSavings
+			tc := byTier[r.tier]
+			if tc == nil {
+				tc = &TierCost{Tier: r.tier}
+				byTier[r.tier] = tc
+			}
+			tc.CostUSD += r.cost
+			tc.StandardCostUSD += r.standardCost
+			tc.Tokens += r.tokens.total()
+			ps := byProvider[r.keys[0]]
+			if ps == nil {
+				ps = &ProviderShare{Provider: r.keys[0]}
+				byProvider[r.keys[0]] = ps
+			}
+			ps.CostUSD += r.cost
+			ps.Tokens += r.tokens.total()
+			ps.UnpricedTokens += r.quality.UnpricedTokens
 		}
-		ps.CostUSD += r.cost
-		ps.Tokens += r.tokens.total()
-		ps.UnpricedTokens += r.quality.UnpricedTokens
-	}
-	res.Totals.ProcessedTokens = res.Totals.Tokens.total()
-	res.Totals.CacheHitRate = cacheHitRate(res.Totals.Tokens)
-	res.Totals.CostByTier = make([]TierCost, 0, len(byTier))
-	for _, tc := range byTier {
-		res.Totals.CostByTier = append(res.Totals.CostByTier, *tc)
-	}
-	sort.Slice(res.Totals.CostByTier, func(i, j int) bool {
-		a, b := res.Totals.CostByTier[i], res.Totals.CostByTier[j]
-		if a.CostUSD != b.CostUSD {
-			return a.CostUSD > b.CostUSD
+		res.Totals.ProcessedTokens = res.Totals.Tokens.total()
+		res.Totals.CacheHitRate = cacheHitRate(res.Totals.Tokens)
+		res.Totals.CostByTier = make([]TierCost, 0, len(byTier))
+		for _, tc := range byTier {
+			res.Totals.CostByTier = append(res.Totals.CostByTier, *tc)
 		}
-		if a.Tokens != b.Tokens {
-			return a.Tokens > b.Tokens
+		sort.Slice(res.Totals.CostByTier, func(i, j int) bool {
+			a, b := res.Totals.CostByTier[i], res.Totals.CostByTier[j]
+			if a.CostUSD != b.CostUSD {
+				return a.CostUSD > b.CostUSD
+			}
+			if a.Tokens != b.Tokens {
+				return a.Tokens > b.Tokens
+			}
+			return a.Tier < b.Tier
+		})
+		res.Providers = make([]ProviderShare, 0, len(byProvider))
+		for _, ps := range byProvider {
+			ps.CostShare = ratio(ps.CostUSD, res.Totals.CostUSD)
+			res.Providers = append(res.Providers, *ps)
 		}
-		return a.Tier < b.Tier
-	})
-	res.Providers = make([]ProviderShare, 0, len(byProvider))
-	for _, ps := range byProvider {
-		ps.CostShare = ratio(ps.CostUSD, res.Totals.CostUSD)
-		res.Providers = append(res.Providers, *ps)
-	}
-	sort.Slice(res.Providers, func(i, j int) bool {
-		a, b := res.Providers[i], res.Providers[j]
-		if a.CostUSD != b.CostUSD {
-			return a.CostUSD > b.CostUSD
-		}
-		if a.Tokens != b.Tokens {
-			return a.Tokens > b.Tokens
-		}
-		return a.Provider < b.Provider
-	})
+		sort.Slice(res.Providers, func(i, j int) bool {
+			a, b := res.Providers[i], res.Providers[j]
+			if a.CostUSD != b.CostUSD {
+				return a.CostUSD > b.CostUSD
+			}
+			if a.Tokens != b.Tokens {
+				return a.Tokens > b.Tokens
+			}
+			return a.Provider < b.Provider
+		})
 
-	where, args := f.where(true)
-	err = db.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END),
-		COUNT(DISTINCT NULLIF(session_id, '')), COALESCE(SUM(failed), 0)
-		FROM requests WHERE `+where, args...).Scan(&res.Totals.Requests, &res.Totals.Sessions, &res.Totals.Failed)
-	if err != nil {
-		return SummaryResult{}, fmt.Errorf("summary counts: %w", err)
-	}
-	if res.DataSince, err = dataSince(db); err != nil {
-		return SummaryResult{}, err
-	}
-	if err := providerSessions(db, where, args, res.Providers); err != nil {
-		return SummaryResult{}, err
-	}
-	if err := fillSessionAndRequestMedians(db, where, args, &res.Totals); err != nil {
-		return SummaryResult{}, err
-	}
-	return res, nil
+		where, args := f.where(true)
+		err = q.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END),
+			COUNT(DISTINCT NULLIF(session_id, '')), COALESCE(SUM(failed), 0)
+			FROM requests WHERE `+where, args...).Scan(&res.Totals.Requests, &res.Totals.Sessions, &res.Totals.Failed)
+		if err != nil {
+			return fmt.Errorf("summary counts: %w", err)
+		}
+		if res.DataSince, err = dataSince(q); err != nil {
+			return err
+		}
+		if err := providerSessions(q, where, args, res.Providers); err != nil {
+			return err
+		}
+		return fillSessionAndRequestMedians(q, where, args, &res.Totals)
+	})
+	return res, err
 }
 
 // fillSessionAndRequestMedians computes per-request input/output medians and
 // session depth medians (requests per session and peak prompt input per session)
 // over successful generating calls.
-func fillSessionAndRequestMedians(db *sql.DB, where string, args []any, totals *Totals) error {
+func fillSessionAndRequestMedians(db querier, where string, args []any, totals *Totals) error {
 	rows, err := db.Query(`SELECT MAX(session_id),
 		SUM(uncached_input + cache_read + cache_write),
 		SUM(output_non_reasoning + output_reasoning)
@@ -218,7 +218,7 @@ func fillSessionAndRequestMedians(db *sql.DB, where string, args []any, totals *
 
 // providerSessions fills Sessions on each provider share. A session that
 // spans two providers counts once in each.
-func providerSessions(db *sql.DB, where string, args []any, providers []ProviderShare) error {
+func providerSessions(db querier, where string, args []any, providers []ProviderShare) error {
 	rows, err := db.Query(`SELECT provider, COUNT(DISTINCT NULLIF(session_id, '')) FROM requests WHERE `+where+` GROUP BY provider`, args...)
 	if err != nil {
 		return fmt.Errorf("provider sessions: %w", err)
@@ -277,67 +277,70 @@ func Timeseries(db *sql.DB, f Filter, table *pricing.Table, bucket, group string
 	if !ok {
 		return Series{}, &ParamError{Param: "group", Reason: "must be provider, model or client"}
 	}
-	rows, err := aggregate(db, f, table, f.bucketSQL(size), groupExpr)
-	if err != nil {
-		return Series{}, err
-	}
-	type pointKey struct {
-		t   int64
-		key string
-	}
-	merged := map[pointKey]*Point{}
-	for _, r := range rows {
-		t, err := strconv.ParseInt(r.keys[0], 10, 64)
+	var s Series
+	err := withReadTx(db, func(q querier) error {
+		rows, err := aggregate(q, f, table, f.bucketSQL(size), groupExpr)
 		if err != nil {
-			return Series{}, fmt.Errorf("timeseries bucket %q: %w", r.keys[0], err)
+			return err
 		}
-		k := pointKey{t, r.keys[1]}
-		pt := merged[k]
-		if pt == nil {
-			pt = &Point{T: t, Key: r.keys[1]}
-			merged[k] = pt
+		type pointKey struct {
+			t   int64
+			key string
 		}
-		pt.Tokens.add(r.tokens)
-		pt.Records += r.records
-		pt.CostUSD += r.cost
-	}
-	where, args := f.where(true)
-	counts, err := db.Query(`SELECT CAST(`+f.bucketSQL(size)+` AS TEXT), `+groupExpr+`,
-		COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END), COALESCE(SUM(failed), 0)
-		FROM requests WHERE `+where+` GROUP BY 1, 2`, args...)
-	if err != nil {
-		return Series{}, fmt.Errorf("timeseries counts: %w", err)
-	}
-	defer counts.Close()
-	for counts.Next() {
-		var bucketKey, key string
-		var requests, failed int64
-		if err := counts.Scan(&bucketKey, &key, &requests, &failed); err != nil {
-			return Series{}, fmt.Errorf("timeseries counts row: %w", err)
+		merged := map[pointKey]*Point{}
+		for _, r := range rows {
+			t, err := strconv.ParseInt(r.keys[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("timeseries bucket %q: %w", r.keys[0], err)
+			}
+			k := pointKey{t, r.keys[1]}
+			pt := merged[k]
+			if pt == nil {
+				pt = &Point{T: t, Key: r.keys[1]}
+				merged[k] = pt
+			}
+			pt.Tokens.add(r.tokens)
+			pt.Records += r.records
+			pt.CostUSD += r.cost
 		}
-		t, err := strconv.ParseInt(bucketKey, 10, 64)
+		where, args := f.where(true)
+		counts, err := q.Query(`SELECT CAST(`+f.bucketSQL(size)+` AS TEXT), `+groupExpr+`,
+			COUNT(DISTINCT CASE WHEN generate = 1 AND failed = 0 THEN `+callExpr+` END), COALESCE(SUM(failed), 0)
+			FROM requests WHERE `+where+` GROUP BY 1, 2`, args...)
 		if err != nil {
-			return Series{}, fmt.Errorf("timeseries counts bucket %q: %w", bucketKey, err)
+			return fmt.Errorf("timeseries counts: %w", err)
 		}
-		// Both queries read the same rows, so every count has its point.
-		if pt := merged[pointKey{t, key}]; pt != nil {
-			pt.Requests, pt.Failed = requests, failed
+		defer counts.Close()
+		for counts.Next() {
+			var bucketKey, key string
+			var requests, failed int64
+			if err := counts.Scan(&bucketKey, &key, &requests, &failed); err != nil {
+				return fmt.Errorf("timeseries counts row: %w", err)
+			}
+			t, err := strconv.ParseInt(bucketKey, 10, 64)
+			if err != nil {
+				return fmt.Errorf("timeseries counts bucket %q: %w", bucketKey, err)
+			}
+			if pt := merged[pointKey{t, key}]; pt != nil {
+				pt.Requests, pt.Failed = requests, failed
+			}
 		}
-	}
-	if err := counts.Err(); err != nil {
-		return Series{}, fmt.Errorf("timeseries counts rows: %w", err)
-	}
-	s := Series{Bucket: bucket, Group: group, Points: make([]Point, 0, len(merged))}
-	for _, pt := range merged {
-		s.Points = append(s.Points, *pt)
-	}
-	sort.Slice(s.Points, func(i, j int) bool {
-		if s.Points[i].T != s.Points[j].T {
-			return s.Points[i].T < s.Points[j].T
+		if err := counts.Err(); err != nil {
+			return fmt.Errorf("timeseries counts rows: %w", err)
 		}
-		return s.Points[i].Key < s.Points[j].Key
+		s = Series{Bucket: bucket, Group: group, Points: make([]Point, 0, len(merged))}
+		for _, pt := range merged {
+			s.Points = append(s.Points, *pt)
+		}
+		sort.Slice(s.Points, func(i, j int) bool {
+			if s.Points[i].T != s.Points[j].T {
+				return s.Points[i].T < s.Points[j].T
+			}
+			return s.Points[i].Key < s.Points[j].Key
+		})
+		return nil
 	})
-	return s, nil
+	return s, err
 }
 
 // BreakdownRow is one provider, model, client version, day, API key hash,
@@ -396,12 +399,18 @@ func Breakdown(db *sql.DB, f Filter, table *pricing.Table, by string) (Breakdown
 	default:
 		return BreakdownResult{}, &ParamError{Param: "by", Reason: "must be provider, model, client, user_agent, day, api_key, reasoning_effort or account"}
 	}
-	rows, err := aggregate(db, f, table, keyExpr)
-	if err != nil {
-		return BreakdownResult{}, err
-	}
-	reqs, err := perRequest(db, f, keyExpr)
-	if err != nil {
+	var (
+		rows []costRow
+		reqs []inbound
+	)
+	if err := withReadTx(db, func(q querier) error {
+		var err error
+		if rows, err = aggregate(q, f, table, keyExpr); err != nil {
+			return err
+		}
+		reqs, err = perRequest(q, f, keyExpr)
+		return err
+	}); err != nil {
 		return BreakdownResult{}, err
 	}
 
