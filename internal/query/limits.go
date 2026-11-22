@@ -351,6 +351,8 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 		prov := origProvider[gk]
 		var (
 			cur        *weeklyCycle
+			highPct    float64
+			highAt     int64
 			zeroAt     int64
 			hasZero    bool
 			earlyUntil int64
@@ -363,6 +365,7 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 			if cur != nil {
 				cycles = append(cycles, *cur)
 				cur = nil
+				highPct, highAt = 0, 0
 			}
 		}
 		consumeReq := func(r polledReq) {
@@ -418,27 +421,51 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 				}
 			}
 			if sn.at < measureFrom {
-				cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+				if sameCycle {
+					cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
+					if sn.pct > highPct {
+						highPct, highAt = sn.pct, sn.at
+					}
+				} else {
+					cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+					highPct, highAt = sn.pct, sn.at
+				}
 				hasZero = false
+				spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 				continue
 			}
+			// Within one polled cycle, Google's remainingFraction can jitter
+			// slightly downward between polls (e.g. in-flight reservation
+			// adjustments). Track a high-water mark so downward jitter never
+			// drops accumulated cost or double-counts the rebound.
 			if sameCycle {
-				if cur.lastAt >= measureFrom && sn.pct >= cur.lastPct {
-					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
-				}
 				cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
+				if highAt < measureFrom {
+					if sn.pct > highPct {
+						highPct = sn.pct
+					}
+					highAt = sn.at
+					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+				} else if sn.pct > highPct {
+					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - highPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+					highPct, highAt = sn.pct, sn.at
+					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+				} else if sn.pct == highPct && spanCost == 0 && spanUnpr == 0 && len(cur.pairs) == 0 {
+					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at})
+				}
 			} else {
 				if cur != nil {
 					cur.nextAt = sn.at
 					flush()
 				}
 				cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
+				highPct, highAt = sn.pct, sn.at
 				if hasZero && zeroAt >= measureFrom && sn.pct > 0 {
 					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
 				}
+				spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 			}
 			hasZero = false
-			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 			if isEarlyReset {
 				for ri < len(reqs) && reqs[ri].at == sn.at {
 					consumeReq(reqs[ri])

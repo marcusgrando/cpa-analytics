@@ -2097,16 +2097,22 @@ function weeklyTrend(pool, byAccount, readings, now, providerId = '') {
   const fmtRate = (r) => (r === null ? 'not enough readings' : r.toFixed(1) + (single ? '% per hour' : '% of the pool per hour'));
   const nameOf = (account) => accountName(byAccount.get(account).account);
   const first = projection.firstFull;
+  const recordedStart = recorded.find((p) => p.used !== null);
+  const shortHistoryNote = recordedStart && now - recordedStart.t < DAY
+    ? el('span', {}, 'Recorded since ', el('strong', { text: fmtStamp(recordedStart.t) }))
+    : null;
   const stats = single
     ? el('div', { class: 'trend-stats' },
       el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
       el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
-      el('span', {}, 'At limit: ', el('strong', { text: first ? (first.at <= now ? 'now' : `in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'not in the next 7 days' })))
+      el('span', {}, 'At limit: ', el('strong', { text: first ? (first.at <= now ? 'now' : `in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'not in the next 7 days' })),
+      shortHistoryNote)
     : el('div', { class: 'trend-stats' },
       el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
       el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
       el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
-      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : `in ${fmtDuration(projection.poolFull - now)} (${fmtWhen(projection.poolFull)})` })));
+      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : `in ${fmtDuration(projection.poolFull - now)} (${fmtWhen(projection.poolFull)})` })),
+      shortHistoryNote);
   const chart = el('div', { class: 'chart trend' });
   pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label, single));
   return el('div', {}, stats, chart,
@@ -2155,6 +2161,11 @@ function trendChart(container, recorded, projected, now, label, single = false) 
   svg.append(svgEl('text', { x: x(now), y: m.top - 8, 'text-anchor': 'middle', class: 'marker-label', text: 'Now' }));
   svg.append(svgEl('path', { d: path(recorded), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
   svg.append(svgEl('path', { d: path(projected), fill: 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
+  const firstRec = recorded.find((p) => p.used !== null);
+  const lastRec = [...recorded].reverse().find((p) => p.used !== null);
+  for (const pt of [firstRec, lastRec !== firstRec ? lastRec : null]) {
+    if (pt) svg.append(svgEl('circle', { cx: x(pt.t), cy: y(pt.used), r: 3, 'stroke-width': 1.5, style: 'fill:var(--tone1);stroke:var(--surface)' }));
+  }
   const all = recorded.concat(projected.slice(1));
   const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: 'fill:var(--tone1);stroke:var(--surface)', visibility: 'hidden' });
   svg.append(dot);

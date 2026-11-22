@@ -706,4 +706,32 @@ describe('limits rendering', () => {
     expect(textOf(pool)).toContain('Limit reached');
     expect(textOf(pool)).toContain('polled every 5 minutes');
   });
+
+  test('short recorded history under 24 h shows Recorded since in trend stats', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: {
+        accounts: [{
+          auth_index: 'ag1',
+          provider: 'antigravity',
+          group: 'gemini',
+          group_label: 'Gemini',
+          points: [
+            { t: now - 2 * HOUR, weekly_pct: 1.6, weekly_reset: now + 6 * DAY },
+            { t: now - 15 * 60000, weekly_pct: 2.8, weekly_reset: now + 6 * DAY },
+          ],
+        }],
+      },
+      results: [{
+        account: { auth_index: 'ag1', provider: 'antigravity', email: 'ag@example.com' },
+        plan: 'Ultra',
+        weight: 20,
+        windows: [{ id: 'weekly:gemini', label: 'Weekly, Gemini', used: 3.1, resetsAt: now + 6 * DAY, lengthMs: 7 * DAY }],
+      }],
+    });
+    const stats = walk(sections, (n) => hasClass(n, 'trend-stats'))[0];
+    expect(textOf(stats)).toContain('Recorded since');
+  });
 });

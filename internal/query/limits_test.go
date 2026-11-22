@@ -526,3 +526,52 @@ func TestAntigravityGroupsAllGeminiTogetherAndSeparatesClaudeGPT(t *testing.T) {
 		t.Fatalf("PlanValue rate_limits = %+v, want gemini session 429", pv.RateLimits)
 	}
 }
+
+func TestAntigravityPolledJitterDoesNotDoubleCountWeeklyBurn(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-jitter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset := day3.Add(6 * time.Hour)
+	// Mimics live Google Antigravity downward jitter (2.85 -> 2.59 -> 2.77 -> 3.09).
+	// Net movement from 1.63 to 3.09 is 1.46%, not 1.22 + 0.18 + 0.32 = 1.72%.
+	snaps := []store.QuotaSnapshot{
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 1.63, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 2.85, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 2.59, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(4 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 2.77, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(5 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 3.09, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.Row{
+		{RequestID: "r1", TraceID: "r1", RequestedAt: day1.Add(90 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},
+		{RequestID: "r2", TraceID: "r2", RequestedAt: day1.Add(150 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},
+		{RequestID: "r3", TraceID: "r3", RequestedAt: day1.Add(210 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},
+		{RequestID: "r4", TraceID: "r4", RequestedAt: day1.Add(270 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-4-neon": {Input: 3.0, Output: 15.0},
+	})
+
+	burn, err := LimitBurn(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(burn.Points) != 1 || !near(burn.Points[0].WeeklyPct, 1.46) || !near(burn.Points[0].CostUSD, 12.0) {
+		t.Fatalf("LimitBurn = %+v, want 1.46%% and $12.00", burn.Points)
+	}
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 1 || !near(pv.Accounts[0].WeeklyPct, 1.46) || !near(pv.Accounts[0].MeasuredCostUSD, 12.0) {
+		t.Fatalf("PlanValue = %+v, want 1.46%% and $12.00", pv.Accounts)
+	}
+}
