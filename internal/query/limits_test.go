@@ -333,3 +333,35 @@ func TestPlanValueMeasuresQuotaAcrossEarlyReset(t *testing.T) {
 	check("scheduled", day1, day4, 0, true, 0, 0, 0)
 	check("headerless", day1, day4, 0, false, 0, 0, 0)
 }
+
+func TestPlanValuePricesUsageBetweenAnEarlyResetAndPreviousDeadline(t *testing.T) {
+	newReset := day2.Add(7 * 24 * time.Hour)
+	s := insertSamples(t, []sample{
+		{id: "before", account: "reset", model: "gpt-5", at: day1, weekly: 98, reset: day2, uncached: 10},
+		{id: "new", account: "reset", model: "gpt-5", at: day1.Add(time.Hour), weekly: 1, reset: newReset, uncached: 20},
+		{id: "no-headers", account: "reset", model: "gpt-5", at: day1.Add(2 * time.Hour), weekly: -1, uncached: 30},
+		{id: "deadline", account: "reset", model: "gpt-5", at: day2, weekly: 2, reset: newReset, uncached: 40},
+		{id: "other", account: "other", model: "gpt-5", at: day1.Add(2 * time.Hour), weekly: -1, uncached: 50},
+	})
+	for _, tc := range []struct {
+		from   time.Time
+		want   int64
+		resets int
+	}{
+		{day1, 50, 1}, {day1.Add(2 * time.Hour), 30, 0}, {day2, 0, 0},
+	} {
+		got, err := PlanValue(s.DB(), Filter{From: tc.from, To: day4}, testPrices(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range got.Accounts {
+			want, resets := tc.want, tc.resets
+			if a.AuthIndex == "other" {
+				want, resets = 0, 0
+			}
+			if !near(a.AfterEarlyResetUSD, float64(want)*gpt5Input) || a.EarlyResets != resets {
+				t.Fatalf("from %s: %+v", tc.from, a)
+			}
+		}
+	}
+}

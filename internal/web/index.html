@@ -195,11 +195,14 @@ body.loading #refresh-now { opacity: 0.65; }
 .cost-edit { display: inline-flex; align-items: center; gap: 4px; }
 .cost-input { width: 5.5em; text-align: right; min-height: 28px; padding: 2px 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .plan-badge { display: inline-block; font-size: 11px; color: var(--ink-2); background: var(--wash); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+#plans-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .plan-bars { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 18px; }
 .plan-bar-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) 5em; align-items: center; gap: 6px 12px; font-size: 12px; }
 .plan-bar-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-weight: 500; }
 .plan-bar-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-bar-track { position: relative; height: 14px; border-radius: 4px; background: var(--wash); }
+.plan-window-track { display: flex; overflow: hidden; }
+.plan-window-caption { color: var(--ink-2); font-size: 12px; margin-top: 3px; }
 .plan-bar-fill { height: 100%; border-radius: 4px; }
 .plan-bar-val { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .plan-sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
@@ -295,7 +298,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="card-head">
         <div>
           <h2 id="plans-title">Plan value</h2>
-          <p class="sub">10× means that $1 of subscription covered tokens worth $10 at API rates. Realized uses recorded tokens and the subscription price prorated to the selected period. Potential projects the observed model and token mix to one full weekly quota per account.</p>
+          <p class="sub">Recorded value prices the tokens each account served, including traffic after resets and account switches. The plan view groups accounts by their current tier and shows their average recorded value.</p>
         </div>
         <div class="controls">
           <label>Period
@@ -308,8 +311,10 @@ body.loading #refresh-now { opacity: 0.65; }
           </label>
           <label>Rank by
             <select id="plans-sort">
-              <option value="realized" selected>Realized API value / $1</option>
-              <option value="potential">Potential API value / $1</option>
+              <option value="recordedUSD" selected>Recorded API value / account</option>
+              <option value="realized">Recorded API value / $1</option>
+              <option value="potential">Estimated weekly API value / $1</option>
+              <option value="cycleUSD">Estimated weekly API value / account</option>
               <option value="output">Output tokens</option>
               <option value="input">Uncached input</option>
               <option value="cacheRead">Cache read</option>
@@ -334,7 +339,11 @@ body.loading #refresh-now { opacity: 0.65; }
         <div id="plans-tiles" class="tiles"></div>
         <p id="plans-note" class="notice"></p>
         <h3 id="plans-chart-title" class="hero-label"></h3>
+        <p id="plans-chart-basis" class="sub"></p>
         <div id="plans-chart" class="plan-bars" role="group" aria-labelledby="plans-chart-title"></div>
+        <h3 id="plans-429-title" class="hero-label">Quota reported on HTTP 429 calls</h3>
+        <div id="plans-429" class="plan-bars" role="group" aria-labelledby="plans-429-title"></div>
+        <h3 class="hero-label">Plan comparison</h3>
         <div id="plans-table" class="table-wrap" style="margin-top:14px"></div>
         <details id="plans-config">
           <summary>Save custom monthly prices in plugin config</summary>
@@ -600,7 +609,7 @@ const state = {
   period: '7d', provider: '', model: '', client: '', account: '', apiKey: '',
   view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', driftScale: 'absolute', driftMinimum: 5, driftSelection: new Set(), by: 'model',
   reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
-  plansGroup: 'plan', plansSort: 'realized', plansUnit: 'realized',
+  plansGroup: 'plan', plansSort: 'recordedUSD', plansUnit: 'realized',
 };
 const REQUESTS_PAGE = 50;
 let data = {};
@@ -2222,34 +2231,39 @@ function renderPlans() {
   const score = r => metricScore(r, state.plansSort, unit);
 
   // Summary tiles
-  const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost !== null);
+  const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost > 0);
   const totalMonthly = knownSubs.reduce((s, r) => s + r.monthlyCost, 0);
   const totalPeriodSub = knownSubs.reduce((s, r) => s + (r.periodCost || 0), 0);
   const totalRealizedAPI = knownSubs.reduce((s, r) => s + r.realized.costUSD, 0);
   const overallRealized = totalPeriodSub > 0 ? totalRealizedAPI / totalPeriodSub : null;
-  const bestPot = rankPlanRows(grouped.filter((r) => r.potential && r.potential.leverage > 0), 'potential')[0] || null;
-  const bestReal = rankPlanRows(grouped.filter((r) => !r.isApiKey && r.monthlyCost > 0 && r.realized.leverage > 0), 'realized')[0] || null;
-
   document.getElementById('plans-tiles').replaceChildren(
-    tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(knownSubs.length)} priced account${knownSubs.length === 1 ? '' : 's'}`),
-    tile('Recorded usage at API rates', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} on ${fmtUSD(totalPeriodSub)} of subscriptions in this period` : ''),
-    tile('Best potential plan', bestPot ? `${bestPot.provider} ${bestPot.plan}` : '-', bestPot ? `${fmtMult(bestPot.potential.leverage)} (${fmtUSD(bestPot.potential.fullCycleUSD)} / wk)` : 'Needs weekly quota headers'),
-    tile('Best realized plan', bestReal ? `${bestReal.provider} ${bestReal.plan}` : '-', bestReal ? `${fmtMult(bestReal.realized.leverage)} (${fmtUSD(bestReal.realized.costUSD)} in period)` : 'Set monthly prices below'),
+    tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(knownSubs.length)} paid account${knownSubs.length === 1 ? '' : 's'}`),
+    tile('Usage on paid subscriptions', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} on ${fmtUSD(totalPeriodSub)} of subscriptions in this period` : ''),
+
   );
 
   const notes = [];
   if (clamped) notes.push(`Recording covers ${effectiveDays.toFixed(1)} days of this range, so realized subscription cost is scaled to match.`);
   const unpricedCount = accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).length;
-  if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the ranking.`);
+  if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the per-dollar ranking.`);
   if (accountRows.some(r => r.unpricedTokens > 0)) notes.push('Unpriced tokens contribute $0 to the API estimate. See Cost quality in Usage.');
   document.getElementById('plans-note').textContent = notes.join(' ');
 
   const tokenNames = { input: 'Uncached input tokens', output: 'Output tokens including reasoning', cacheRead: 'Cache read tokens', cacheWrite: 'Cache write tokens' };
   const tokenMetric = tokenNames[state.plansSort];
   const tokenBasis = unit === 'pct' ? 'per weekly quota point' : unit === 'potential' ? 'per subscription dollar at full weekly quota' : 'per subscription dollar in the period';
-  const chartTitle = tokenMetric ? tokenMetric + ' ' + tokenBasis : state.plansSort === 'realized'
-    ? 'Realized API value per subscription dollar' : 'Potential API value per subscription dollar';
+  const dollarTitles = {
+    recordedUSD: 'Recorded API value per account in the period',
+    realized: 'Recorded API value per subscription dollar',
+    potential: 'Estimated API value per subscription dollar at 100 weekly quota points',
+    cycleUSD: 'Estimated API value per account at 100 weekly quota points',
+  };
+  const chartTitle = tokenMetric ? tokenMetric + ' ' + tokenBasis : dollarTitles[state.plansSort];
   document.getElementById('plans-chart-title').textContent = chartTitle;
+  const projected = state.plansSort === 'potential' || state.plansSort === 'cycleUSD' || (tokenMetric && unit !== 'realized');
+  document.getElementById('plans-chart-basis').textContent = projected
+    ? 'Uses recorded tokens between weekly quota readings. A full cycle assumes the same mix of models and tokens. Short-window limits can restrict when that quota is usable.'
+    : 'Uses traffic recorded in this period. A return of 10× means $10 at API rates per $1 of subscription cost, prorated to the period.';
   const chartEl = document.getElementById('plans-chart');
   const barRows = ranked.filter(r => score(r) !== null);
   const max = Math.max(1, ...barRows.map(score));
@@ -2257,14 +2271,27 @@ function renderPlans() {
     const value = score(r);
     const label = state.plansGroup === 'account' ? r.name + ' (' + r.provider + ' ' + r.plan + ')' : r.provider + ' ' + r.plan;
     const color = colorFor('provider', r.provider);
-    const formatted = tokenMetric ? fmtCompact(value) : fmtMult(value);
+    const formatted = tokenMetric ? fmtCompact(value) : (state.plansSort === 'cycleUSD' || state.plansSort === 'recordedUSD') ? fmtUSD(value) : fmtMult(value);
+    const detail = [];
+    if (state.plansGroup === 'plan') detail.push(r.accountCount + (r.accountCount === 1 ? ' account' : ' accounts'));
+    if (r.unpricedTokens > 0 && !tokenMetric) detail.push('Partial API pricing');
+    if (projected && r.potential?.lowSample) detail.push('Low sample: ' + r.quotaPoints.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' quota points');
+    if (!projected && r.earlyResets) detail.push(fmtInt(r.earlyResets) + ' early weekly reset' + (r.earlyResets === 1 ? '' : 's'));
+    if (!projected && r.afterEarlyResetUSD > 0) detail.push(fmtUSD(r.afterEarlyResetUSD) + ' total after early reset, before prior deadline');
     return el('div', { class: 'plan-bar-row' },
-      el('div', { class: 'plan-bar-name', title: label }, el('span', { text: label })),
+      el('div', {}, el('div', { class: 'plan-bar-name', title: label }, el('span', { text: label })),
+        detail.length ? el('span', { class: 'plan-sub', text: detail.join(', ') }) : null),
       el('div', { class: 'plan-bar-track', 'aria-hidden': 'true' },
         el('div', { class: 'plan-bar-fill', style: `width:${100 * value / max}%;background:${color}` })),
       el('strong', { class: 'plan-bar-val', text: formatted }));
   }));
-  if (!barRows.length) chartEl.append(el('p', { class: 'notice', text: 'No paid subscription has data for this comparison.' }));
+  if (!barRows.length) chartEl.append(el('p', { class: 'notice', text: 'No subscription has data for this comparison.' }));
+
+  if (projected && barRows.length) {
+    const missing = ranked.filter(r => !r.isApiKey && r.quotaPoints === null);
+    if (missing.length) chartEl.append(el('p', { class: 'notice', text: 'No weekly quota history for ' + missing.map(r => r.name || r.provider + ' ' + r.plan).join(', ') + '.' }));
+  }
+  renderPlanRateLimits(val.rate_limits, grouped);
 
   // Ranking table
   const wrap = document.getElementById('plans-table');
@@ -2276,13 +2303,13 @@ function renderPlans() {
       'Rank',
       state.plansGroup === 'account' ? 'Account' : 'Plan',
       'Monthly price / account',
-      'Potential (100% quota)',
-      'Realized (period)',
+      'Estimate at 100 weekly points',
+      'Recorded value in period',
       'Uncached in' + unitSuffix,
       'Cache read' + unitSuffix,
       'Cache write' + unitSuffix,
       'Output' + unitSuffix,
-      'Top model',
+      state.plansGroup === 'account' ? 'Top model' : 'Top model on busiest account',
     ];
     const rows = ranked.map((r, index) => {
       const rankCell = score(r) !== null ? '#' + (index + 1) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
@@ -2335,9 +2362,10 @@ function renderPlans() {
         potCell = el('span', { class: 'plan-sub', text: r.provider === 'antigravity' && r.quotaPoints === null ? 'Live quota in Limits. No weekly quota history.' : 'Insufficient measured quota or priced usage' });
       }
 
-      const realMain = r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
+      const realMain = r.unpricedTokens > 0 && r.realized.costUSD === 0 ? 'No priced usage' : r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
       const realSub = [r.isApiKey ? 'API price baseline' : r.periodCost > 0
         ? `${fmtUSD(r.realized.costUSD)} API / ${fmtUSD(r.periodCost)} subscription` : `${fmtInt(r.requests)} reqs`];
+      if (r.accountCount > 1) realSub.push(fmtUSD(r.realized.costUSD / r.accountCount) + ' API per account');
       if (r.quotaPoints !== null) {
         const points = r.quotaPoints.toLocaleString(undefined, { maximumFractionDigits: 3 });
         realSub.push(`${points} quota point${r.quotaPoints === 1 ? '' : 's'} measured`);
@@ -2387,6 +2415,46 @@ function renderPlans() {
     }));
   }
   yamlBox.replaceChildren(...parts);
+}
+
+function renderPlanRateLimits(observations, groups) {
+  const chart = document.getElementById('plans-429');
+  if (!observations?.length) {
+    chart.replaceChildren(el('p', { class: 'notice', text: Array.isArray(observations)
+      ? 'No HTTP 429 calls recorded for these accounts in this period.'
+      : 'This management response has no historical 429 breakdown.' }));
+    return;
+  }
+  const windows = [
+    ['session', 'Short window full', 'var(--tone2)'],
+    ['weekly', 'Weekly quota full', 'var(--tone3)'],
+    ['both', 'Both full', 'var(--tone1)'],
+    ['below', 'Both below 100%', 'var(--tone4)'],
+    ['incomplete', 'Incomplete readings', 'var(--tone5)'],
+  ];
+  const label = row => row.name || row.provider + ' ' + row.plan;
+  const series = groupPlanRateLimits(observations, groups);
+  const max = Math.max(1, ...series.map(r => r.total));
+  chart.replaceChildren(el('p', { class: 'sub', text: 'Each upstream call counts once. For Claude, the short window is 5 hours. A 429 can occur before either quota is full. Accounts that CPA skips produce no 429 for that attempt.' }));
+  for (const r of series) {
+    const shown = windows.filter(([key]) => r.windows[key]);
+    const details = shown.map(([key, name, color]) => el('span', {},
+      el('span', { class: 'dot', style: 'background:' + color, 'aria-hidden': 'true' }),
+      (key === 'session' && r.row.provider === 'claude' ? '5-hour window full' : name) + ' ' + fmtInt(r.windows[key])));
+    const track = el('div', { class: 'plan-bar-track plan-window-track', 'aria-hidden': 'true' },
+      ...shown.map(([key, , color]) => el('span', { style: `width:${100 * r.windows[key] / max}%;background:${color}` })));
+    const block = el('div', {},
+      el('div', { class: 'plan-bar-row' },
+        el('strong', { text: label(r.row) }), track,
+        el('strong', { class: 'plan-bar-val', text: fmtInt(r.total) })),
+      el('div', { class: 'legend' }, ...details));
+    if (r.following.size) {
+      const destinations = [...r.following].map(([target, count]) => fmtInt(count) + ' on ' + label(target));
+      block.append(el('div', { class: 'plan-window-caption', text: 'Followed by success on another account: ' + destinations.join(', ') }));
+    }
+    chart.append(block);
+  }
+  if (series.some(r => r.following.size)) chart.append(el('p', { class: 'sub', text: 'A match is the first successful call starting within 5 seconds after the 429, with the same provider, trace, session, client key and requested model. Both calls must fall in the selected period.' }));
 }
 
 /* ---------- latency ---------- */

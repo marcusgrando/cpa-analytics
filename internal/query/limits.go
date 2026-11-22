@@ -85,12 +85,13 @@ type weeklyPair struct {
 // weeklyCycle is one account's weekly cycle as its readings saw it. nextAt is
 // the first reading of the following cycle, 0 when none was seen.
 type weeklyCycle struct {
-	account, provider string
-	reset             int64
-	lastPct           float64
-	lastAt            int64
-	nextAt            int64
-	pairs             []weeklyPair
+	account, provider  string
+	reset              int64
+	lastPct            float64
+	lastAt             int64
+	nextAt             int64
+	pairs              []weeklyPair
+	afterEarlyResetUSD float64
 }
 
 func (c weeklyCycle) endedEarly() bool {
@@ -135,6 +136,7 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64)
 	var (
 		cycles     []weeklyCycle
 		cur        *weeklyCycle
+		earlyUntil int64
 		spanCost   float64
 		spanUnpr   int64
 		spanTokens Tokens
@@ -159,7 +161,14 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64)
 		}
 		if cur != nil && (acct != cur.account || provider != cur.provider) {
 			flush()
+			earlyUntil = 0
 			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+		}
+		hasReading := pct.Valid && reset.Valid
+		sameCycle := hasReading && cur != nil && abs(reset.Int64-cur.reset) <= resetJitterMillis
+		if hasReading && cur != nil && !sameCycle && at < cur.reset {
+			// Overlapping early resets cover one interval of realized usage.
+			earlyUntil = max(earlyUntil, cur.reset)
 		}
 		if at < measureFrom {
 			cur = &weeklyCycle{account: acct, provider: provider, reset: reset.Int64, lastPct: pct.Float64, lastAt: at}
@@ -169,23 +178,24 @@ func weeklyCycles(db *sql.DB, f Filter, table *pricing.Table, measureFrom int64)
 		spanCost += cost
 		spanUnpr += quality.UnpricedTokens
 		spanTokens.add(tokens)
-		if !pct.Valid || !reset.Valid {
-			continue
-		}
-		switch {
-		case cur != nil && abs(reset.Int64-cur.reset) <= resetJitterMillis:
-			if cur.lastAt >= measureFrom && pct.Float64 >= cur.lastPct {
-				cur.pairs = append(cur.pairs, weeklyPair{at: at, pct: pct.Float64 - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+		if hasReading {
+			if sameCycle {
+				if cur.lastAt >= measureFrom && pct.Float64 >= cur.lastPct {
+					cur.pairs = append(cur.pairs, weeklyPair{at: at, pct: pct.Float64 - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+				}
+				cur.reset, cur.lastPct, cur.lastAt = reset.Int64, pct.Float64, at
+			} else {
+				if cur != nil {
+					cur.nextAt = at
+					flush()
+				}
+				cur = &weeklyCycle{account: acct, provider: provider, reset: reset.Int64, lastPct: pct.Float64, lastAt: at}
 			}
-			cur.reset, cur.lastPct, cur.lastAt = reset.Int64, pct.Float64, at
-		default:
-			if cur != nil {
-				cur.nextAt = at
-				flush()
-			}
-			cur = &weeklyCycle{account: acct, provider: provider, reset: reset.Int64, lastPct: pct.Float64, lastAt: at}
+			spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 		}
-		spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+		if at < earlyUntil && cur != nil {
+			cur.afterEarlyResetUSD += cost
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("weekly cycles rows: %w", err)
@@ -397,6 +407,7 @@ type AccountValue struct {
 	TopModel               string  `json:"top_model,omitempty"`
 	TopModelShare          float64 `json:"top_model_share,omitempty"`
 	EarlyResets            int     `json:"early_resets"`
+	AfterEarlyResetUSD     float64 `json:"after_early_reset_usd"`
 	QuotaMeasured          bool    `json:"quota_measured"`
 	WeeklyPct              float64 `json:"weekly_pct"`
 	MeasuredCostUSD        float64 `json:"measured_cost_usd"`
@@ -407,8 +418,9 @@ type AccountValue struct {
 
 // PlanValueResult answers the plan-value route.
 type PlanValueResult struct {
-	DataSince int64          `json:"data_since"`
-	Accounts  []AccountValue `json:"accounts"`
+	DataSince  int64           `json:"data_since"`
+	Accounts   []AccountValue  `json:"accounts"`
+	RateLimits []PlanRateLimit `json:"rate_limits"`
 }
 
 // PlanValue returns per-account realized usage and whole-range weekly quota
@@ -490,6 +502,7 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 		if av == nil {
 			continue // Only seen before the selected period.
 		}
+		av.AfterEarlyResetUSD += c.afterEarlyResetUSD
 		if c.endedEarly() {
 			av.EarlyResets++
 		}
@@ -502,7 +515,11 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 		}
 	}
 
-	res := PlanValueResult{DataSince: since, Accounts: make([]AccountValue, 0, len(byAcct))}
+	limits, err := planRateLimits(db, f)
+	if err != nil {
+		return PlanValueResult{}, err
+	}
+	res := PlanValueResult{DataSince: since, RateLimits: limits, Accounts: make([]AccountValue, 0, len(byAcct))}
 	for k, av := range byAcct {
 		av.CacheHitRate = cacheHitRate(av.Tokens)
 		if av.WeeklyPct > 0 && av.WeeklyPct < lowSampleBurnPct {

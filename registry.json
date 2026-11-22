@@ -6,7 +6,7 @@
       "name": "CPA Analytics",
       "description": "Token usage, cost estimate and per-request drift by model and client version.",
       "author": "Marcus Grando",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "repository": "https://github.com/marcusgrando/cpa-analytics",
       "license": "MIT",
       "tags": ["analytics", "usage", "cost"],

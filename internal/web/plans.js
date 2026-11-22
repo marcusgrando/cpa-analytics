@@ -83,9 +83,9 @@ function resolvePlanCost(item, configCosts, sessionCosts) {
 // actually has recorded history, so selecting 30d after 3 days of recording
 // does not understate realized value by 10x.
 function effectiveRangeDays(from, to, dataSince) {
-  const clamped = dataSince > 0 && dataSince > from && dataSince < to;
+  const clamped = dataSince > 0 && dataSince > from;
   const start = clamped ? dataSince : from;
-  const days = Math.max((to - start) / PLAN_DAY_MS, 1 / 24);
+  const days = Math.max((to - start) / PLAN_DAY_MS, 0);
   return { days, clamped };
 }
 
@@ -176,6 +176,7 @@ function computeAccountPlanRow(item, opts) {
     potential,
     quotaPoints: item.quota_measured || weeklyPct > 0 ? weeklyPct : null,
     earlyResets: item.early_resets || 0,
+    afterEarlyResetUSD: item.after_early_reset_usd ?? null,
     measuredRaw: { costUSD: measuredCostUSD, tokens: measuredTokens },
   };
 }
@@ -249,7 +250,8 @@ function groupPlanRows(accountRows, opts) {
     }
 
     // Pick the top model from the busiest account in the group.
-    const busiest = members.reduce((best, m) => ((m.realized.costUSD || m.realized.tokens.total) > (best.realized.costUSD || best.realized.tokens.total) ? m : best), members[0]);
+    const accountUsage = m => costUSD > 0 ? m.realized.costUSD : m.realized.tokens.total;
+    const busiest = members.reduce((best, m) => accountUsage(m) > accountUsage(best) ? m : best);
     const sources = new Set(members.map((m) => m.costSource));
     const costSource = sources.size === 1 ? first.costSource : (sources.has('session') ? 'session' : sources.has('config') ? 'config' : 'mixed');
 
@@ -280,6 +282,9 @@ function groupPlanRows(accountRows, opts) {
       },
       potential,
       quotaPoints: members.some(m => m.quotaPoints !== null) ? measuredPct : null,
+      measuredRaw: { costUSD: measuredCost, tokens: measuredTokens },
+      afterEarlyResetUSD: members.some(m => m.afterEarlyResetUSD !== null)
+        ? members.reduce((sum, m) => sum + (m.afterEarlyResetUSD ?? 0), 0) : null,
       earlyResets: members.reduce((sum, m) => sum + m.earlyResets, 0),
     });
   }
@@ -287,14 +292,20 @@ function groupPlanRows(accountRows, opts) {
 }
 
 function planTokenValues(row, unit) {
-  if (unit === 'pct') return row.potential?.tokensPerPct ?? null;
-  if (unit === 'potential') return row.potential?.tokensPerDollar ?? null;
+  if (unit === 'pct' || unit === 'potential') {
+    if (!(row.quotaPoints >= MIN_MEASURED_WEEKLY_PCT)) return null;
+    if (unit === 'pct') return scaleTokens(row.measuredRaw.tokens, 1 / row.quotaPoints);
+    return scaleTokens(row.measuredRaw.tokens, 100 / (row.quotaPoints * row.weeklyCost));
+  }
   return row.realized.tokensPerDollar;
 }
 
 // A missing observation stays unranked. A measured zero is a valid score.
 function metricScore(row, sortBy, unit = 'realized') {
-  if (row.isApiKey || !(row.monthlyCost > 0)) return null;
+  if (row.isApiKey) return null;
+  if ((sortBy === 'recordedUSD' || sortBy === 'realized') && row.unpricedTokens > 0 && row.realized.costUSD === 0) return null;
+  if (sortBy === 'recordedUSD') return row.realized.costUSD / row.accountCount;
+  if (sortBy === 'cycleUSD') return row.potential?.fullCycleUSD ?? null;
   if (sortBy === 'realized') return row.realized.leverage;
   if (sortBy === 'potential') return row.potential?.leverage ?? null;
   return planTokenValues(row, unit)?.[sortBy] ?? null;
@@ -302,10 +313,11 @@ function metricScore(row, sortBy, unit = 'realized') {
 
 function rankPlanRows(rows, sortBy = 'realized', unit = 'realized') {
   const bucket = r => {
+    if (metricScore(r, sortBy, unit) !== null) return 0;
     if (r.isApiKey) return 3;
     if (r.monthlyCost === null) return 4;
     if (r.monthlyCost === 0) return 2;
-    return metricScore(r, sortBy, unit) === null ? 1 : 0;
+    return 1;
   };
   return [...rows].sort((a, b) => {
     const ba = bucket(a), bb = bucket(b);
@@ -317,6 +329,30 @@ function rankPlanRows(rows, sortBy = 'realized', unit = 'realized') {
     if (b.realized.costUSD !== a.realized.costUSD) return b.realized.costUSD - a.realized.costUSD;
     return (a.planKey || a.id).localeCompare(b.planKey || b.id);
   });
+}
+
+// A following call is counted under its 429 source even when both accounts
+// roll up to the same plan. It is a subset of the window counts.
+function groupPlanRateLimits(observations, rows) {
+  const owners = new Map();
+  for (const row of rows) {
+    for (const account of row.accounts || [row]) {
+      owners.set(JSON.stringify([account.provider, account.authIndex]), row);
+    }
+  }
+  const results = new Map();
+  for (const obs of observations) {
+    const provider = normProvider(obs.provider);
+    const row = owners.get(JSON.stringify([provider, obs.auth_index]));
+    if (!row) continue;
+    if (!results.has(row)) results.set(row, { row, total: 0, windows: {}, following: new Map() });
+    const result = results.get(row);
+    result.total += obs.calls;
+    result.windows[obs.window] = (result.windows[obs.window] || 0) + obs.calls;
+    const target = owners.get(JSON.stringify([provider, obs.following_account]));
+    if (target) result.following.set(target, (result.following.get(target) || 0) + obs.calls);
+  }
+  return [...results.values()].sort((a, b) => b.total - a.total);
 }
 
 function planCostsYAML(overrides) {
@@ -331,6 +367,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     PLAN_MONTH_DAYS, PLAN_WEEK_DAYS, DEFAULT_PLAN_COSTS,
     normProvider, planKey, resolvePlanCost, effectiveRangeDays,
-    computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML,
+    computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
   };
 }

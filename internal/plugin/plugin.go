@@ -19,7 +19,7 @@ import (
 
 const (
 	pluginName    = "cpa-analytics"
-	pluginVersion = "0.2.2"
+	pluginVersion = "0.3.0"
 	// minHostSchema is the first host schema that honors
 	// request_interceptor_omit_body_before, so request bodies never reach the plugin.
 	minHostSchema uint32 = 7

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   PLAN_MONTH_DAYS, PLAN_WEEK_DAYS,
-  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML,
+  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML, groupPlanRateLimits,
 } from './plans.js';
 
 describe('plan cost resolution', () => {
@@ -31,11 +31,92 @@ describe('effectiveRangeDays', () => {
     const from = 0;
     expect(effectiveRangeDays(from, to, 25 * day)).toEqual({ days: 5, clamped: true });
     expect(effectiveRangeDays(from, to, 0)).toEqual({ days: 30, clamped: false });
+    expect(effectiveRangeDays(from, to, to - 60000).days).toBeCloseTo(1 / 1440, 10);
+    expect(effectiveRangeDays(from, to, to + 60000)).toEqual({ days: 0, clamped: true });
   });
 });
 
 describe('cost-benefit and ranking', () => {
   const weekCost200 = 200 * (PLAN_WEEK_DAYS / PLAN_MONTH_DAYS);
+
+  test('429 totals and following accounts reflect the selected grouping, including switches within a plan', () => {
+    const opts = { effectiveDays: 7 };
+    const accounts = ['a','b','c'].map((id, i) => computeAccountPlanRow({
+      authIndex: id, provider: 'claude', plan: i === 0 ? 'Max 5x' : 'Max 20x', name: id,
+    }, opts));
+    const observations = [
+      { provider:'claude', auth_index:'a', window:'weekly', following_account:'b', calls:1 },
+      { provider:'claude', auth_index:'b', window:'session', following_account:'c', calls:1 },
+      { provider:'claude', auth_index:'c', window:'below', calls:7 },
+    ];
+    const plans = groupPlanRows(accounts, opts);
+    const [busy] = groupPlanRateLimits(observations, plans);
+    expect(busy.row.plan).toBe('Max 20x');
+    expect(busy.total).toBe(8);
+    expect(busy.windows).toEqual({session:1, below:7});
+    expect([...busy.following].map(([row, n]) => [row.plan, n])).toEqual([['Max 20x',1]]);
+    const individual = groupPlanRateLimits(observations, accounts);
+    expect(individual[0].row.name).toBe('c');
+    expect(individual[0].following.size).toBe(0);
+    expect(groupPlanRateLimits([], plans)).toEqual([]);
+  });
+
+  test('quota point token rankings work without any API or subscription price', () => {
+    const opts = { effectiveDays:7 };
+    const account = computeAccountPlanRow({provider:'claude', plan:'Unknown',
+      weekly_pct:4, measured_tokens:{output:200}, after_early_reset_usd:5}, opts);
+    for (const row of [account, ...groupPlanRows([account],opts)]) {
+      expect(metricScore(row, 'output','pct')).toBe(50);
+      expect(metricScore(row, 'potential')).toBeNull();
+      expect(row.afterEarlyResetUSD).toBe(5);
+    }
+  });
+
+  test('recorded value per account divides the group total by all accounts including idle subscriptions', () => {
+    const opts = { effectiveDays: 7 };
+    const rows = [
+      { plan: 'Max 20x', cost_usd: 1100 }, { plan: 'Max 20x' },
+      { plan: 'Max 5x', cost_usd: 700 }, { plan: 'Unknown price', cost_usd: 900 },
+    ].map(r => computeAccountPlanRow({ provider: 'claude', ...r }, opts));
+    const ranked = rankPlanRows(groupPlanRows(rows, opts), 'recordedUSD');
+    expect(ranked.map(r => [r.plan, metricScore(r, 'recordedUSD')])).toEqual([
+      ['Unknown price', 900], ['Max 5x', 700], ['Max 20x', 550],
+    ]);
+    expect(metricScore(rows[1], 'recordedUSD')).toBe(0);
+  });
+
+  test('one weekly quota per account ranks independently of price, account count and early resets', () => {
+    const opts = { effectiveDays: 7 };
+    const account = (plan, pct, cost, extra = {}) => computeAccountPlanRow({
+      provider: 'claude', plan, weekly_pct: pct, measured_cost_usd: cost, ...extra,
+    }, opts);
+    const groups = groupPlanRows([
+      account('Max 5x', 100, 1010),
+      account('Max 20x', 150, 2850, { early_resets: 1 }),
+      account('Max 20x', 50, 1150),
+      account('Custom', 10, 250),
+      account('Pro', 0, 0),
+    ], opts);
+    const ranked = rankPlanRows(groups, 'cycleUSD');
+    expect(ranked.map(r => [r.plan, metricScore(r, 'cycleUSD')])).toEqual([
+      ['Custom', 2500], ['Max 20x', 2000], ['Max 5x', 1010], ['Pro', null],
+    ]);
+    expect(rankPlanRows(groups, 'potential')[0].plan).toBe('Max 5x');
+  });
+
+  test('unpriced traffic has token measurements but no recorded dollar rank', () => {
+    const row = computeAccountPlanRow({provider:'claude', plan:'Pro', unpriced_tokens:100, output:100}, {effectiveDays:7});
+    expect(metricScore(row, 'recordedUSD')).toBeNull();
+    expect(metricScore(row, 'realized')).toBeNull();
+    expect(metricScore(row, 'output')).toBeGreaterThan(0);
+  });
+
+  test('the example model comes from the account with the highest priced usage', () => {
+    const opts = { effectiveDays: 7 };
+    const priced = computeAccountPlanRow({ provider: 'claude', plan: 'Pro', cost_usd: 20, top_model: 'priced' }, opts);
+    const missing = computeAccountPlanRow({ provider: 'claude', plan: 'Pro', unclassified: 5000, top_model: 'unknown' }, opts);
+    expect(groupPlanRows([missing, priced], opts)[0].topModel).toBe('priced');
+  });
 
   test('computes potential leverage, realized leverage and token-per-dollar breakdown', () => {
     const row = computeAccountPlanRow({

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -82,6 +83,83 @@ func TestManagementRegisterListsRoutes(t *testing.T) {
 		if !got[apiBase+name] {
 			t.Errorf("missing route %s in %+v", name, reg.Routes)
 		}
+	}
+}
+
+func TestPlanValueReportsQuotaHeadersOn429Calls(t *testing.T) {
+	p, _ := startPlugin(t)
+	base := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	var rows []store.Row
+	for i, pct := range [][2]int{{-1, 100}, {100, 17}, {100, 33}, {100, 82}, {49, 100}, {100, 83}, {-1, 100},
+		{14, 87}, {14, 87}, {14, 87}, {14, 87}, {14, 87}, {14, 87}, {14, 87},
+		{100, 100}, {-1, 87}, {-1, -1}} {
+		r := usageRow(strconv.Itoa(i), base.Add(time.Duration(i)*time.Minute))
+		r.Provider, r.AuthIndex, r.SessionID, r.APIKeyHash = "claude", "source", "session", "client"
+		r.Failed, r.StatusCode, r.LatencyMs = true, 429, 250
+		r.LimitSessionPct = sql.NullFloat64{Float64: float64(pct[0]), Valid: pct[0] >= 0}
+		r.LimitWeeklyPct = sql.NullFloat64{Float64: float64(pct[1]), Valid: pct[1] >= 0}
+		rows = append(rows, r)
+	}
+	split := rows[4]
+	split.RequestID += "-split"
+	rows = append(rows, split)
+	for i, source := range []int{4, 5, 1, 2, 3, 0, 6} {
+		next := rows[source]
+		next.RequestID += "-success"
+		next.RequestedAt += 310
+		next.AuthIndex, next.Failed, next.StatusCode = "other", false, 200
+		switch i {
+		case 2:
+			next.SessionID = "different"
+		case 3:
+			next.RequestedAt += 6000
+		case 4:
+			next.APIKeyHash = "different"
+		case 5:
+			next.Model = "different"
+		case 6:
+			next.TraceID = "different"
+		}
+		rows = append(rows, next)
+	}
+	// Another failed code and a 429 outside the period are excluded.
+	o := rows[0]
+	o.RequestID, o.StatusCode = "outcome", 503
+	outside := rows[0]
+	outside.RequestID, outside.RequestedAt = "outside", base.Add(time.Hour).UnixMilli()
+	lateSuccess := rows[7]
+	lateSuccess.RequestID, lateSuccess.AuthIndex, lateSuccess.Failed, lateSuccess.StatusCode = "late", "other", false, 200
+	lateSuccess.RequestedAt = outside.RequestedAt
+	rows[7].LatencyMs = outside.RequestedAt - rows[7].RequestedAt
+	insertRows(t, p, append(rows, o, outside, lateSuccess)...)
+	resp := manage(t, p, "GET", "plan-value", url.Values{"from": {strconv.FormatInt(base.UnixMilli(), 10)}, "to": {strconv.FormatInt(outside.RequestedAt, 10)}})
+	var report struct {
+		RateLimits []struct {
+			Window           string `json:"window"`
+			AuthIndex        string `json:"auth_index"`
+			FollowingAccount string `json:"following_account"`
+			Calls            int    `json:"calls"`
+		} `json:"rate_limits"`
+	}
+	if err := json.Unmarshal(resp.Body, &report); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("plan-value: %s, %v", resp.Body, err)
+	}
+	counts, followed := map[string]int{}, map[string]int{}
+	for _, r := range report.RateLimits {
+		if r.AuthIndex != "source" {
+			t.Fatalf("unexpected source: %+v", r)
+		}
+		counts[r.Window] += r.Calls
+		if r.FollowingAccount != "" {
+			if r.FollowingAccount != "other" {
+				t.Fatalf("unexpected destination: %+v", r)
+			}
+			followed[r.Window] += r.Calls
+		}
+	}
+	want := map[string]int{"session": 4, "weekly": 3, "below": 7, "both": 1, "incomplete": 2}
+	if !reflect.DeepEqual(counts, want) || !reflect.DeepEqual(followed, map[string]int{"session": 1, "weekly": 1}) {
+		t.Fatalf("quota counts %v, followed on another account %v", counts, followed)
 	}
 }
 
