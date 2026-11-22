@@ -248,7 +248,7 @@ func TestIndexInlinesScripts(t *testing.T) {
 		"/* sparkline.js */": "function sparkline(values, height, pad)",
 		"/* endlabels.js */": "function endLabels(ends, limit, minGap)",
 		"/* scatter.js */":   "function nearestPoint(points, x, y, radius)",
-		"/* plans.js */":     "function rankPlanRows(rows, sortBy = 'potential')",
+		"/* plans.js */":     "function rankPlanRows(rows,",
 	} {
 		if strings.Contains(page, placeholder) {
 			t.Errorf("%s placeholder was not replaced", placeholder)

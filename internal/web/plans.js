@@ -286,36 +286,33 @@ function groupPlanRows(accountRows, opts) {
   return out;
 }
 
-function metricScore(row, sortBy) {
-  if (sortBy === 'realized') return row.realized.leverage;
-  if (sortBy === 'output' || sortBy === 'input' || sortBy === 'cacheRead' || sortBy === 'cacheWrite') {
-    const p = row.potential && row.potential.tokensPerDollar ? row.potential.tokensPerDollar[sortBy] : null;
-    if (p !== null && p > 0) return p;
-    return row.realized.tokensPerDollar ? row.realized.tokensPerDollar[sortBy] : null;
-  }
-  // Default: potential leverage when quota headers exist, else realized leverage.
-  if (row.potential && row.potential.leverage !== null) return row.potential.leverage;
-  return row.realized.leverage;
+function planTokenValues(row, unit) {
+  if (unit === 'pct') return row.potential?.tokensPerPct ?? null;
+  if (unit === 'potential') return row.potential?.tokensPerDollar ?? null;
+  return row.realized.tokensPerDollar;
 }
 
-// rankPlanRows orders paid subscription rows by the chosen cost-benefit metric
-// (highest first), followed by free tiers (by API value extracted), API keys
-// (1.0x baseline) and plans with no price configured yet.
-function rankPlanRows(rows, sortBy = 'potential') {
-  const bucket = (r) => {
-    if (r.isApiKey) return 2;
-    if (r.monthlyCost === 0) return 1;
-    if (r.monthlyCost === null) return 3;
-    const s = metricScore(r, sortBy);
-    return s !== null && s > 0 ? 0 : 4;
+// A missing observation stays unranked. A measured zero is a valid score.
+function metricScore(row, sortBy, unit = 'realized') {
+  if (row.isApiKey || !(row.monthlyCost > 0)) return null;
+  if (sortBy === 'realized') return row.realized.leverage;
+  if (sortBy === 'potential') return row.potential?.leverage ?? null;
+  return planTokenValues(row, unit)?.[sortBy] ?? null;
+}
+
+function rankPlanRows(rows, sortBy = 'realized', unit = 'realized') {
+  const bucket = r => {
+    if (r.isApiKey) return 3;
+    if (r.monthlyCost === null) return 4;
+    if (r.monthlyCost === 0) return 2;
+    return metricScore(r, sortBy, unit) === null ? 1 : 0;
   };
   return [...rows].sort((a, b) => {
     const ba = bucket(a), bb = bucket(b);
     if (ba !== bb) return ba - bb;
     if (ba === 0) {
-      const sa = metricScore(a, sortBy) || 0;
-      const sb = metricScore(b, sortBy) || 0;
-      if (sb !== sa) return sb - sa;
+      const diff = metricScore(b, sortBy, unit) - metricScore(a, sortBy, unit);
+      if (diff) return diff;
     }
     if (b.realized.costUSD !== a.realized.costUSD) return b.realized.costUSD - a.realized.costUSD;
     return (a.planKey || a.id).localeCompare(b.planKey || b.id);
@@ -334,6 +331,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     PLAN_MONTH_DAYS, PLAN_WEEK_DAYS, DEFAULT_PLAN_COSTS,
     normProvider, planKey, resolvePlanCost, effectiveRangeDays,
-    computeAccountPlanRow, groupPlanRows, rankPlanRows, planCostsYAML,
+    computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML,
   };
 }

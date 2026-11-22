@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   PLAN_MONTH_DAYS, PLAN_WEEK_DAYS,
-  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, groupPlanRows, rankPlanRows, planCostsYAML,
+  resolvePlanCost, effectiveRangeDays, computeAccountPlanRow, groupPlanRows, rankPlanRows, metricScore, planTokenValues, planCostsYAML,
 } from './plans.js';
 
 describe('plan cost resolution', () => {
@@ -103,7 +103,7 @@ describe('cost-benefit and ranking', () => {
     expect(group.realized.leverage).toBeCloseTo(440 / (2 * weekCost200), 4);
   });
 
-  test('ranks paid plans by potential leverage, includes headerless providers by realized leverage, and keeps free and payg ordered cleanly', () => {
+  test('keeps plans with no weekly history out of the potential ranking but includes their realized value', () => {
     const opts = { effectiveDays: PLAN_WEEK_DAYS, configCosts: {}, sessionCosts: {} };
     const codexPro = computeAccountPlanRow({
       authIndex: 'cx', provider: 'codex', plan: 'Pro', cost_usd: 300,
@@ -125,10 +125,30 @@ describe('cost-benefit and ranking', () => {
     }, opts);
 
     const ranked = rankPlanRows([claudeMax, apiKey, geminiFree, codexPro, antigravityPro], 'potential');
-    expect(ranked.map((r) => r.authIndex)).toEqual(['ag', 'cx', 'cl', 'gm', 'ak']);
+    expect(ranked.map((r) => r.authIndex)).toEqual(['cx', 'cl', 'ag', 'gm', 'ak']);
 
+    expect(metricScore(antigravityPro, 'potential')).toBeNull();
+    expect(metricScore(apiKey, 'realized')).toBeNull();
     const byRealized = rankPlanRows([claudeMax, codexPro, antigravityPro], 'realized');
     expect(byRealized.map((r) => r.authIndex)).toEqual(['ag', 'cx', 'cl']);
+  });
+
+  test('token ranking and table use the same basis for missing samples and measured zeros', () => {
+    const opts = { effectiveDays: 7 };
+    const agy = computeAccountPlanRow({ provider: 'antigravity', plan: 'Pro', output: 1000 }, opts);
+    const claude = computeAccountPlanRow({ provider: 'claude', plan: 'Pro', output: 5000,
+      weekly_pct: 2, measured_cost_usd: 10, measured_tokens: { output: 0, cache_read: 600 } }, opts);
+    for (const rows of [[agy, claude], groupPlanRows([agy, claude], opts)]) {
+      const [a, c] = rows;
+      for (const unit of ['potential', 'pct']) {
+        expect(planTokenValues(a, unit)).toBeNull();
+        expect(metricScore(a, 'output', unit)).toBeNull();
+        expect(metricScore(c, 'output', unit)).toBe(0);
+        expect(rankPlanRows(rows, 'output', unit)[0]).toBe(c);
+      }
+      expect(metricScore(c, 'cacheRead', 'pct')).toBe(300);
+      expect(metricScore(a, 'output', 'realized')).toBeCloseTo(1000 / a.periodCost);
+    }
   });
 
   test('formats plan_costs YAML snippet cleanly', () => {

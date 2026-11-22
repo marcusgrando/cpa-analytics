@@ -196,15 +196,12 @@ body.loading #refresh-now { opacity: 0.65; }
 .cost-input { width: 5.5em; text-align: right; min-height: 28px; padding: 2px 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .plan-badge { display: inline-block; font-size: 11px; color: var(--ink-2); background: var(--wash); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
 .plan-bars { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 18px; }
-.plan-bar-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) minmax(0, 12rem); align-items: center; gap: 6px 12px; font-size: 12px; }
+.plan-bar-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) 5em; align-items: center; gap: 6px 12px; font-size: 12px; }
 .plan-bar-name { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink); font-weight: 500; }
 .plan-bar-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-bar-track { position: relative; height: 14px; border-radius: 4px; background: var(--wash); }
-.plan-bar-pot { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 4px; opacity: 0.28; }
-.plan-bar-real { position: absolute; top: 2px; bottom: 2px; left: 0; border-radius: 3px; }
-.plan-bar-ref { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--axis); }
+.plan-bar-fill { height: 100%; border-radius: 4px; }
 .plan-bar-val { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.plan-bar-val strong { color: var(--ink); }
 .plan-sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 @media (max-width: 640px) {
   .acct { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
@@ -298,7 +295,7 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="card-head">
         <div>
           <h2 id="plans-title">Plan value</h2>
-          <p class="sub">Compare API value per $1 paid. Potential estimates one normal weekly cycle for Claude and Codex. Realized includes all recorded usage in the period, including usage after an early reset. Edit any monthly price to recalculate.</p>
+          <p class="sub">10× means that $1 of subscription covered tokens worth $10 at API rates. Realized uses recorded tokens and the subscription price prorated to the selected period. Potential projects the observed model and token mix to one full weekly quota per account.</p>
         </div>
         <div class="controls">
           <label>Period
@@ -311,18 +308,18 @@ body.loading #refresh-now { opacity: 0.65; }
           </label>
           <label>Rank by
             <select id="plans-sort">
-              <option value="potential" selected>Best potential (x)</option>
-              <option value="realized">Best realized (x)</option>
-              <option value="output">Output tokens / $1</option>
-              <option value="input">Uncached input / $1</option>
-              <option value="cacheRead">Cache read / $1</option>
-              <option value="cacheWrite">Cache write / $1</option>
+              <option value="realized" selected>Realized API value / $1</option>
+              <option value="potential">Potential API value / $1</option>
+              <option value="output">Output tokens</option>
+              <option value="input">Uncached input</option>
+              <option value="cacheRead">Cache read</option>
+              <option value="cacheWrite">Cache write</option>
             </select>
           </label>
-          <label>Token columns
+          <label>Token basis
             <select id="plans-unit">
-              <option value="potential" selected>Per $1 (potential)</option>
-              <option value="realized">Per $1 (realized)</option>
+              <option value="realized" selected>Per $1 (realized)</option>
+              <option value="potential">Per $1 (potential)</option>
               <option value="pct">Per 1% weekly quota</option>
             </select>
           </label>
@@ -336,8 +333,8 @@ body.loading #refresh-now { opacity: 0.65; }
       <div class="section-content">
         <div id="plans-tiles" class="tiles"></div>
         <p id="plans-note" class="notice"></p>
-        <div id="plans-chart" class="plan-bars"></div>
-        <div id="plans-legend" class="legend"></div>
+        <h3 id="plans-chart-title" class="hero-label"></h3>
+        <div id="plans-chart" class="plan-bars" role="group" aria-labelledby="plans-chart-title"></div>
         <div id="plans-table" class="table-wrap" style="margin-top:14px"></div>
         <details id="plans-config">
           <summary>Save custom monthly prices in plugin config</summary>
@@ -603,7 +600,7 @@ const state = {
   period: '7d', provider: '', model: '', client: '', account: '', apiKey: '',
   view: 'usage', dailyMode: 'cost', driftGroup: 'response_model', driftMetric: 'input', driftStat: 'median', driftScale: 'absolute', driftMinimum: 5, driftSelection: new Set(), by: 'model',
   reqSort: 'recent', reqOutcome: 'all', reqOffset: 0,
-  plansGroup: 'plan', plansSort: 'potential', plansUnit: 'potential',
+  plansGroup: 'plan', plansSort: 'realized', plansUnit: 'realized',
 };
 const REQUESTS_PAGE = 50;
 let data = {};
@@ -2184,7 +2181,7 @@ async function loadPlans(current, quiet = false) {
   }
 }
 
-const fmtMult = (x) => (x === null || x === undefined ? '-' : x.toFixed(x >= 10 ? 1 : 2) + 'x');
+const fmtMult = (x) => (x === null || x === undefined ? '-' : x.toFixed(x >= 10 ? 1 : 2) + '×');
 
 function renderPlans() {
   if (!plansData) return;
@@ -2220,7 +2217,9 @@ function renderPlans() {
   const opts = { effectiveDays, configCosts, sessionCosts };
   const accountRows = items.map((it) => computeAccountPlanRow(it, opts));
   const grouped = state.plansGroup === 'account' ? accountRows : groupPlanRows(accountRows, opts);
-  const ranked = rankPlanRows(grouped, state.plansSort);
+  const unit = state.plansUnit;
+  const ranked = rankPlanRows(grouped, state.plansSort, unit);
+  const score = r => metricScore(r, state.plansSort, unit);
 
   // Summary tiles
   const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost !== null);
@@ -2233,7 +2232,7 @@ function renderPlans() {
 
   document.getElementById('plans-tiles').replaceChildren(
     tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(knownSubs.length)} priced account${knownSubs.length === 1 ? '' : 's'}`),
-    tile('API value extracted', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} realized over ${effectiveDays.toFixed(1)} d` : ''),
+    tile('Recorded usage at API rates', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} on ${fmtUSD(totalPeriodSub)} of subscriptions in this period` : ''),
     tile('Best potential plan', bestPot ? `${bestPot.provider} ${bestPot.plan}` : '-', bestPot ? `${fmtMult(bestPot.potential.leverage)} (${fmtUSD(bestPot.potential.fullCycleUSD)} / wk)` : 'Needs weekly quota headers'),
     tile('Best realized plan', bestReal ? `${bestReal.provider} ${bestReal.plan}` : '-', bestReal ? `${fmtMult(bestReal.realized.leverage)} (${fmtUSD(bestReal.realized.costUSD)} in period)` : 'Set monthly prices below'),
   );
@@ -2242,53 +2241,41 @@ function renderPlans() {
   if (clamped) notes.push(`Recording covers ${effectiveDays.toFixed(1)} days of this range, so realized subscription cost is scaled to match.`);
   const unpricedCount = accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).length;
   if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the ranking.`);
+  if (accountRows.some(r => r.unpricedTokens > 0)) notes.push('Unpriced tokens contribute $0 to the API estimate. See Cost quality in Usage.');
   document.getElementById('plans-note').textContent = notes.join(' ');
 
-  // Horizontal leverage comparison chart
+  const tokenNames = { input: 'Uncached input tokens', output: 'Output tokens including reasoning', cacheRead: 'Cache read tokens', cacheWrite: 'Cache write tokens' };
+  const tokenMetric = tokenNames[state.plansSort];
+  const tokenBasis = unit === 'pct' ? 'per weekly quota point' : unit === 'potential' ? 'per subscription dollar at full weekly quota' : 'per subscription dollar in the period';
+  const chartTitle = tokenMetric ? tokenMetric + ' ' + tokenBasis : state.plansSort === 'realized'
+    ? 'Realized API value per subscription dollar' : 'Potential API value per subscription dollar';
+  document.getElementById('plans-chart-title').textContent = chartTitle;
   const chartEl = document.getElementById('plans-chart');
-  const legendEl = document.getElementById('plans-legend');
-  const barRows = ranked.filter((r) => (r.potential && r.potential.leverage > 0) || (r.realized.leverage > 0 && !r.isApiKey));
-  if (barRows.length) {
-    const maxLev = Math.max(2, ...barRows.map((r) => Math.max(r.potential && r.potential.leverage || 0, r.realized.leverage || 0)));
-    const refLeft = (1 / maxLev) * 100;
-    chartEl.replaceChildren(...barRows.map((r) => {
-      const color = colorFor('provider', r.provider);
-      const potW = r.potential && r.potential.leverage ? Math.min(100, (r.potential.leverage / maxLev) * 100) : 0;
-      const realW = r.realized.leverage ? Math.min(100, (r.realized.leverage / maxLev) * 100) : 0;
-      const label = state.plansGroup === 'account' ? `${r.name} (${r.provider} ${r.plan})` : `${r.provider} ${r.plan}`;
-      const track = el('div', { class: 'plan-bar-track', role: 'img', 'aria-label': `${label}: potential ${fmtMult(r.potential && r.potential.leverage)}, realized ${fmtMult(r.realized.leverage)}` },
-        el('div', { class: 'plan-bar-ref', style: `left:${refLeft.toFixed(1)}%`, title: '1.0x API list price' }));
-      if (potW > 0) track.append(el('div', { class: 'plan-bar-pot', style: `width:${potW.toFixed(1)}%;background:${color}` }));
-      if (realW > 0) track.append(el('div', { class: 'plan-bar-real', style: `width:${realW.toFixed(1)}%;background:${color}` }));
-      const valText = r.potential && r.potential.leverage !== null
-        ? el('div', { class: 'plan-bar-val' }, el('strong', { text: fmtMult(r.potential.leverage) }), ` pot, ${fmtMult(r.realized.leverage)} real`)
-        : el('div', { class: 'plan-bar-val' }, el('strong', { text: fmtMult(r.realized.leverage) }), ' real');
-      return el('div', { class: 'plan-bar-row' },
-        el('div', { class: 'plan-bar-name', title: label }, el('span', { class: 'dot', style: 'background:' + color }), el('span', { text: label })),
-        track,
-        valText);
-    }));
-    legendEl.replaceChildren(
-      el('span', {}, el('span', { class: 'key-rect', style: 'background:var(--tone2)' }), 'Realized (period)'),
-      el('span', {}, el('span', { class: 'key-rect', style: 'background:var(--tone2);opacity:0.28' }), 'Potential (100% weekly quota)'),
-      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--axis)' }), '1.0x API price'),
-    );
-  } else {
-    chartEl.replaceChildren();
-    legendEl.replaceChildren();
-  }
+  const barRows = ranked.filter(r => score(r) !== null);
+  const max = Math.max(1, ...barRows.map(score));
+  chartEl.replaceChildren(...barRows.map(r => {
+    const value = score(r);
+    const label = state.plansGroup === 'account' ? r.name + ' (' + r.provider + ' ' + r.plan + ')' : r.provider + ' ' + r.plan;
+    const color = colorFor('provider', r.provider);
+    const formatted = tokenMetric ? fmtCompact(value) : fmtMult(value);
+    return el('div', { class: 'plan-bar-row' },
+      el('div', { class: 'plan-bar-name', title: label }, el('span', { text: label })),
+      el('div', { class: 'plan-bar-track', 'aria-hidden': 'true' },
+        el('div', { class: 'plan-bar-fill', style: `width:${100 * value / max}%;background:${color}` })),
+      el('strong', { class: 'plan-bar-val', text: formatted }));
+  }));
+  if (!barRows.length) chartEl.append(el('p', { class: 'notice', text: 'No paid subscription has data for this comparison.' }));
 
   // Ranking table
   const wrap = document.getElementById('plans-table');
   if (!ranked.length) {
     wrap.replaceChildren(el('div', { class: 'empty', text: 'No active accounts or recorded traffic in this period.' }));
   } else {
-    const unit = state.plansUnit;
     const unitSuffix = unit === 'pct' ? ' / 1%' : ' / $1';
     const headers = [
       'Rank',
       state.plansGroup === 'account' ? 'Account' : 'Plan',
-      'Monthly cost',
+      'Monthly price / account',
       'Potential (100% quota)',
       'Realized (period)',
       'Uncached in' + unitSuffix,
@@ -2297,10 +2284,8 @@ function renderPlans() {
       'Output' + unitSuffix,
       'Top model',
     ];
-    let rankNum = 0;
-    const rows = ranked.map((r) => {
-      const isRanked = !r.isApiKey && r.monthlyCost !== null && r.monthlyCost > 0 && ((r.potential && r.potential.leverage > 0) || r.realized.leverage > 0);
-      const rankCell = isRanked ? '#' + (++rankNum) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
+    const rows = ranked.map((r, index) => {
+      const rankCell = score(r) !== null ? '#' + (index + 1) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
 
       const nameTitle = state.plansGroup === 'account' ? r.name : `${r.provider} ${r.plan}`;
       const nameSub = state.plansGroup === 'account'
@@ -2340,18 +2325,19 @@ function renderPlans() {
 
       let potCell;
       if (r.isApiKey) {
-        potCell = '1.00x (baseline)';
+        potCell = '—';
       } else if (r.potential) {
         const main = r.potential.leverage !== null ? fmtMult(r.potential.leverage) : fmtUSD(r.potential.fullCycleUSD) + ' / wk';
-        const sub = (r.potential.leverage !== null ? fmtUSD(r.potential.fullCycleUSD) + ' / wk' : 'set price for x')
+        const sub = (r.potential.leverage !== null ? fmtUSD(r.potential.fullCycleUSD) + ' API / account / wk' : 'Set monthly price to calculate return')
           + (r.potential.lowSample ? ', low sample' : '');
         potCell = el('span', {}, el('strong', { text: main }), el('span', { class: 'plan-sub', text: sub }));
       } else {
-        potCell = el('span', { class: 'plan-sub', text: 'Insufficient measured quota or priced usage' });
+        potCell = el('span', { class: 'plan-sub', text: r.provider === 'antigravity' && r.quotaPoints === null ? 'Live quota in Limits. No weekly quota history.' : 'Insufficient measured quota or priced usage' });
       }
 
       const realMain = r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
-      const realSub = [r.realized.leverage !== null ? fmtUSD(r.realized.costUSD) : `${fmtInt(r.requests)} reqs`];
+      const realSub = [r.isApiKey ? 'API price baseline' : r.periodCost > 0
+        ? `${fmtUSD(r.realized.costUSD)} API / ${fmtUSD(r.periodCost)} subscription` : `${fmtInt(r.requests)} reqs`];
       if (r.quotaPoints !== null) {
         const points = r.quotaPoints.toLocaleString(undefined, { maximumFractionDigits: 3 });
         realSub.push(`${points} quota point${r.quotaPoints === 1 ? '' : 's'} measured`);
@@ -2359,11 +2345,7 @@ function renderPlans() {
       if (r.earlyResets) realSub.push(`${fmtInt(r.earlyResets)} early reset${r.earlyResets === 1 ? '' : 's'} observed`);
       const realCell = el('span', {}, el('strong', { text: realMain }), el('span', { class: 'plan-sub', text: realSub.join(', ') }));
 
-      const tokSrc = unit === 'pct'
-        ? (r.potential && r.potential.tokensPerPct)
-        : unit === 'potential'
-          ? ((r.potential && r.potential.tokensPerDollar) || r.realized.tokensPerDollar)
-          : r.realized.tokensPerDollar;
+      const tokSrc = planTokenValues(r, unit);
       const fmtTok = (v) => (tokSrc && v !== null && v !== undefined ? fmtCompact(Math.round(v)) : '-');
 
       const modelCell = r.topModel
@@ -2989,7 +2971,14 @@ document.getElementById('plans-period').addEventListener('change', (e) => {
   document.getElementById('f-period').value = state.period;
   refresh();
 });
-document.getElementById('plans-sort').addEventListener('change', (e) => { state.plansSort = e.target.value; renderPlans(); });
+document.getElementById('plans-sort').addEventListener('change', (e) => {
+  state.plansSort = e.target.value;
+  if (state.plansSort === 'potential' || state.plansSort === 'realized') {
+    state.plansUnit = state.plansSort;
+    document.getElementById('plans-unit').value = state.plansUnit;
+  }
+  renderPlans();
+});
 document.getElementById('plans-unit').addEventListener('change', (e) => { state.plansUnit = e.target.value; renderPlans(); });
 document.querySelectorAll('[data-plans-group]').forEach((b) => b.addEventListener('click', () => {
   state.plansGroup = b.dataset.plansGroup; pressed('#plans', 'data-plans-group', state.plansGroup); renderPlans();
