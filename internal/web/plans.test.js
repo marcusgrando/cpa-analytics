@@ -232,6 +232,34 @@ describe('cost-benefit and ranking', () => {
     }
   });
 
+  test('Antigravity quota groups stay separate in groupPlanRows and groupPlanRateLimits', () => {
+    const opts = { effectiveDays: 7 };
+    const gem = computeAccountPlanRow({
+      authIndex: 'ag1', provider: 'antigravity', plan: 'Pro', group: 'gemini', group_label: 'Gemini',
+      cost_usd: 40, weekly_pct: 20, measured_cost_usd: 40, quota_measured: true,
+    }, opts);
+    const cl = computeAccountPlanRow({
+      authIndex: 'ag1', provider: 'antigravity', plan: 'Pro', group: 'claude-and-gpt', group_label: 'Claude and GPT',
+      cost_usd: 60, weekly_pct: 10, measured_cost_usd: 60, quota_measured: true,
+    }, opts);
+    const grouped = groupPlanRows([gem, cl], opts);
+    expect(grouped.length).toBe(2);
+    expect(grouped.map((g) => g.group)).toEqual(['gemini', 'claude-and-gpt']);
+    expect(grouped.map((g) => g.planKey)).toEqual(['antigravity:Pro', 'antigravity:Pro']);
+    expect(grouped[0].potential.fullCycleUSD).toBeCloseTo(200);
+    expect(grouped[1].potential.fullCycleUSD).toBeCloseTo(600);
+
+    const rl = groupPlanRateLimits([
+      { provider: 'antigravity', auth_index: 'ag1', group: 'gemini', window: 'session', calls: 3 },
+      { provider: 'antigravity', auth_index: 'ag1', group: 'claude-and-gpt', window: 'weekly', calls: 1 },
+    ], grouped);
+    expect(rl.length).toBe(2);
+    expect(rl[0].row.group).toBe('gemini');
+    expect(rl[0].windows).toEqual({ session: 3 });
+    expect(rl[1].row.group).toBe('claude-and-gpt');
+    expect(rl[1].windows).toEqual({ weekly: 1 });
+  });
+
   test('formats plan_costs YAML snippet cleanly', () => {
     expect(planCostsYAML({ 'codex:Pro': 200, 'claude:Max 20x': 180 })).toBe(
       'plan_costs:\n  "claude:Max 20x": 180\n  "codex:Pro": 200',

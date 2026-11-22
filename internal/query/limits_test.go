@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcusgrando/cpa-analytics/internal/pricing"
 	"github.com/marcusgrando/cpa-analytics/internal/store"
 )
 
@@ -288,7 +289,7 @@ func TestPlanValueAggregatesRealizedAndMeasuredQuotaAcrossProviders(t *testing.T
 		t.Errorf("codex top model = %q (%v)", cx.TopModel, cx.TopModelShare)
 	}
 	ag := byID["acc-ag"]
-	if ag.Provider != "antigravity" || ag.Requests != 1 || ag.WeeklyPct != 0 || ag.MeasuredCostUSD != 0 || ag.TopModel != "claude-sonnet-4-6" {
+	if ag.Provider != "antigravity" || ag.Group != "claude-and-gpt" || ag.Requests != 1 || ag.WeeklyPct != 0 || ag.MeasuredCostUSD != 0 || ag.TopModel != "claude-sonnet-4-6" {
 		t.Errorf("antigravity = %+v", ag)
 	}
 	f := rangeFilter()
@@ -363,5 +364,100 @@ func TestPlanValuePricesUsageBetweenAnEarlyResetAndPreviousDeadline(t *testing.T
 				t.Fatalf("from %s: %+v", tc.from, a)
 			}
 		}
+	}
+}
+
+func TestAntigravityQuotaSnapshotsFeedHistoryBurnLeftoverPlanValueAnd429(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-query.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset1 := day2.Add(6 * time.Hour)
+	reset2 := reset1.Add(7 * 24 * time.Hour)
+
+	snaps := []store.QuotaSnapshot{
+		// Gemini group: 10% -> 30% on day1, then resets at reset1 (leaving 70% unused).
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 10, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 30, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "session", UsedPct: 100, ResetAt: sql.NullInt64{Int64: day1.Add(8 * time.Hour).UnixMilli(), Valid: true}},
+		{RecordedAt: day2.Add(7 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 5, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		// Claude and GPT group: 20% -> 25% on day1.
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "claude-and-gpt", GroupLabel: "Claude and GPT", WindowKind: "weekly", UsedPct: 20, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "claude-and-gpt", GroupLabel: "Claude and GPT", WindowKind: "weekly", UsedPct: 25, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := []store.Row{
+		{
+			RequestID: "g1", TraceID: "g1", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(),
+			Provider: "antigravity", Model: "gemini-3-pro", AuthIndex: "ag1", Generate: true,
+			UncachedInput: 1_000_000, // $2.00 in testPrices? Use gpt-5 / claude-sonnet-4-6 or price override.
+		},
+		{
+			RequestID: "g-429", TraceID: "g-429", RequestedAt: day1.Add(3*time.Hour + 30*time.Second).UnixMilli(),
+			Provider: "antigravity", Model: "gemini-3-pro", AuthIndex: "ag1", Generate: true, Failed: true, StatusCode: 429,
+		},
+		{
+			RequestID: "c1", TraceID: "c1", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(),
+			Provider: "antigravity", Model: "claude-sonnet-4-6", AuthIndex: "ag1", Generate: true,
+			UncachedInput: 1_000_000,
+		},
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-3-pro":      {Input: 2.0, Output: 4.0},
+		"claude-sonnet-4-6": {Input: 3.0, Output: 15.0},
+	})
+
+	hist, err := LimitHistory(s.DB(), rangeFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Accounts) != 2 {
+		t.Fatalf("LimitHistory accounts = %d, want 2: %+v", len(hist.Accounts), hist.Accounts)
+	}
+
+	burn, err := LimitBurn(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(burn.Points) != 2 {
+		t.Fatalf("LimitBurn points = %d, want 2: %+v", len(burn.Points), burn.Points)
+	}
+	burnByGroup := map[string]BurnPoint{}
+	for _, bp := range burn.Points {
+		burnByGroup[bp.Group] = bp
+	}
+	if bp := burnByGroup["gemini"]; !near(bp.WeeklyPct, 20) || !near(bp.CostUSD, 2.0) || !near(bp.USDPerPct, 0.10) {
+		t.Errorf("gemini burn = %+v", bp)
+	}
+	if bp := burnByGroup["claude-and-gpt"]; !near(bp.WeeklyPct, 5) || !near(bp.CostUSD, 3.0) || !near(bp.USDPerPct, 0.60) {
+		t.Errorf("claude-and-gpt burn = %+v", bp)
+	}
+
+	left, err := LimitLeftover(s.DB(), rangeFilter(), tbl, day4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left.Cycles) != 1 || left.Cycles[0].Group != "gemini" || !near(left.Cycles[0].LeftPct, 70) || !near(left.Cycles[0].LeftUSD, 7.0) {
+		t.Fatalf("LimitLeftover = %+v", left.Cycles)
+	}
+
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 2 {
+		t.Fatalf("PlanValue accounts = %d, want 2: %+v", len(pv.Accounts), pv.Accounts)
+	}
+	if len(pv.RateLimits) != 1 || pv.RateLimits[0].Group != "gemini" || pv.RateLimits[0].Window != "session" {
+		t.Fatalf("PlanValue rate_limits = %+v, want 1 gemini session 429", pv.RateLimits)
 	}
 }

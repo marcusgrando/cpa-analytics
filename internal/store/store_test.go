@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -223,5 +224,35 @@ func TestMigrationReparsesClientsAndReclassifiesMetaDevin(t *testing.T) {
 	}
 	if uncached != 300 || cacheRead != 100 || outNR != 50 || outR != 30 || unclass != 0 || qual != "complete" {
 		t.Errorf("devin1 = %d/%d/%d/%d/%d %q", uncached, cacheRead, outNR, outR, unclass, qual)
+	}
+}
+
+func TestInsertAndPruneQuotaSnapshots(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "q.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	old := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	keep := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	reset := keep.Add(7 * 24 * time.Hour).UnixMilli()
+	snaps := []QuotaSnapshot{
+		{RecordedAt: old.UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 12.5, ResetAt: sql.NullInt64{Int64: reset, Valid: true}},
+		{RecordedAt: keep.UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 24.0, ResetAt: sql.NullInt64{Int64: reset, Valid: true}},
+		{RecordedAt: keep.UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "claude-and-gpt", GroupLabel: "Claude and GPT", WindowKind: "weekly", UsedPct: 0},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prune(old.Add(24 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM quota_snapshots`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("remaining quota snapshots = %d, want 2", count)
 	}
 }

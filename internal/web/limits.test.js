@@ -612,4 +612,53 @@ describe('limits rendering', () => {
     expect(walk([poolsRendered[1]], (n) => hasClass(n, 'acct')).length).toBe(0);
     expect(textOf(poolsRendered[1])).toContain('first@example.com, Max 20x');
   });
+
+  test('Antigravity weekly pools render consumption and projection charts per group', () => {
+    const sections = renderView({
+      checkedAt: now,
+      disabled: 0,
+      statusOnly: [],
+      history: {
+        accounts: [
+          {
+            auth_index: 'ag1',
+            provider: 'antigravity',
+            group: 'gemini',
+            group_label: 'Gemini',
+            points: [
+              { t: now - 24 * HOUR, weekly_pct: 10, weekly_reset: now + 5 * DAY },
+              { t: now - 3 * HOUR, weekly_pct: 25, weekly_reset: now + 5 * DAY },
+            ],
+          },
+          {
+            auth_index: 'ag1',
+            provider: 'antigravity',
+            group: 'claude-and-gpt',
+            group_label: 'Claude and GPT',
+            points: [
+              { t: now - 24 * HOUR, weekly_pct: 5, weekly_reset: now + 5 * DAY },
+              { t: now - 3 * HOUR, weekly_pct: 15, weekly_reset: now + 5 * DAY },
+            ],
+          },
+        ],
+      },
+      results: [{
+        account: { auth_index: 'ag1', provider: 'antigravity', email: 'ag@example.com' },
+        plan: 'Pro',
+        weight: 5,
+        windows: [
+          { id: 'session:gemini', label: '5-hour, Gemini', used: 40, resetsAt: now + 2 * HOUR, lengthMs: 5 * HOUR },
+          { id: 'weekly:gemini', label: 'Weekly, Gemini', used: 30, resetsAt: now + 5 * DAY, lengthMs: 7 * DAY },
+          { id: 'weekly:claude-and-gpt', label: 'Weekly, Claude and GPT', used: 20, resetsAt: now + 5 * DAY, lengthMs: 7 * DAY },
+        ],
+      }],
+    });
+    const poolsRendered = walk(sections, (n) => hasClass(n, 'pool'));
+    expect(poolsRendered.length).toBe(3);
+    // 5-hour session window has no trend chart; both weekly group windows do.
+    expect(walk([poolsRendered[0]], (n) => hasClass(n, 'trend-stats')).length).toBe(0);
+    expect(walk([poolsRendered[1]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
+    expect(walk([poolsRendered[2]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
+    expect(walk(sections, (n) => hasClass(n, 'trend')).length).toBe(2);
+  });
 });

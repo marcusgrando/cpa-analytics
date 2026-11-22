@@ -103,6 +103,7 @@ func (p *Plugin) handleUsage(raw []byte) ([]byte, error) {
 	if !w.Enqueue(RowFromRecord(rec, ua)) && w == nil {
 		p.droppedNoStore.Add(1)
 	}
+	p.notifyQuotaPoller(rec.Provider, rec.AuthIndex)
 	return nil, nil
 }
 

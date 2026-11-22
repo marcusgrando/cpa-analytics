@@ -1405,36 +1405,55 @@ function renderBurn() {
   note.textContent = notes.join(' ');
   const xs = buckets(DAY);
   const index = new Map(xs.map((t, i) => [t, i]));
-  const accounts = [...new Set(points.map((p) => p.auth_index))];
-  const styles = accountStyles(accounts.map((a) => ({ account: a, provider: points.find((p) => p.auth_index === a).provider })), providerColor);
-  const color = (a) => styles.get(a).color;
+  const burnSeriesKey = (p) => (p.group ? p.auth_index + '\0' + p.group : p.auth_index);
+  const seriesKeys = [...new Set(points.map(burnSeriesKey))];
+  const seriesMeta = new Map(seriesKeys.map((k) => {
+    const p = points.find((pt) => burnSeriesKey(pt) === k);
+    return [k, { key: k, account: p.auth_index, provider: p.provider, groupLabel: p.group_label || p.group || '' }];
+  }));
+  const styles = accountStyles(seriesKeys.map((k) => ({ account: k, provider: seriesMeta.get(k).provider })), providerColor);
+  const color = (k) => styles.get(k).color;
   const g = frame(container, xs, Math.max(...points.map((p) => p.usd_per_pct)), fmtUSD, fmtDay);
   g.svg.setAttribute('aria-label', 'Cost per 1% of the weekly limit by day and account');
-  for (const a of accounts) {
-    const pts = points.filter((p) => p.auth_index === a && index.has(p.t));
+  for (const k of seriesKeys) {
+    const pts = points.filter((p) => burnSeriesKey(p) === k && index.has(p.t));
     if (pts.length > 1) {
       const d = pts.map((p, j) => (j && p.t - pts[j - 1].t === DAY ? 'L' : 'M') + g.x(index.get(p.t)) + ',' + g.y(p.usd_per_pct)).join(' ');
-      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', ...(styles.get(a).dash ? { 'stroke-dasharray': styles.get(a).dash } : {}), style: 'stroke:' + color(a) }));
+      g.svg.append(svgEl('path', { d, fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', ...(styles.get(k).dash ? { 'stroke-dasharray': styles.get(k).dash } : {}), style: 'stroke:' + color(k) }));
     }
     for (const p of pts) {
       g.svg.append(svgEl('circle', {
         cx: g.x(index.get(p.t)), cy: g.y(p.usd_per_pct), r: 4, 'stroke-width': 2,
-        style: p.low_sample ? `fill:var(--surface);stroke:${color(a)}` : `fill:${color(a)};stroke:var(--surface)`,
+        style: p.low_sample ? `fill:var(--surface);stroke:${color(k)}` : `fill:${color(k)};stroke:var(--surface)`,
       }));
     }
   }
   hitColumns(g, xs, (i) => {
     const title = fmtDay(xs[i]) + ', per 1% of the weekly limit';
-    const rows = points.filter((p) => p.t === xs[i]).map((p) => ({
-      color: color(p.auth_index), value: fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : ''),
-      label: `${accountWithProvider(p.auth_index)}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
-    }));
+    const rows = points.filter((p) => p.t === xs[i]).map((p) => {
+      const grp = p.group_label || p.group;
+      return {
+        color: color(burnSeriesKey(p)), value: fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : ''),
+        label: `${accountWithProvider(p.auth_index)}${grp ? ', ' + grp : ''}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
+      };
+    });
     return { title, label: title, rows };
   });
-  legend(document.getElementById('burn-legend'), accounts.map((a) => ({ ...styles.get(a), label: accountWithProvider(a) })), 'line');
+  legend(document.getElementById('burn-legend'), seriesKeys.map((k) => {
+    const meta = seriesMeta.get(k);
+    const a = meta.account;
+    return { ...styles.get(k), label: accountWithProvider(a) + (meta.groupLabel ? ', ' + meta.groupLabel : '') };
+  }), 'line');
   document.getElementById('burn-table').replaceChildren(table(
     ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
-    points.map((p) => [fmtDay(p.t), burnAccountName(p.auth_index), p.provider, p.weekly_pct.toFixed(1) + '%', fmtUSD(p.cost_usd), fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : '')]),
+    points.map((p) => [
+      fmtDay(p.t),
+      burnAccountName(p.auth_index),
+      p.provider + (p.group_label || p.group ? ', ' + (p.group_label || p.group) : ''),
+      p.weekly_pct.toFixed(1) + '%',
+      fmtUSD(p.cost_usd),
+      fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : ''),
+    ]),
   ));
 }
 
@@ -1454,8 +1473,13 @@ function renderLeftover() {
     (unpriced ? `. ${unpriced} had too little traffic to price.` : '.');
   container.replaceChildren(table(
     ['Cycle ended', 'Account', 'Provider', 'Used', 'Left', 'Per 1%', 'Left, at API prices', 'Last reading'],
-    cycles.map((c) => [fmtStamp(c.ended_at) + (c.early ? ' (early)' : ''), burnAccountName(c.auth_index), c.provider, fmtShare(c.used_pct), fmtShare(c.left_pct),
-      c.usd_per_pct > 0 ? fmtUSD(c.usd_per_pct) : '-', c.usd_per_pct > 0 ? fmtUSD(c.left_usd) : '-', fmtStamp(c.last_reading_at)]),
+    cycles.map((c) => [
+      fmtStamp(c.ended_at) + (c.early ? ' (early)' : ''),
+      burnAccountName(c.auth_index),
+      c.provider + (c.group_label || c.group ? ', ' + (c.group_label || c.group) : ''),
+      fmtShare(c.used_pct), fmtShare(c.left_pct),
+      c.usd_per_pct > 0 ? fmtUSD(c.usd_per_pct) : '-', c.usd_per_pct > 0 ? fmtUSD(c.left_usd) : '-', fmtStamp(c.last_reading_at),
+    ]),
   ));
 }
 
@@ -1895,7 +1919,7 @@ function renderPool(pool, byAccount, now, readings, nameSingle = false) {
     return el('div', { class: 'pool' },
       el('div', { class: 'pool-head' }, ...head),
       meter(m.used, m.blocked ? 0 : pool.expected, { big: true, color, label: barLabel }),
-      pool.id === 'weekly' && readings ? weeklyTrend(pool, byAccount, readings, now) : null);
+      readings ? weeklyTrend(pool, byAccount, readings, now) : null);
   }
   const next = pool.restores[0];
   return el('div', { class: 'pool' },
@@ -1907,7 +1931,7 @@ function renderPool(pool, byAccount, now, readings, nameSingle = false) {
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
     meter(pool.used, pool.expected, { big: true, color: 'var(--tone1)',
       label: `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
-    pool.id === 'weekly' && readings ? weeklyTrend(pool, byAccount, readings, now) : null,
+    readings ? weeklyTrend(pool, byAccount, readings, now) : null,
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
@@ -1960,9 +1984,21 @@ function renderLimits() {
     const cooldownNotes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
       .filter(({ st }) => st.cooldowns.length > 0)
       .map(({ r, st }) => `${accountName(r.account)}: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : ''));
+    const historyAccounts = limitsData.history && limitsData.history.accounts;
+    const readingsForPool = (pool) => {
+      if (!historyAccounts) return null;
+      if ((provider.id === 'claude' || provider.id === 'codex') && pool.id === 'weekly') {
+        return historyAccounts.filter((a) => !a.group);
+      }
+      if (provider.id === 'antigravity' && pool.id.startsWith('weekly:')) {
+        const group = pool.id.slice('weekly:'.length);
+        return historyAccounts.filter((a) => a.provider === 'antigravity' && a.group === group);
+      }
+      return null;
+    };
     sections.push(el('div', { class: 'limits-provider' },
       el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now, (provider.id === 'claude' || provider.id === 'codex') ? limitsData.history && limitsData.history.accounts : null, ok.length > 1)),
+      ...list.map((p) => renderPool(p, byAccount, now, readingsForPool(p), ok.length > 1)),
       ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
       creditNote.length ? el('p', { class: 'notice', text: 'Google One AI credits: ' + creditNote.join(', ') }) : null,
       cooldownNotes.length ? el('p', { class: 'notice', text: 'CPA cooldowns: ' + cooldownNotes.join('; ') }) : null,
@@ -2199,7 +2235,11 @@ function renderPlans() {
   const configCosts = val.plan_costs || {};
   const sessionCosts = sessionPlanCosts();
   const credById = new Map((credentials || []).map((c) => [c.auth_index, c]));
-  const statsById = new Map((val.accounts || []).map((a) => [a.auth_index, a]));
+  const statsById = new Map();
+  for (const a of (val.accounts || [])) {
+    if (!statsById.has(a.auth_index)) statsById.set(a.auth_index, []);
+    statsById.get(a.auth_index).push(a);
+  }
 
   const ids = new Set();
   for (const c of (credentials || [])) if (!c.disabled) ids.add(c.auth_index);
@@ -2208,19 +2248,21 @@ function renderPlans() {
   const items = [];
   for (const id of ids) {
     const cred = credById.get(id);
-    const stat = statsById.get(id);
-    const provider = (cred && providerOf(cred)) || (stat && stat.provider) || 'other';
-    const isApiKey = cred ? !isOAuthAccount(cred) : false;
+    const stats = statsById.get(id) || [null];
     const detected = detectedPlans.get(id);
     const plan = (detected && detected.plan) || '';
-    items.push({
-      authIndex: id,
-      name: cred ? accountName(cred) : id,
-      provider,
-      plan,
-      isApiKey,
-      ...(stat || {}),
-    });
+    for (const stat of stats) {
+      const provider = (cred && providerOf(cred)) || (stat && stat.provider) || 'other';
+      const isApiKey = cred ? !isOAuthAccount(cred) : false;
+      items.push({
+        authIndex: id,
+        name: cred ? accountName(cred) : id,
+        provider,
+        plan,
+        isApiKey,
+        ...(stat || {}),
+      });
+    }
   }
 
   const opts = { effectiveDays, configCosts, sessionCosts };
@@ -2229,22 +2271,27 @@ function renderPlans() {
   const unit = state.plansUnit;
   const ranked = rankPlanRows(grouped, state.plansSort, unit);
   const score = r => metricScore(r, state.plansSort, unit);
+  const planGroupSuffix = (r) => (r.groupLabel || r.group ? ', ' + (r.groupLabel || r.group) : '');
 
-  // Summary tiles
+  // Summary tiles (deduplicate by authIndex so multi-group providers such as
+  // Antigravity count each paid account's monthly fee once).
   const knownSubs = accountRows.filter((r) => !r.isApiKey && r.monthlyCost > 0);
-  const totalMonthly = knownSubs.reduce((s, r) => s + r.monthlyCost, 0);
-  const totalPeriodSub = knownSubs.reduce((s, r) => s + (r.periodCost || 0), 0);
+  const uniquePaid = new Map();
+  for (const r of knownSubs) if (!uniquePaid.has(r.authIndex)) uniquePaid.set(r.authIndex, r);
+  const paidAccounts = [...uniquePaid.values()];
+  const totalMonthly = paidAccounts.reduce((s, r) => s + r.monthlyCost, 0);
+  const totalPeriodSub = paidAccounts.reduce((s, r) => s + (r.periodCost || 0), 0);
   const totalRealizedAPI = knownSubs.reduce((s, r) => s + r.realized.costUSD, 0);
   const overallRealized = totalPeriodSub > 0 ? totalRealizedAPI / totalPeriodSub : null;
   document.getElementById('plans-tiles').replaceChildren(
-    tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(knownSubs.length)} paid account${knownSubs.length === 1 ? '' : 's'}`),
+    tile('Monthly subscriptions', fmtUSD(totalMonthly), `${fmtInt(paidAccounts.length)} paid account${paidAccounts.length === 1 ? '' : 's'}`),
     tile('Usage on paid subscriptions', fmtUSD(totalRealizedAPI), overallRealized !== null ? `${fmtMult(overallRealized)} on ${fmtUSD(totalPeriodSub)} of subscriptions in this period` : ''),
 
   );
 
   const notes = [];
   if (clamped) notes.push(`Recording covers ${effectiveDays.toFixed(1)} days of this range, so realized subscription cost is scaled to match.`);
-  const unpricedCount = accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).length;
+  const unpricedCount = new Set(accountRows.filter((r) => !r.isApiKey && r.monthlyCost === null).map((r) => r.authIndex)).size;
   if (unpricedCount > 0) notes.push(`${fmtInt(unpricedCount)} account${unpricedCount === 1 ? ' has' : 's have'} no default monthly price. Type a USD/month figure in the table to include ${unpricedCount === 1 ? 'it' : 'them'} in the per-dollar ranking.`);
   if (accountRows.some(r => r.unpricedTokens > 0)) notes.push('Unpriced tokens contribute $0 to the API estimate. See Cost quality in Usage.');
   document.getElementById('plans-note').textContent = notes.join(' ');
@@ -2269,7 +2316,9 @@ function renderPlans() {
   const max = Math.max(1, ...barRows.map(score));
   chartEl.replaceChildren(...barRows.map(r => {
     const value = score(r);
-    const label = state.plansGroup === 'account' ? r.name + ' (' + r.provider + ' ' + r.plan + ')' : r.provider + ' ' + r.plan;
+    const label = state.plansGroup === 'account'
+      ? r.name + ' (' + r.provider + ' ' + r.plan + planGroupSuffix(r) + ')'
+      : r.provider + ' ' + r.plan + planGroupSuffix(r);
     const color = colorFor('provider', r.provider);
     const formatted = tokenMetric ? fmtCompact(value) : (state.plansSort === 'cycleUSD' || state.plansSort === 'recordedUSD') ? fmtUSD(value) : fmtMult(value);
     const detail = [];
@@ -2314,7 +2363,7 @@ function renderPlans() {
     const rows = ranked.map((r, index) => {
       const rankCell = score(r) !== null ? '#' + (index + 1) : r.isApiKey ? 'API' : r.monthlyCost === 0 ? 'Free' : '-';
 
-      const nameTitle = state.plansGroup === 'account' ? r.name : `${r.provider} ${r.plan}`;
+      const nameTitle = state.plansGroup === 'account' ? r.name + planGroupSuffix(r) : `${r.provider} ${r.plan}${planGroupSuffix(r)}`;
       const nameSub = state.plansGroup === 'account'
         ? `${r.provider} ${r.plan}`
         : `${fmtInt(r.accountCount)} account${r.accountCount === 1 ? '' : 's'}`;
@@ -2359,7 +2408,7 @@ function renderPlans() {
           + (r.potential.lowSample ? ', low sample' : '');
         potCell = el('span', {}, el('strong', { text: main }), el('span', { class: 'plan-sub', text: sub }));
       } else {
-        potCell = el('span', { class: 'plan-sub', text: r.provider === 'antigravity' && r.quotaPoints === null ? 'Live quota in Limits. No weekly quota history.' : 'Insufficient measured quota or priced usage' });
+        potCell = el('span', { class: 'plan-sub', text: 'Insufficient measured quota or priced usage' });
       }
 
       const realMain = r.unpricedTokens > 0 && r.realized.costUSD === 0 ? 'No priced usage' : r.realized.leverage !== null ? fmtMult(r.realized.leverage) : fmtUSD(r.realized.costUSD);
@@ -2432,7 +2481,7 @@ function renderPlanRateLimits(observations, groups) {
     ['below', 'Both below 100%', 'var(--tone4)'],
     ['incomplete', 'Incomplete readings', 'var(--tone5)'],
   ];
-  const label = row => row.name || row.provider + ' ' + row.plan;
+  const label = row => (row.name || row.provider + ' ' + row.plan) + (row.groupLabel || row.group ? ', ' + (row.groupLabel || row.group) : '');
   const series = groupPlanRateLimits(observations, groups);
   const max = Math.max(1, ...series.map(r => r.total));
   chart.replaceChildren(el('p', { class: 'sub', text: 'Each upstream call counts once. For Claude, the short window is 5 hours. A 429 can occur before either quota is full. Accounts that CPA skips produce no 429 for that attempt.' }));

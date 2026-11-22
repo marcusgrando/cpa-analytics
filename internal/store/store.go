@@ -81,6 +81,19 @@ type Row struct {
 	LimitWeeklyReset  sql.NullInt64
 }
 
+// QuotaSnapshot is one polled reading of a subscription quota window for a
+// provider that does not return limit headers on generation responses.
+type QuotaSnapshot struct {
+	RecordedAt int64
+	Provider   string
+	AuthIndex  string
+	GroupID    string
+	GroupLabel string
+	WindowKind string
+	UsedPct    float64
+	ResetAt    sql.NullInt64
+}
+
 // Store wraps the SQLite database.
 type Store struct {
 	db *sql.DB
@@ -327,11 +340,50 @@ func (s *Store) InsertBatch(rows []Row) (err error) {
 	return nil
 }
 
-// Prune deletes rows requested before the cutoff.
+// InsertQuotaSnapshots writes polled quota snapshots in one transaction.
+func (s *Store) InsertQuotaSnapshots(snaps []QuotaSnapshot) (err error) {
+	if len(snaps) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin insert quota snapshots: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	stmt, err := tx.Prepare(`INSERT INTO quota_snapshots (
+		recorded_at, provider, auth_index, group_id, group_label, window_kind, used_pct, reset_at
+	) VALUES (?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return fmt.Errorf("prepare insert quota snapshots: %w", err)
+	}
+	defer stmt.Close()
+	for _, sn := range snaps {
+		if _, err = stmt.Exec(
+			sn.RecordedAt, sn.Provider, sn.AuthIndex, sn.GroupID, sn.GroupLabel, sn.WindowKind, sn.UsedPct, sn.ResetAt,
+		); err != nil {
+			return fmt.Errorf("insert quota snapshot %s/%s: %w", sn.AuthIndex, sn.GroupID, err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit insert quota snapshots: %w", err)
+	}
+	return nil
+}
+
+// Prune deletes rows requested before the cutoff and polled quota snapshots
+// recorded before it.
 func (s *Store) Prune(before time.Time) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM requests WHERE requested_at < ?`, before.UnixMilli())
+	cutoff := before.UnixMilli()
+	res, err := s.db.Exec(`DELETE FROM requests WHERE requested_at < ?`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune requests: %w", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM quota_snapshots WHERE recorded_at < ?`, cutoff); err != nil {
+		return 0, fmt.Errorf("prune quota snapshots: %w", err)
 	}
 	return res.RowsAffected()
 }

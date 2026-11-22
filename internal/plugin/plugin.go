@@ -19,7 +19,7 @@ import (
 
 const (
 	pluginName    = "cpa-analytics"
-	pluginVersion = "0.3.0"
+	pluginVersion = "0.4.0"
 	// minHostSchema is the first host schema that honors
 	// request_interceptor_omit_body_before, so request bodies never reach the plugin.
 	minHostSchema uint32 = 7
@@ -52,6 +52,7 @@ type Plugin struct {
 	writer     *store.Writer
 	storageErr string
 	refresher  *pricing.Refresher
+	poller     *quotaPoller
 	pruneStop  chan struct{}
 	// pruning counts running prune jobs. Close waits for them before it
 	// closes the store, so no query outlives the plugin.
@@ -70,6 +71,7 @@ type Health struct {
 	TraceHits     uint64            `json:"trace_hits"`
 	TraceMisses   uint64            `json:"trace_misses"`
 	Pricing       pricing.Status    `json:"pricing"`
+	QuotaPoller   QuotaPollerStatus `json:"quota_poller"`
 }
 
 // New builds a plugin. host may be nil in tests that do not need callbacks.
@@ -113,13 +115,14 @@ func (p *Plugin) Handle(method string, req []byte) (out []byte) {
 // Close flushes queued rows and closes the database. Safe to call more than once.
 func (p *Plugin) Close() {
 	p.mu.Lock()
-	w, s, r, prune := p.writer, p.store, p.refresher, p.pruneStop
-	p.writer, p.store, p.refresher, p.pruneStop = nil, nil, nil, nil
+	w, s, r, qp, prune := p.writer, p.store, p.refresher, p.poller, p.pruneStop
+	p.writer, p.store, p.refresher, p.poller, p.pruneStop = nil, nil, nil, nil, nil
 	p.mu.Unlock()
 	if prune != nil {
 		close(prune)
 	}
 	p.pruning.Wait()
+	qp.Stop()
 	r.Stop()
 	w.Close()
 	if s != nil {
@@ -131,8 +134,10 @@ func (p *Plugin) Close() {
 func (p *Plugin) Health() Health {
 	p.mu.Lock()
 	h := Health{DBPath: p.cfg.DBPath, StorageError: p.storageErr, RetentionDays: p.cfg.RetentionDays, Writer: p.writer.Stats()}
+	qp := p.poller
 	p.mu.Unlock()
 	h.Pricing = p.pricingStatus()
+	h.QuotaPoller = qp.Status()
 	h.Writer.Dropped += p.droppedNoStore.Load()
 	h.TraceHits, h.TraceMisses = p.traces.Stats()
 	return h
@@ -142,6 +147,25 @@ func (p *Plugin) currentWriter() *store.Writer {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.writer
+}
+
+func (p *Plugin) startQuotaPoller() {
+	p.mu.Lock()
+	if p.poller != nil || p.store == nil || p.host == nil {
+		p.mu.Unlock()
+		return
+	}
+	qp := newQuotaPoller(p.host, p.store, p.logf)
+	p.poller = qp
+	p.mu.Unlock()
+	qp.Start()
+}
+
+func (p *Plugin) notifyQuotaPoller(provider, authIndex string) {
+	p.mu.Lock()
+	qp := p.poller
+	p.mu.Unlock()
+	qp.Notify(provider, authIndex)
 }
 
 func (p *Plugin) planCosts() map[string]float64 {
@@ -242,6 +266,7 @@ func (p *Plugin) register(raw []byte) ([]byte, error) {
 	if restartPricing {
 		p.startPricing(cfg.PricingURL, kv)
 	}
+	p.startQuotaPoller()
 	p.startPrune()
 	return json.Marshal(registration{
 		SchemaVersion: pluginabi.SchemaVersion,

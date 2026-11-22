@@ -148,13 +148,17 @@ function computeAccountPlanRow(item, opts) {
     };
   }
 
+  const group = String(item.group || '');
+  const groupLabel = String(item.group_label || item.groupLabel || '');
   return {
-    id: item.authIndex,
+    id: group ? item.authIndex + ':' + group : item.authIndex,
     authIndex: item.authIndex,
     name: item.name || item.authIndex,
     provider: normProvider(item.provider) || 'other',
     plan: item.isApiKey ? 'API key' : (item.plan || 'Unknown'),
     planKey: key,
+    group,
+    groupLabel,
     isApiKey: Boolean(item.isApiKey),
     accountCount: 1,
     monthlyCost,
@@ -187,7 +191,7 @@ function groupPlanRows(accountRows, opts) {
   const days = opts.effectiveDays;
   const groups = new Map();
   for (const row of accountRows) {
-    const gk = (row.isApiKey ? 'payg:' : 'sub:') + row.provider + ':' + row.plan.toLowerCase();
+    const gk = (row.isApiKey ? 'payg:' : 'sub:') + row.provider + ':' + row.plan.toLowerCase() + (row.group ? ':' + row.group : '');
     if (!groups.has(gk)) groups.set(gk, []);
     groups.get(gk).push(row);
   }
@@ -256,10 +260,12 @@ function groupPlanRows(accountRows, opts) {
     const costSource = sources.size === 1 ? first.costSource : (sources.has('session') ? 'session' : sources.has('config') ? 'config' : 'mixed');
 
     out.push({
-      id: first.planKey,
+      id: first.group ? first.planKey + ':' + first.group : first.planKey,
       provider: first.provider,
       plan: first.plan,
       planKey: first.planKey,
+      group: first.group || '',
+      groupLabel: first.groupLabel || '',
       isApiKey,
       accountCount: members.length,
       accounts: members,
@@ -335,21 +341,27 @@ function rankPlanRows(rows, sortBy = 'realized', unit = 'realized') {
 // roll up to the same plan. It is a subset of the window counts.
 function groupPlanRateLimits(observations, rows) {
   const owners = new Map();
+  const fallbackOwners = new Map();
   for (const row of rows) {
     for (const account of row.accounts || [row]) {
-      owners.set(JSON.stringify([account.provider, account.authIndex]), row);
+      owners.set(JSON.stringify([account.provider, account.authIndex, account.group || '']), row);
+      if (!fallbackOwners.has(JSON.stringify([account.provider, account.authIndex]))) {
+        fallbackOwners.set(JSON.stringify([account.provider, account.authIndex]), row);
+      }
     }
   }
+  const ownerOf = (provider, authIndex, group) => owners.get(JSON.stringify([provider, authIndex, group || '']))
+    || fallbackOwners.get(JSON.stringify([provider, authIndex]));
   const results = new Map();
   for (const obs of observations) {
     const provider = normProvider(obs.provider);
-    const row = owners.get(JSON.stringify([provider, obs.auth_index]));
+    const row = ownerOf(provider, obs.auth_index, obs.group);
     if (!row) continue;
     if (!results.has(row)) results.set(row, { row, total: 0, windows: {}, following: new Map() });
     const result = results.get(row);
     result.total += obs.calls;
     result.windows[obs.window] = (result.windows[obs.window] || 0) + obs.calls;
-    const target = owners.get(JSON.stringify([provider, obs.following_account]));
+    const target = ownerOf(provider, obs.following_account, obs.group);
     if (target) result.following.set(target, (result.following.get(target) || 0) + obs.calls);
   }
   return [...results.values()].sort((a, b) => b.total - a.total);
