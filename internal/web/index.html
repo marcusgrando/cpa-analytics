@@ -14,7 +14,8 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #d5d9e0;
   --provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;
-  --provider-antigravity: #0d7c66; --provider-xai: #6d3ff0; --provider-kimi: #007d87; --provider-meta: #c2185b; --provider-devin: #9f5f00;
+  --provider-antigravity: #0d7c66; --provider-antigravity-2: #c27803; --provider-antigravity-3: #7c3aed; --provider-antigravity-4: #c2185b;
+  --provider-xai: #6d3ff0; --provider-kimi: #007d87; --provider-meta: #c2185b; --provider-devin: #9f5f00;
   --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
 }
 @media (prefers-color-scheme: dark) {
@@ -26,8 +27,9 @@
     --tone1: #eceef2; --tone2: #c4cad4; --tone3: #9ba3b1; --tone4: #77808f; --tone5: #5a6372;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
-    --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-    --provider-antigravity: #2bb69a; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
+    --provider-claude: #d4704f; --provider-codex: #5c62ff; --provider-gemini: #4796e3; --provider-next: #13a065;
+    --provider-antigravity: #2bb69a; --provider-antigravity-2: #e09f3e; --provider-antigravity-3: #a58bff; --provider-antigravity-4: #e65c90;
+    --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
     --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
   }
 }
@@ -39,8 +41,9 @@
   --tone1: #eceef2; --tone2: #c4cad4; --tone3: #9ba3b1; --tone4: #77808f; --tone5: #5a6372;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767; --other: #3a404a;
-  --provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;
-  --provider-antigravity: #2bb69a; --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
+  --provider-claude: #d4704f; --provider-codex: #5c62ff; --provider-gemini: #4796e3; --provider-next: #13a065;
+  --provider-antigravity: #2bb69a; --provider-antigravity-2: #e09f3e; --provider-antigravity-3: #a58bff; --provider-antigravity-4: #e65c90;
+  --provider-xai: #a58bff; --provider-kimi: #26b6c4; --provider-meta: #e65c90; --provider-devin: #e09f3e;
   --good: #0ca30c; --critical: #e66767; --good-text: #0ca30c;
 }
 * { box-sizing: border-box; }
@@ -178,7 +181,18 @@ body.loading #refresh-now { opacity: 0.65; }
 .section-status { min-height: 80px; display: grid; place-items: center; }
 #drift .section-status, #burn .section-status { min-height: 240px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.icon-btn { display: inline-flex; align-items: center; gap: 6px; }
+.icon-btn svg { flex: none; }
+.acct-email { transition: filter 0.15s ease; }
+body.hide-emails .acct-email { filter: blur(5px); user-select: none; }
 #limits-body { margin-top: 16px; }
+.limits-overview { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--grid); }
+.limits-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 10px; }
+.limits-legend-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; min-height: 28px; padding: 3px 9px; }
+.limits-legend-btn .limits-meta { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.limits-legend-btn[aria-pressed="true"] .limits-meta { color: var(--surface); opacity: 0.85; }
+.limits-legend-btn.dim { opacity: 0.42; }
+.limits-provider-head { display: flex; align-items: center; gap: 7px; }
 .limits-provider + .limits-provider { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--grid); }
 .pool { margin-top: 16px; }
 .pool-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
@@ -267,6 +281,7 @@ body.loading #refresh-now { opacity: 0.65; }
             <option value="0">Off</option>
           </select>
         </label>
+        <button id="toggle-emails" type="button" class="icon-btn" aria-pressed="true" title="Show or blur account emails"></button>
         <button id="refresh-now" type="button">Refresh</button>
         <button id="change-key" type="button">Change key</button>
       </div>
@@ -812,11 +827,13 @@ const tooltip = document.getElementById('tooltip');
 
 // showTooltip follows the pointer, or opens beside column when one is given.
 function showTooltip(event, title, rows, column) {
-  tooltip.replaceChildren(el('div', { class: 'title', text: title }));
+  const titleEl = title instanceof Node ? el('div', { class: 'title' }, title) : el('div', { class: 'title', text: title });
+  tooltip.replaceChildren(titleEl);
   for (const row of rows) {
+    const labelEl = row.label instanceof Node ? el('span', {}, row.label) : el('span', { text: row.label });
     tooltip.append(el('div', { class: 'row' },
       row.color ? el('span', { class: 'key-line', style: 'background:' + row.color }) : null,
-      el('strong', { text: row.value }), el('span', { text: row.label })));
+      el('strong', { text: row.value }), labelEl));
   }
   tooltip.hidden = false;
   const box = tooltip.getBoundingClientRect();
@@ -1398,6 +1415,10 @@ function renderDrift() {
 }
 
 // Accounts are named from CPA's credential list. Without it, by auth index.
+function emailSpan(text) {
+  return el('span', { class: 'acct-email', text });
+}
+
 function burnAccountName(authIndex) {
   const account = (data.credentials || []).find((a) => a.auth_index === authIndex);
   return account ? accountName(account) : authIndex;
@@ -1408,6 +1429,12 @@ function burnAccountName(authIndex) {
 function accountWithProvider(authIndex) {
   const account = (data.credentials || []).find((a) => a.auth_index === authIndex);
   return account ? `${accountName(account)} (${account.provider})` : authIndex;
+}
+
+function accountWithProviderNode(authIndex, suffix = '') {
+  const account = (data.credentials || []).find((a) => a.auth_index === authIndex);
+  if (!account) return el('span', {}, emailSpan(authIndex), suffix);
+  return el('span', {}, emailSpan(accountName(account)), ` (${account.provider})${suffix}`);
 }
 
 function renderBurn() {
@@ -1457,7 +1484,7 @@ function renderBurn() {
       const grp = p.group_label || p.group;
       return {
         color: color(burnSeriesKey(p)), value: fmtUSD(p.usd_per_pct) + (p.low_sample ? '*' : ''),
-        label: `${accountWithProvider(p.auth_index)}${grp ? ', ' + grp : ''}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`,
+        label: accountWithProviderNode(p.auth_index, `${grp ? ', ' + grp : ''}: ${p.weekly_pct.toFixed(1)}% for ${fmtUSD(p.cost_usd)}`),
       };
     });
     return { title, label: title, rows };
@@ -1465,13 +1492,13 @@ function renderBurn() {
   legend(document.getElementById('burn-legend'), seriesKeys.map((k) => {
     const meta = seriesMeta.get(k);
     const a = meta.account;
-    return { ...styles.get(k), label: accountWithProvider(a) + (meta.groupLabel ? ', ' + meta.groupLabel : '') };
+    return { ...styles.get(k), label: accountWithProviderNode(a, meta.groupLabel ? ', ' + meta.groupLabel : '') };
   }), 'line');
   document.getElementById('burn-table').replaceChildren(table(
     ['Day', 'Account', 'Provider', 'Weekly limit used', 'Cost', 'Per 1%'],
     points.map((p) => [
       fmtDay(p.t),
-      burnAccountName(p.auth_index),
+      emailSpan(burnAccountName(p.auth_index)),
       p.provider + (p.group_label || p.group ? ', ' + (p.group_label || p.group) : ''),
       p.weekly_pct.toFixed(1) + '%',
       fmtUSD(p.cost_usd),
@@ -1498,7 +1525,7 @@ function renderLeftover() {
     ['Cycle ended', 'Account', 'Provider', 'Used', 'Left', 'Per 1%', 'Left, at API prices', 'Last reading'],
     cycles.map((c) => [
       fmtStamp(c.ended_at) + (c.early ? ' (early)' : ''),
-      burnAccountName(c.auth_index),
+      emailSpan(burnAccountName(c.auth_index)),
       c.provider + (c.group_label || c.group ? ', ' + (c.group_label || c.group) : ''),
       fmtShare(c.used_pct), fmtShare(c.left_pct),
       c.usd_per_pct > 0 ? fmtUSD(c.usd_per_pct) : '-', c.usd_per_pct > 0 ? fmtUSD(c.left_usd) : '-', fmtStamp(c.last_reading_at),
@@ -1531,7 +1558,7 @@ function renderBreakdown() {
       e.rows.map((r) => [
         el('span', {}, el('span', { class: 'key-rect', style: 'background:' + colorFor('provider', r.provider) }), ' ', r.provider || 'unknown'),
         r.model || 'unknown',
-        r.auth_index ? accountWithProvider(r.auth_index) : 'not recorded',
+        r.auth_index ? accountWithProviderNode(r.auth_index) : 'not recorded',
         r.status_code ? String(r.status_code) : 'transport / none',
         fmtInt(r.count),
         fmtPct(r.share),
@@ -1568,7 +1595,7 @@ function renderBreakdown() {
     }
     if (b.by === 'account') {
       if (!key) return 'not recorded';
-      return el('button', { class: 'link', type: 'button', text: accountWithProvider(key), title: 'Filter by this account', onclick: () => setFilter('account', key) });
+      return el('button', { class: 'link', type: 'button', title: 'Filter by this account', onclick: () => setFilter('account', key) }, accountWithProviderNode(key));
     }
     if (b.by === 'api_key') {
       if (!key) return 'no key';
@@ -1606,17 +1633,25 @@ function renderAccountWarning() {
   const problems = creds.map((c) => ({ c, st: summarizeCredentialStatus(c, now) }))
     .filter(({ st }) => st.state !== 'active');
   if (!problems.length) { node.hidden = true; node.replaceChildren(); return; }
-  const summary = problems.map(({ c, st }) => {
-    const label = `${accountName(c)} (${c.provider})`;
-    if (st.state === 'sign_in') return label + ' needs sign-in';
-    const next = st.cooldowns[0];
-    if (st.state === 'quota_blocked') return label + ' blocked by quota' + (next && next.retryAt ? ', resets in ' + fmtDuration(next.retryAt - now) : '');
-    return label + (st.message ? ': ' + st.message : ' in ' + st.state);
-  }).join('; ');
+  const problemNodes = [];
+  problems.forEach(({ c, st }, idx) => {
+    if (idx > 0) problemNodes.push('; ');
+    const nameEl = typeof emailSpan === 'function' ? emailSpan(accountName(c)) : accountName(c);
+    let tail;
+    if (st.state === 'sign_in') tail = ` (${c.provider}) needs sign-in`;
+    else if (st.state === 'quota_blocked') {
+      const next = st.cooldowns[0];
+      tail = ` (${c.provider}) blocked by quota` + (next && next.retryAt ? ', resets in ' + fmtDuration(next.retryAt - now) : '');
+    } else {
+      tail = ` (${c.provider})` + (st.message ? ': ' + st.message : ' in ' + st.state);
+    }
+    problemNodes.push(el('span', {}, nameEl, tail));
+  });
   node.hidden = false;
   node.replaceChildren(
     el('span', { class: 'dot', style: 'background:var(--warning);margin-right:6px' }),
-    summary + '. ',
+    ...problemNodes,
+    '. ',
     el('button', { class: 'link', type: 'button', text: 'Open Limits', onclick: () => { showView('limits'); refresh(); } }),
   );
 }
@@ -1855,6 +1890,25 @@ async function loadLimits(current) {
 }
 
 const accountName = (a) => a.label || a.email || a.name || a.auth_index;
+const emailNode = (text) => el('span', { class: 'acct-email', text });
+const ANTIGRAVITY_GROUP_COLORS = [
+  'var(--provider-antigravity)',
+  'var(--provider-antigravity-2)',
+  'var(--provider-antigravity-3)',
+  'var(--provider-antigravity-4)',
+];
+const LIMIT_PROVIDER_COLORS = {
+  claude: 'var(--provider-claude)',
+  codex: 'var(--provider-codex)',
+  gemini: 'var(--provider-gemini)',
+  devin: 'var(--provider-devin)',
+  kimi: 'var(--provider-kimi)',
+};
+function limitSeriesColor(providerId, groupIndex = 0) {
+  if (providerId === 'antigravity') return ANTIGRAVITY_GROUP_COLORS[groupIndex] || 'var(--provider-next)';
+  if (groupIndex === 0) return LIMIT_PROVIDER_COLORS[providerId] || 'var(--provider-next)';
+  return ANTIGRAVITY_GROUP_COLORS[groupIndex % ANTIGRAVITY_GROUP_COLORS.length];
+}
 const fmtWhen = (t) => new Date(t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtShare = (v) => Math.round(v) + '%';
 const fmtStamp = (t) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -1865,10 +1919,19 @@ function fmtMoney(amount, currency) {
     return amount.toFixed(2) + ' ' + currency;
   }
 }
-function fmtSpend(r) {
+function fmtSpendNode(r) {
   const { used, limit, currency } = r.spend;
   const amount = limit === null ? fmtMoney(used, currency) : `${fmtMoney(used, currency)} of ${fmtMoney(limit, currency)}`;
-  return `${accountName(r.account)} ${amount}` + (limit !== null && used >= limit ? ' (limit reached)' : '');
+  const tail = ' ' + amount + (limit !== null && used >= limit ? ' (limit reached)' : '');
+  return el('span', {}, emailNode(accountName(r.account)), tail);
+}
+function joinNodes(nodes, sep = ', ') {
+  const out = [];
+  nodes.forEach((n, i) => {
+    if (i > 0) out.push(sep);
+    out.push(n);
+  });
+  return out;
 }
 const PACE = {
   ahead: { color: 'var(--warning)', label: 'Ahead of pace' },
@@ -1905,22 +1968,23 @@ function accountRow(m, share, r, now) {
   const name = accountName(r.account);
   const plan = [r.plan || 'plan unknown', fmtShare(share.capacity) + ' of the pool'].join(', ');
   return el('div', { class: 'acct' },
-    el('div', { class: 'acct-name', title: name }, el('span', { text: name }), el('span', { class: 'acct-plan', text: plan })),
-    meter(m.used, m.blocked ? 0 : share.elapsed, { label: `${name}: ${m.blocked ? 'blocked by the weekly limit' : fmtShare(m.used) + ' used'}`, color }),
+    el('div', { class: 'acct-name' }, emailNode(name), el('span', { class: 'acct-plan', text: plan })),
+    meter(m.used, m.blocked ? 0 : share.elapsed, { label: `${m.blocked ? 'blocked by the weekly limit' : fmtShare(m.used) + ' used'}`, color }),
     el('div', { class: 'acct-value' }, status));
 }
 
-function renderPool(pool, byAccount, now, readings, nameSingle = false, providerId = '') {
+function renderPool(pool, byAccount, now, { nameSingle = false, barColor = '', dotColor = '', emptyTrendText = '' } = {}) {
   const pace = PACE[pool.pace];
   const single = pool.members.length === 1;
+  const labelDot = dotColor ? el('span', { class: 'dot', style: 'background:' + dotColor, 'aria-hidden': 'true' }) : null;
   if (single) {
     const m = pool.members[0];
     const r = byAccount.get(m.account);
     const name = accountName(r.account);
     const resets = (t) => (t && t > now ? `Resets in ${fmtDuration(t - now)} (${fmtWhen(t)})` : '');
-    let color = 'var(--tone1)';
-    const head = [el('strong', { text: pool.label })];
-    if (nameSingle) head.push(el('span', { text: [name, r.plan].filter(Boolean).join(', ') }));
+    let color = barColor || 'var(--tone1)';
+    const head = [labelDot, el('strong', { text: pool.label })].filter(Boolean);
+    if (nameSingle) head.push(el('span', {}, emailNode(name), r.plan ? ', ' + r.plan : ''));
     let barLabel;
     if (m.blocked) {
       color = 'var(--other)';
@@ -1947,21 +2011,22 @@ function renderPool(pool, byAccount, now, readings, nameSingle = false, provider
     return el('div', { class: 'pool' },
       el('div', { class: 'pool-head' }, ...head),
       meter(m.used, m.blocked ? 0 : pool.expected, { big: true, color, label: barLabel }),
-      readings ? weeklyTrend(pool, byAccount, readings, now, providerId) : null);
+      emptyTrendText ? el('p', { class: 'sub', text: emptyTrendText }) : null);
   }
   const next = pool.restores[0];
   const full = pool.used >= LIMIT_REACHED;
   return el('div', { class: 'pool' },
     el('div', { class: 'pool-head' },
+      labelDot,
       el('strong', { text: pool.label }),
       el('span', { text: fmtShare(pool.used) + ' of the pool used' }),
       full ? el('span', { class: 'status' }, el('span', { class: 'dot', style: 'background:var(--critical)' }), 'Limit reached')
         : pace ? el('span', { class: 'status', title: `${fmtShare(pool.expected)} of the window has elapsed` },
           el('span', { class: 'dot', style: 'background:' + pace.color }), pace.label) : null,
       next ? el('span', { text: `Restores +${next.percent}% of the pool in ${fmtDuration(next.at - now)} (${fmtWhen(next.at)})` }) : null),
-    meter(pool.used, pool.expected, { big: true, color: full ? 'var(--critical)' : 'var(--tone1)',
+    meter(pool.used, pool.expected, { big: true, color: full ? 'var(--critical)' : (barColor || 'var(--tone1)'),
       label: full ? `${fmtShare(pool.used)} of the pool used, limit reached` : `${fmtShare(pool.used)} of the pool used, ${fmtShare(pool.expected)} of the window elapsed` }),
-    readings ? weeklyTrend(pool, byAccount, readings, now, providerId) : null,
+    emptyTrendText ? el('p', { class: 'sub', text: emptyTrendText }) : null,
     ...pool.members.map((m, i) => accountRow(m, pool.accounts[i], byAccount.get(m.account), now)));
 }
 
@@ -1974,7 +2039,7 @@ function renderStatusRow(account, now) {
     : st.state === 'cooldown' ? 'In cooldown'
     : 'Error' + (st.message ? ': ' + st.message : '');
   const parts = [
-    el('strong', { text: accountName(account) }),
+    el('strong', { class: 'acct-email', text: accountName(account) }),
     el('span', { class: 'status' }, el('span', { class: 'dot', style: 'background:' + dotColor }), label),
   ];
   if (st.cooldowns.length) {
@@ -2002,82 +2067,9 @@ function displayProviderName(provider) {
   return known[provider] || provider.replace(/(^|[-_ ])([a-z])/g, (_, sep, ch) => (sep ? ' ' : '') + ch.toUpperCase());
 }
 
-function renderLimits() {
-  const body = document.getElementById('limits-body');
-  pendingTrends = [];
-  const now = limitsData.checkedAt;
-  const sections = [];
-  for (const provider of LIMIT_PROVIDERS) {
-    const results = limitsData.results.filter((r) => providerSectionId(providerOf(r.account)) === provider.id);
-    if (!results.length) continue;
-    const ok = results.filter((r) => !r.error);
-    const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
-    const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
-    const weighted = ok.length > 1 && ok.every((r) => r.weight > 0);
-    const only = ok.length === 1 ? ok[0] : null;
-    const sub = only
-      ? (results.length === 1
-        ? [accountName(only.account), only.plan].filter(Boolean).join(', ')
-        : [`1 of ${results.length} accounts read`, accountName(only.account), only.plan].filter(Boolean).join(', '))
-      : `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '');
-    const creditNote = ok.filter((r) => r.credits).map((r) => `${accountName(r.account)} ${fmtInt(r.credits.amount)}`);
-    const cooldownNotes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
-      .filter(({ st }) => st.cooldowns.length > 0)
-      .map(({ r, st }) => `${accountName(r.account)}: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : ''));
-    const historyAccounts = limitsData.history && limitsData.history.accounts;
-    const readingsForPool = (pool) => {
-      if (!historyAccounts) return null;
-      if ((provider.id === 'claude' || provider.id === 'codex') && pool.id === 'weekly') {
-        return historyAccounts.filter((a) => !a.group);
-      }
-      if (provider.id === 'antigravity' && pool.id.startsWith('weekly:')) {
-        const group = pool.id.slice('weekly:'.length);
-        return historyAccounts.filter((a) => a.provider === 'antigravity' && a.group === group);
-      }
-      return null;
-    };
-    sections.push(el('div', { class: 'limits-provider' },
-      el('h2', { text: provider.name }), el('p', { class: 'sub', text: sub }),
-      ...list.map((p) => renderPool(p, byAccount, now, readingsForPool(p), ok.length > 1, provider.id)),
-      ok.some((r) => r.spend) ? el('p', { class: 'notice', text: 'Extra usage this month: ' + ok.filter((r) => r.spend).map(fmtSpend).join(', ') }) : null,
-      creditNote.length ? el('p', { class: 'notice', text: 'Google One AI credits: ' + creditNote.join(', ') }) : null,
-      cooldownNotes.length ? el('p', { class: 'notice', text: 'CPA cooldowns: ' + cooldownNotes.join('; ') }) : null,
-      ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error', text: `${accountName(r.account)}: ${r.error}` }))));
-  }
-  const byOtherProvider = new Map();
-  for (const acc of (limitsData.statusOnly || [])) {
-    const p = providerOf(acc) || 'other';
-    if (!byOtherProvider.has(p)) byOtherProvider.set(p, []);
-    byOtherProvider.get(p).push(acc);
-  }
-  for (const [provider, accounts] of [...byOtherProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    sections.push(el('div', { class: 'limits-provider' },
-      el('h2', { text: displayProviderName(provider) }),
-      el('p', { class: 'sub', text: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in CPA. No live quota API. Showing CPA status and cooldowns.` }),
-      ...accounts.map((a) => renderStatusRow(a, now))));
-  }
-  if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
-  body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no active credentials.' })]));
-  drawTrends();
-}
-
-// Trend charts are drawn once their containers are in the page, since the
-// width comes from the layout.
-let pendingTrends = [];
-function drawTrends() {
-  for (const draw of pendingTrends) draw();
-}
-
-// weeklyTrend pools the recorded readings of the accounts in the live pool,
-// with the same weights, and projects the pool from each account's burn rate.
-function weeklyTrend(pool, byAccount, readings, now, providerId = '') {
+function buildWeeklySeries(provider, pool, byAccount, readings, now, color) {
   const pointsOf = new Map(readings.map((a) => [a.auth_index, a.points]));
-  if (!pool.members.some((m) => (pointsOf.get(m.account) || []).length)) {
-    const emptyText = providerId === 'antigravity'
-      ? 'No readings yet. Antigravity quota is polled every 5 minutes in the background.'
-      : 'No readings yet. They are recorded from the traffic CPA proxies.';
-    return el('p', { class: 'sub', text: emptyText });
-  }
+  if (!pool.members.some((m) => (pointsOf.get(m.account) || []).length)) return null;
   const members = pool.members.map((m) => ({
     account: m.account, weight: m.weight, lengthMs: m.lengthMs, points: withLiveReading(pointsOf.get(m.account) || [], m, now),
   }));
@@ -2092,46 +2084,205 @@ function weeklyTrend(pool, byAccount, readings, now, providerId = '') {
   const weights = weightsOf(pool.members);
   const total = weights.reduce((sum, w) => sum + w, 0);
   const single = pool.members.length === 1;
-  // A pool rate in points of the pool per hour, or null when no account has two readings.
   const poolRate = (list) => (list.some((r) => r !== null) ? list.reduce((sum, r, i) => sum + weights[i] * (r || 0), 0) / total : null);
-  const fmtRate = (r) => (r === null ? 'not enough readings' : r.toFixed(1) + (single ? '% per hour' : '% of the pool per hour'));
-  const nameOf = (account) => accountName(byAccount.get(account).account);
-  const first = projection.firstFull;
+  const suffix = pool.id.startsWith('weekly:') ? pool.label.replace(/^Weekly,\s*/i, '') : '';
+  const label = suffix ? `${provider.name}, ${suffix}` : provider.name;
   const recordedStart = recorded.find((p) => p.used !== null);
-  const shortHistoryNote = recordedStart && now - recordedStart.t < DAY
-    ? el('span', {}, 'Recorded since ', el('strong', { text: fmtStamp(recordedStart.t) }))
-    : null;
-  const stats = single
-    ? el('div', { class: 'trend-stats' },
-      el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
-      el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
-      el('span', {}, 'At limit: ', el('strong', { text: first ? (first.at <= now ? 'now' : `in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'not in the next 7 days' })),
-      shortHistoryNote)
-    : el('div', { class: 'trend-stats' },
-      el('span', {}, 'Burn, last 3 h: ', el('strong', { text: fmtRate(poolRate(recent)) })),
-      el('span', {}, 'Last 24 h: ', el('strong', { text: fmtRate(poolRate(rates)) })),
-      el('span', {}, 'First at limit: ', el('strong', { text: first ? (first.at <= now ? nameOf(first.account) + ', now' : `${nameOf(first.account)} in ${fmtDuration(first.at - now)} (${fmtWhen(first.at)})`) : 'none in the next 7 days' })),
-      el('span', {}, 'Whole pool at limit: ', el('strong', { text: projection.poolFull === null ? 'not in the next 7 days' : projection.poolFull <= now ? 'now' : `in ${fmtDuration(projection.poolFull - now)} (${fmtWhen(projection.poolFull)})` })),
-      shortHistoryNote);
-  const chart = el('div', { class: 'chart trend' });
-  pendingTrends.push(() => trendChart(chart, recorded, projection.points, now, pool.label, single));
-  return el('div', {}, stats, chart,
-    el('div', { class: 'legend' },
-      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--tone1)' }), 'Recorded'),
-      el('span', {}, el('span', { class: 'key-line dashed' }), single ? 'Projected at last 24 h rate' : `Projected at each account's last 24 h rate`)));
+  return {
+    id: `${provider.id}:${pool.id}`,
+    label,
+    color,
+    used: pool.used,
+    single,
+    recorded,
+    projected: projection.points,
+    rate3: poolRate(recent),
+    rate24: poolRate(rates),
+    firstFull: projection.firstFull,
+    poolFull: projection.poolFull,
+    recordedStart,
+    byAccount,
+  };
 }
 
-// trendChart draws pool usage over time: recorded up to now, projected after.
-function trendChart(container, recorded, projected, now, label, single = false) {
-  if (!container.isConnected) return;
+function renderWeeklyOverview(seriesList, now) {
+  const chart = el('div', { class: 'chart trend' });
+  let focusedIdx = -1;
+  const buttons = [];
+  let applyFocus = () => {};
+
+  const summaryOf = (s) => {
+    const parts = [fmtShare(s.used)];
+    if (s.rate24 !== null) parts.push(s.rate24.toFixed(1) + '%/h');
+    else parts.push('not enough readings');
+    if (s.single) {
+      if (s.firstFull) parts.push(s.firstFull.at <= now ? 'At limit: now' : `At limit: in ${fmtDuration(s.firstFull.at - now)}`);
+    } else if (s.poolFull !== null) {
+      parts.push(s.poolFull <= now ? 'Pool full now' : `Pool full in ${fmtDuration(s.poolFull - now)}`);
+    } else if (s.firstFull) {
+      parts.push(s.firstFull.at <= now ? 'First at limit now' : `First at limit in ${fmtDuration(s.firstFull.at - now)}`);
+    }
+    if (s.recordedStart && now - s.recordedStart.t < DAY) parts.push('Recorded since ' + fmtStamp(s.recordedStart.t));
+    return parts.join(', ');
+  };
+
+  seriesList.forEach((s, idx) => {
+    const btn = el('button', {
+      type: 'button',
+      class: 'limits-legend-btn',
+      'aria-pressed': 'false',
+      onclick: () => {
+        focusedIdx = focusedIdx === idx ? -1 : idx;
+        buttons.forEach((b, i) => {
+          b.setAttribute('aria-pressed', String(focusedIdx === i));
+          b.classList.toggle('dim', focusedIdx >= 0 && focusedIdx !== i);
+        });
+        applyFocus(focusedIdx);
+      },
+    },
+      el('span', { class: 'key-line', style: 'background:' + s.color }),
+      el('strong', { text: s.label }),
+      el('span', { class: 'limits-meta', text: summaryOf(s) }));
+    buttons.push(btn);
+  });
+
+  pendingTrends.push(() => {
+    applyFocus = unifiedTrendChart(chart, seriesList, now, focusedIdx);
+  });
+
+  return el('div', { class: 'limits-overview' },
+    el('h2', { text: 'Weekly limits' }),
+    el('p', { class: 'sub', text: '7 days recorded (solid) and 7 days projected at each account\'s 24 h burn rate (dashed). Select a subscription to focus.' }),
+    chart,
+    el('div', { class: 'limits-legend', role: 'group', 'aria-label': 'Weekly subscriptions' }, ...buttons),
+    el('div', { class: 'legend' },
+      el('span', {}, el('span', { class: 'key-line', style: 'background:var(--tone1)' }), 'Recorded'),
+      el('span', {}, el('span', { class: 'key-line dashed' }), 'Projected at last 24 h rate')));
+}
+
+function renderLimits() {
+  const body = document.getElementById('limits-body');
+  pendingTrends = [];
+  const now = limitsData.checkedAt;
+  const overviewSeries = [];
+  const sections = [];
+  const historyAccounts = limitsData.history && limitsData.history.accounts;
+
+  for (const provider of LIMIT_PROVIDERS) {
+    const results = limitsData.results.filter((r) => providerSectionId(providerOf(r.account)) === provider.id);
+    if (!results.length) continue;
+    const ok = results.filter((r) => !r.error);
+    const byAccount = new Map(results.map((r) => [r.account.auth_index, r]));
+    const list = pools(ok.map((r) => ({ account: r.account.auth_index, weight: r.weight, windows: r.windows })), now);
+    const weighted = ok.length > 1 && ok.every((r) => r.weight > 0);
+    const only = ok.length === 1 ? ok[0] : null;
+    const subNode = only
+      ? (results.length === 1
+        ? el('p', { class: 'sub' }, emailNode(accountName(only.account)), only.plan ? ', ' + only.plan : '')
+        : el('p', { class: 'sub' }, `1 of ${results.length} accounts read, `, emailNode(accountName(only.account)), only.plan ? ', ' + only.plan : ''))
+      : el('p', { class: 'sub', text: `${ok.length} of ${results.length} account${results.length === 1 ? '' : 's'} read` + (ok.length > 1 ? (weighted ? ', weighted by plan' : ', equal weights since a plan is unknown') : '') });
+
+    const readingsForPool = (pool) => {
+      if (!historyAccounts) return null;
+      if ((provider.id === 'claude' || provider.id === 'codex') && pool.id === 'weekly') {
+        return historyAccounts.filter((a) => !a.group);
+      }
+      if (provider.id === 'antigravity' && pool.id.startsWith('weekly:')) {
+        const group = pool.id.slice('weekly:'.length);
+        return historyAccounts.filter((a) => a.provider === 'antigravity' && a.group === group);
+      }
+      return null;
+    };
+
+    const groupColorMap = new Map();
+    let weeklyIdx = 0;
+    const providerColors = [];
+    for (const p of list) {
+      if (p.id === 'weekly' || p.id.startsWith('weekly:')) {
+        const c = limitSeriesColor(provider.id, weeklyIdx++);
+        if (p.id.startsWith('weekly:')) groupColorMap.set(p.id.slice('weekly:'.length), c);
+        if (!providerColors.includes(c)) providerColors.push(c);
+      }
+    }
+    if (!providerColors.length) providerColors.push(limitSeriesColor(provider.id, 0));
+
+    let weeklyPoolIdx = 0;
+    const poolNodes = list.map((p) => {
+      const isWeekly = p.id === 'weekly' || p.id.startsWith('weekly:');
+      const groupKey = p.id.includes(':') ? p.id.slice(p.id.indexOf(':') + 1) : '';
+      const seriesColor = isWeekly ? limitSeriesColor(provider.id, weeklyPoolIdx++) : '';
+      const dotColor = groupKey && groupColorMap.has(groupKey) ? groupColorMap.get(groupKey) : (isWeekly ? seriesColor : '');
+      const readings = readingsForPool(p);
+      let emptyTrendText = '';
+      if (readings) {
+        const built = buildWeeklySeries(provider, p, byAccount, readings, now, seriesColor);
+        if (built) overviewSeries.push(built);
+        else emptyTrendText = provider.id === 'antigravity'
+          ? 'No readings yet. Antigravity quota is polled every 5 minutes in the background.'
+          : 'No readings yet. They are recorded from the traffic CPA proxies.';
+      }
+      return renderPool(p, byAccount, now, {
+        nameSingle: ok.length > 1,
+        barColor: isWeekly ? seriesColor : '',
+        dotColor: provider.id === 'antigravity' ? dotColor : '',
+        emptyTrendText,
+      });
+    });
+
+    const spendNodes = ok.filter((r) => r.spend).map(fmtSpendNode);
+    const creditNodes = ok.filter((r) => r.credits).map((r) => el('span', {}, emailNode(accountName(r.account)), ' ' + fmtInt(r.credits.amount)));
+    const cooldownNodes = results.map((r) => ({ r, st: summarizeCredentialStatus(r.account, now) }))
+      .filter(({ st }) => st.cooldowns.length > 0)
+      .map(({ r, st }) => el('span', {}, emailNode(accountName(r.account)), `: ${st.cooldowns[0].reason || 'cooldown'}` + (st.cooldowns[0].retryAt ? ` until ${fmtWhen(st.cooldowns[0].retryAt)}` : '')));
+
+    sections.push(el('div', { class: 'limits-provider' },
+      el('div', { class: 'limits-provider-head' },
+        ...providerColors.map((c) => el('span', { class: 'dot', style: 'background:' + c, 'aria-hidden': 'true' })),
+        el('h2', { text: provider.name })),
+      subNode,
+      ...poolNodes,
+      spendNodes.length ? el('p', { class: 'notice' }, 'Extra usage this month: ', ...joinNodes(spendNodes)) : null,
+      creditNodes.length ? el('p', { class: 'notice' }, 'Google One AI credits: ', ...joinNodes(creditNodes)) : null,
+      cooldownNodes.length ? el('p', { class: 'notice' }, 'CPA cooldowns: ', ...joinNodes(cooldownNodes, '; ')) : null,
+      ...results.filter((r) => r.error).map((r) => el('p', { class: 'notice error' }, emailNode(accountName(r.account)), ': ' + r.error))));
+  }
+  const byOtherProvider = new Map();
+  for (const acc of (limitsData.statusOnly || [])) {
+    const p = providerOf(acc) || 'other';
+    if (!byOtherProvider.has(p)) byOtherProvider.set(p, []);
+    byOtherProvider.get(p).push(acc);
+  }
+  for (const [provider, accounts] of [...byOtherProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    sections.push(el('div', { class: 'limits-provider' },
+      el('h2', { text: displayProviderName(provider) }),
+      el('p', { class: 'sub', text: `${accounts.length} account${accounts.length === 1 ? '' : 's'} in CPA. No live quota API. Showing CPA status and cooldowns.` }),
+      ...accounts.map((a) => renderStatusRow(a, now))));
+  }
+  if (limitsData.disabled > 0) sections.push(el('p', { class: 'notice', text: `${limitsData.disabled} disabled account${limitsData.disabled === 1 ? ' is' : 's are'} left out.` }));
+  if (overviewSeries.length) sections.unshift(renderWeeklyOverview(overviewSeries, now));
+  body.replaceChildren(...(sections.length ? sections : [el('div', { class: 'empty', text: 'CPA has no active credentials.' })]));
+  drawTrends();
+}
+
+// Trend charts are drawn once their containers are in the page, since the
+// width comes from the layout.
+let pendingTrends = [];
+function drawTrends() {
+  for (const draw of pendingTrends) draw();
+}
+
+// unifiedTrendChart draws all weekly subscription pools on one shared time axis:
+// solid up to now, dashed after, one color per subscription or Antigravity group.
+function unifiedTrendChart(container, seriesList, now, initialFocus = -1) {
+  if (!container.isConnected || !seriesList.length) return () => {};
   const width = Math.max(280, container.clientWidth);
-  const height = 180;
-  const m = { top: 18, right: 8, bottom: 24, left: 40 };
-  const from = recorded[0].t;
-  const to = projected[projected.length - 1].t;
+  const height = 210;
+  const m = { top: 18, right: 10, bottom: 24, left: 40 };
+  const from = seriesList[0].recorded[0].t;
+  const to = seriesList[0].projected[seriesList[0].projected.length - 1].t;
   const x = (t) => m.left + ((t - from) / (to - from)) * (width - m.left - m.right);
   const y = (v) => m.top + (1 - v / 100) * (height - m.top - m.bottom);
-  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': `${label} ${single ? 'usage' : 'pool usage'}, recorded for 7 days and projected for 7 days` });
+  const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, height, role: 'img', 'aria-label': 'Weekly subscription limits, recorded for 7 days and projected for 7 days' });
   for (const v of [0, 50, 100]) {
     svg.append(svgEl('line', { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': 1 }));
     svg.append(svgEl('text', { x: m.left - 6, y: y(v) + 4, 'text-anchor': 'end', text: v + '%' }));
@@ -2157,31 +2308,72 @@ function trendChart(container, recorded, projected, now, label, single = false) 
     }
     return d;
   };
-  svg.append(svgEl('line', { x1: x(now), x2: x(now), y1: m.top - 6, y2: height - m.bottom, stroke: 'var(--axis)', 'stroke-width': 1 }));
+  svg.append(svgEl('line', { x1: x(now), x2: x(now), y1: m.top - 6, y2: height - m.bottom, stroke: 'var(--axis)', 'stroke-width': 1, 'stroke-dasharray': '2 2' }));
   svg.append(svgEl('text', { x: x(now), y: m.top - 8, 'text-anchor': 'middle', class: 'marker-label', text: 'Now' }));
-  svg.append(svgEl('path', { d: path(recorded), fill: 'none', 'stroke-width': 2, 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
-  svg.append(svgEl('path', { d: path(projected), fill: 'none', 'stroke-width': 2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:var(--tone1)' }));
-  const firstRec = recorded.find((p) => p.used !== null);
-  const lastRec = [...recorded].reverse().find((p) => p.used !== null);
-  for (const pt of [firstRec, lastRec !== firstRec ? lastRec : null]) {
-    if (pt) svg.append(svgEl('circle', { cx: x(pt.t), cy: y(pt.used), r: 3, 'stroke-width': 1.5, style: 'fill:var(--tone1);stroke:var(--surface)' }));
-  }
-  const all = recorded.concat(projected.slice(1));
-  const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: 'fill:var(--tone1);stroke:var(--surface)', visibility: 'hidden' });
-  svg.append(dot);
+
+  const groups = [];
+  const dots = [];
+  const seriesAll = seriesList.map((s) => s.recorded.concat(s.projected.slice(1)));
+  seriesList.forEach((s, idx) => {
+    const g = svgEl('g', { class: 'series' });
+    g.append(svgEl('path', { d: path(s.recorded), fill: 'none', 'stroke-width': 2.2, 'stroke-linejoin': 'round', style: 'stroke:' + s.color }));
+    g.append(svgEl('path', { d: path(s.projected), fill: 'none', 'stroke-width': 2.2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round', style: 'stroke:' + s.color }));
+    const lastRec = [...s.recorded].reverse().find((p) => p.used !== null);
+    if (lastRec) g.append(svgEl('circle', { cx: x(lastRec.t), cy: y(lastRec.used), r: 3.2, 'stroke-width': 1.5, style: `fill:${s.color};stroke:var(--surface)` }));
+    const dot = svgEl('circle', { r: 4, 'stroke-width': 2, style: `fill:${s.color};stroke:var(--surface)`, visibility: 'hidden' });
+    g.append(dot);
+    svg.append(g);
+    groups.push(g);
+    dots.push(dot);
+  });
+
+  let currentFocus = initialFocus;
+  const setFocus = (idx) => {
+    currentFocus = idx;
+    svg.classList.toggle('focusing', idx >= 0);
+    groups.forEach((g, i) => g.classList.toggle('focus', idx === i));
+  };
+  setFocus(initialFocus);
+
+  const refTimes = seriesAll[0];
+  const cursor = svgEl('line', { y1: m.top, y2: height - m.bottom, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' });
+  svg.append(cursor);
   const hit = svgEl('rect', { x: m.left, y: m.top, width: width - m.left - m.right, height: height - m.top - m.bottom, fill: 'transparent' });
   hit.addEventListener('pointermove', (e) => {
     const box = svg.getBoundingClientRect();
     const t = from + ((e.clientX - box.left) * (width / box.width) - m.left) / (width - m.left - m.right) * (to - from);
-    const p = all.reduce((best, q) => (Math.abs(q.t - t) < Math.abs(best.t - t) ? q : best), all[0]);
-    if (p.used === null) { dot.setAttribute('visibility', 'hidden'); hideTooltip(); return; }
-    dot.setAttribute('cx', x(p.t));
-    dot.setAttribute('cy', y(p.used));
-    dot.setAttribute('visibility', 'visible');
-    showTooltip(e, fmtStamp(p.t), [{ value: fmtShare(p.used), label: single ? (p.t > now ? 'used, projected' : 'used') : (p.t > now ? 'of the pool used, projected' : 'of the pool used') }]);
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < refTimes.length; i++) {
+      const dist = Math.abs(refTimes[i].t - t);
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+    }
+    const snapT = refTimes[bestIdx].t;
+    cursor.setAttribute('x1', x(snapT));
+    cursor.setAttribute('x2', x(snapT));
+    cursor.setAttribute('visibility', 'visible');
+    const rows = [];
+    seriesList.forEach((s, i) => {
+      const pt = seriesAll[i][bestIdx];
+      if (!pt || pt.used === null || (currentFocus >= 0 && currentFocus !== i)) {
+        dots[i].setAttribute('visibility', 'hidden');
+        return;
+      }
+      dots[i].setAttribute('cx', x(pt.t));
+      dots[i].setAttribute('cy', y(pt.used));
+      dots[i].setAttribute('visibility', 'visible');
+      rows.push({ color: s.color, value: fmtShare(pt.used), label: s.label });
+    });
+    if (!rows.length) { hideTooltip(); return; }
+    showTooltip(e, fmtStamp(snapT) + (snapT > now ? ' (projected)' : ''), rows);
   });
-  hit.addEventListener('pointerleave', () => { dot.setAttribute('visibility', 'hidden'); hideTooltip(); });
+  hit.addEventListener('pointerleave', () => {
+    cursor.setAttribute('visibility', 'hidden');
+    dots.forEach((d) => d.setAttribute('visibility', 'hidden'));
+    hideTooltip();
+  });
   svg.append(hit);
+  return setFocus;
 }
 
 /* ---------- plans ---------- */
@@ -2412,7 +2604,10 @@ function renderPlans() {
     if (!projected && r.earlyResets) detail.push(fmtInt(r.earlyResets) + ' early weekly reset' + (r.earlyResets === 1 ? '' : 's'));
     if (!projected && r.afterEarlyResetUSD > 0) detail.push(fmtUSD(r.afterEarlyResetUSD) + ' total after early reset, before prior deadline');
     return el('div', { class: 'plan-bar-row' },
-      el('div', {}, el('div', { class: 'plan-bar-name', title: label }, el('span', { text: label })),
+      el('div', {}, el('div', { class: 'plan-bar-name' },
+        state.plansGroup === 'account'
+          ? el('span', {}, emailNode(r.name), ' (' + r.provider + ' ' + r.plan + planGroupSuffix(r) + ')')
+          : el('span', { text: label })),
         detail.length ? el('span', { class: 'plan-sub', text: detail.join(', ') }) : null),
       el('div', { class: 'plan-bar-track', 'aria-hidden': 'true' },
         el('div', { class: 'plan-bar-fill', style: `width:${max > 0 ? 100 * value / max : 0}%;background:${color}` })),
@@ -2422,7 +2617,12 @@ function renderPlans() {
 
   if (projected && barRows.length) {
     const missing = ranked.filter(r => !r.isApiKey && !r.potential);
-    if (missing.length) chartEl.append(el('p', { class: 'notice', text: 'Insufficient weekly quota history for ' + missing.map(r => (r.name || r.provider + ' ' + r.plan) + planGroupSuffix(r)).join(', ') + '.' }));
+    if (missing.length) {
+      const missingNodes = missing.map((r) => (state.plansGroup === 'account' && r.name
+        ? el('span', {}, emailNode(r.name), planGroupSuffix(r))
+        : el('span', { text: (r.name || r.provider + ' ' + r.plan) + planGroupSuffix(r) })));
+      chartEl.append(el('p', { class: 'notice' }, 'Insufficient weekly quota history for ', ...joinNodes(missingNodes), '.'));
+    }
   }
   renderPlanRateLimits(val.rate_limits, quotaGrouped);
 
@@ -2454,7 +2654,9 @@ function renderPlans() {
       if (projected && r.sharedPlan) nameSubParts.push('shared plan');
       const nameCell = el('span', {},
         el('span', { class: 'dot', style: 'background:' + colorFor('provider', r.provider) + ';margin-right:6px' }),
-        el('strong', { text: nameTitle }),
+        state.plansGroup === 'account'
+          ? el('strong', {}, emailNode(r.name), planGroupSuffix(r))
+          : el('strong', { text: nameTitle }),
         el('span', { class: 'plan-sub', text: nameSubParts.join(', ') }));
 
       let costCell;
@@ -2591,6 +2793,9 @@ function renderPlanRateLimits(observations, groups) {
   const label = (row) => (row.name
     ? `${row.name} (${row.provider} ${row.plan}${groupSuffix(row)})`
     : `${row.provider} ${row.plan}${groupSuffix(row)}`);
+  const labelNode = (row) => (row.name
+    ? el('span', {}, emailNode(row.name), ` (${row.provider} ${row.plan}${groupSuffix(row)})`)
+    : el('span', { text: `${row.provider} ${row.plan}${groupSuffix(row)}` }));
   const windowName = (key, provider, fallback) => (key === 'session' && ['claude', 'codex', 'antigravity'].includes(provider) ? '5-hour window full' : fallback);
   const series = groupPlanRateLimits(observations, groups);
   const max = Math.max(1, ...series.map(r => r.total));
@@ -2601,26 +2806,26 @@ function renderPlanRateLimits(observations, groups) {
     const details = shown.map(([key, name, color]) => el('span', {},
       el('span', { class: 'dot', style: 'background:' + color, 'aria-hidden': 'true' }),
       windowName(key, r.row.provider, name) + ' ' + fmtInt(r.windows[key])));
-    const track = el('div', { class: 'plan-bar-track plan-window-track', role: 'img', 'aria-label': `${rowLabel}: ${fmtInt(r.total)} HTTP 429 calls` },
+    const track = el('div', { class: 'plan-bar-track plan-window-track', role: 'img', 'aria-label': `${fmtInt(r.total)} HTTP 429 calls` },
       ...shown.map(([key, name, color]) => {
         const wName = windowName(key, r.row.provider, name);
         const count = r.windows[key];
         const seg = el('span', { style: `width:${100 * count / max}%;background:${color}`, tabindex: 0 });
         const tipRows = [{ color, value: fmtInt(count), label: `${wName} (${fmtPct(count / r.total)})` }];
-        seg.addEventListener('pointermove', (e) => showTooltip(e, rowLabel, tipRows));
-        seg.addEventListener('focus', (e) => showTooltip(e, rowLabel, tipRows));
+        seg.addEventListener('pointermove', (e) => showTooltip(e, labelNode(r.row), tipRows));
+        seg.addEventListener('focus', (e) => showTooltip(e, labelNode(r.row), tipRows));
         seg.addEventListener('pointerleave', hideTooltip);
         seg.addEventListener('blur', hideTooltip);
         return seg;
       }));
     const block = el('div', {},
       el('div', { class: 'plan-bar-row' },
-        el('strong', { text: rowLabel }), track,
+        el('strong', {}, labelNode(r.row)), track,
         el('strong', { class: 'plan-bar-val', text: fmtInt(r.total) })),
       el('div', { class: 'legend' }, ...details));
     if (r.following.size) {
-      const destinations = [...r.following].map(([target, count]) => fmtInt(count) + ' on ' + label(target));
-      block.append(el('div', { class: 'plan-window-caption', text: 'Followed by success on another account: ' + destinations.join(', ') }));
+      const destinations = [...r.following].map(([target, count]) => el('span', {}, fmtInt(count) + ' on ', labelNode(target)));
+      block.append(el('div', { class: 'plan-window-caption' }, 'Followed by success on another account: ', ...joinNodes(destinations)));
     }
     chart.append(block);
   }
@@ -2711,7 +2916,7 @@ function requestDetail(c) {
   const pairs = [
     ['Call', c.id], ['Provider', c.provider], ['Requested model', c.requested_model], ['Reported model', (c.models || []).join(', ')],
     ['Client', c.client], ['User-Agent', c.user_agent], ['API key hash', c.api_key_hash],
-    ['Account', c.account ? accountWithProvider(c.account) : ''], ['Session', c.session_id],
+    ['Account', c.account ? accountWithProviderNode(c.account) : ''], ['Session', c.session_id],
     ['Reasoning effort', c.reasoning_effort || 'unset'], ['Service tier', c.service_tier || 'not reported'],
     ['Streamed', c.stream ? 'yes' : 'no'], ['HTTP status', c.status_code || ''],
     ['Time to first token', c.ttft_ms ? fmtSeconds(c.ttft_ms) : ''], ['Latency', c.latency_ms ? fmtSeconds(c.latency_ms) : ''],
@@ -2720,7 +2925,7 @@ function requestDetail(c) {
     ['Cost', fmtUSD(c.cost_usd)], ['Unpriced tokens', c.unpriced_tokens ? fmtInt(c.unpriced_tokens) : ''],
     ['Usage records', c.records > 1 ? fmtInt(c.records) : ''],
   ].filter(([, v]) => v !== '');
-  return el('dl', { class: 'req-fields' }, ...pairs.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: String(v) })]));
+  return el('dl', { class: 'req-fields' }, ...pairs.flatMap(([k, v]) => [el('dt', { text: k }), v instanceof Node ? el('dd', {}, v) : el('dd', { text: String(v) })]));
 }
 
 function renderRequests() {
@@ -2741,13 +2946,13 @@ function renderRequests() {
   const body = el('tbody');
   for (const c of res.calls) {
     const cells = [
-      fmtStamp(c.at), (c.models || []).join(' + ') || c.requested_model, c.client, c.account ? accountWithProvider(c.account) : '-',
+      fmtStamp(c.at), (c.models || []).join(' + ') || c.requested_model, c.client, c.account ? accountWithProviderNode(c.account) : '-',
       fmtCompact(c.uncached_input + c.cache_read + c.cache_write), fmtCompact(c.output + c.reasoning),
       c.unpriced_tokens && !c.cost_usd ? 'unpriced' : fmtUSD(c.cost_usd), c.latency_ms ? fmtSeconds(c.latency_ms) : '-',
       c.failed ? `Failed ${c.status_code || ''}`.trim() : String(c.status_code || 'OK'),
     ];
     const isOpen = expandedRequests.has(c.id);
-    const row = el('tr', { class: 'req-row', tabindex: 0, 'aria-expanded': String(isOpen) }, ...cells.map((v) => el('td', { text: v })));
+    const row = el('tr', { class: 'req-row', tabindex: 0, 'aria-expanded': String(isOpen) }, ...cells.map((v) => (v instanceof Node ? el('td', {}, v) : el('td', { text: v }))));
     const detail = el('tr', { class: 'req-detail', ...(isOpen ? {} : { hidden: '' }) }, el('td', { colspan: headers.length }, requestDetail(c)));
     const toggle = () => {
       const open = detail.hidden;
@@ -2791,6 +2996,7 @@ function renderOptions(options) {
   fillSelect('f-model', options.models, state.model, 'All models');
   fillSelect('f-client', options.clients, state.client, 'All clients');
   fillSelect('f-account', options.accounts, state.account, 'All accounts', (id) => typeof accountWithProvider === 'function' ? accountWithProvider(id) : id);
+  if (typeof syncAccountSelectPrivacy === 'function') syncAccountSelectPrivacy();
 }
 
 function showLoadError(err) {
@@ -3138,6 +3344,63 @@ function setFilter(name, value, { refresh: reload = true } = {}) {
 }
 
 const VIEW_STORE = 'cpa-analytics.view';
+const PRIVACY_STORE = 'cpa-analytics.hide-emails';
+
+function eyeIconSvg(hidden) {
+  const svg = svgEl('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  if (hidden) {
+    svg.append(
+      svgEl('path', { d: 'M9.88 9.88a3 3 0 1 0 4.24 4.24' }),
+      svgEl('path', { d: 'M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68' }),
+      svgEl('path', { d: 'M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61' }),
+      svgEl('line', { x1: 2, y1: 2, x2: 22, y2: 22 }),
+    );
+  } else {
+    svg.append(
+      svgEl('path', { d: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z' }),
+      svgEl('circle', { cx: 12, cy: 12, r: 3 }),
+    );
+  }
+  return svg;
+}
+
+function syncAccountSelectPrivacy() {
+  const select = document.getElementById('f-account');
+  if (!select) return;
+  const hidden = document.body.classList.contains('hide-emails');
+  let idx = 0;
+  for (const opt of select.options) {
+    if (!opt.value) continue;
+    idx++;
+    if (!opt.dataset.rawLabel) opt.dataset.rawLabel = opt.textContent;
+    if (hidden) {
+      const m = opt.dataset.rawLabel.match(/\(([^)]+)\)\s*$/);
+      opt.textContent = m ? `Account ${idx} (${m[1]})` : `Account ${idx}`;
+    } else {
+      opt.textContent = opt.dataset.rawLabel;
+    }
+  }
+}
+
+function applyEmailPrivacy(hidden) {
+  document.body.classList.toggle('hide-emails', hidden);
+  try { sessionStorage.setItem(PRIVACY_STORE, hidden ? '1' : '0'); } catch (_) { /* storage blocked */ }
+  const btn = document.getElementById('toggle-emails');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(hidden));
+    btn.replaceChildren(eyeIconSvg(hidden), el('span', { text: hidden ? 'Show emails' : 'Hide emails' }));
+  }
+  syncAccountSelectPrivacy();
+}
+
+function restoreEmailPrivacy() {
+  let hidden = true;
+  try {
+    const saved = sessionStorage.getItem(PRIVACY_STORE);
+    if (saved === '0') hidden = false;
+  } catch (_) { /* storage blocked: default blurred */ }
+  applyEmailPrivacy(hidden);
+}
 
 function showView(view) {
   state.view = view;
@@ -3181,6 +3444,9 @@ document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('clic
   }
   refresh(hasCached);
 }));
+document.getElementById('toggle-emails').addEventListener('click', () => {
+  applyEmailPrivacy(!document.body.classList.contains('hide-emails'));
+});
 document.getElementById('refresh-now').addEventListener('click', () => refresh());
 document.getElementById('change-key').addEventListener('click', () => { ++loadSeq; refreshPending = false; clearTimeout(autoRefresh.timer); forgetKey(); showKeyForm(''); });
 document.getElementById('auto-refresh').addEventListener('change', (e) => {
@@ -3266,6 +3532,7 @@ new ResizeObserver(() => {
   }, 100);
 }).observe(document.querySelector('.wrap'));
 
+restoreEmailPrivacy();
 restoreAutoRefresh();
 try {
   const savedView = sessionStorage.getItem(VIEW_STORE);

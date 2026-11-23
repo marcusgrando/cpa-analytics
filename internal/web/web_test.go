@@ -284,8 +284,8 @@ func TestIndexKeepsViewSwitchOutOfHeader(t *testing.T) {
 	}
 }
 
-// The Limits view charts each weekly pool's recorded history and projects it
-// from the burn rate, next to the live reading.
+// The Limits view charts all weekly pools together at the top and projects
+// each subscription from its burn rate.
 func TestIndexChartsWeeklyPoolHistoryAndProjection(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
@@ -293,6 +293,7 @@ func TestIndexChartsWeeklyPoolHistoryAndProjection(t *testing.T) {
 		`poolHistory(`,
 		`burnRate(`,
 		`projectPool(`,
+		`unifiedTrendChart(`,
 		`First at limit`,
 	} {
 		if !strings.Contains(page, want) {
@@ -331,8 +332,8 @@ func TestIndexOffersAccountBreakdown(t *testing.T) {
 func TestIndexNamesAccountsWithTheirProvider(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
-		`text: accountWithProvider(key)`,
-		`label: accountWithProvider(a)`,
+		`accountWithProviderNode(key)`,
+		`label: accountWithProviderNode(a`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %s", want)
@@ -367,15 +368,17 @@ func TestIndexCoversAllProvidersAndBehaviorDiagnostics(t *testing.T) {
 }
 
 // Brand steps validated with the dataviz palette checker: light on #ffffff,
-// dark on #181a1e, all pairs among the three brands plus the spare color.
+// dark on #181a1e, all pairs among the brands plus Antigravity bucket colors.
 func TestIndexDefinesProviderColorsForBothThemes(t *testing.T) {
 	page := string(Index())
 	light := "--provider-claude: #d97757; --provider-codex: #3941ff; --provider-gemini: #4796e3; --provider-next: #008300;"
-	dark := "--provider-claude: #d4704f; --provider-codex: #4549ff; --provider-gemini: #4796e3; --provider-next: #13a065;"
-	if strings.Count(page, light) != 1 {
+	dark := "--provider-claude: #d4704f; --provider-codex: #5c62ff; --provider-gemini: #4796e3; --provider-next: #13a065;"
+	lightAg := "--provider-antigravity: #0d7c66; --provider-antigravity-2: #c27803; --provider-antigravity-3: #7c3aed; --provider-antigravity-4: #c2185b;"
+	darkAg := "--provider-antigravity: #2bb69a; --provider-antigravity-2: #e09f3e; --provider-antigravity-3: #a58bff; --provider-antigravity-4: #e65c90;"
+	if strings.Count(page, light) != 1 || strings.Count(page, lightAg) != 1 {
 		t.Error("light theme lacks the provider colors")
 	}
-	if strings.Count(page, dark) != 2 {
+	if strings.Count(page, dark) != 2 || strings.Count(page, darkAg) != 2 {
 		t.Error("dark theme lacks the provider colors in the media query and the data-theme scope")
 	}
 	if !strings.Contains(page, "if (space === 'provider') return providerColor(key);") {
@@ -574,10 +577,25 @@ func TestIndexOmitsDuplicateBarForSingleAccountLimit(t *testing.T) {
 	page := string(Index())
 	for _, want := range []string{
 		"const single = pool.members.length === 1;",
-		"el('span', {}, 'At limit: '",
+		"'At limit: now'",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+func TestIndexBlursAccountEmailsByDefault(t *testing.T) {
+	page := string(Index())
+	for _, want := range []string{
+		`id="toggle-emails"`,
+		`body.hide-emails .acct-email`,
+		`const PRIVACY_STORE = 'cpa-analytics.hide-emails';`,
+		`let hidden = true;`,
+		`restoreEmailPrivacy();`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
 		}
 	}
 }

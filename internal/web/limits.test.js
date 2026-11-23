@@ -546,20 +546,24 @@ describe('limits rendering', () => {
         windows: [{ id: 'weekly', label: 'Weekly', used: 93, resetsAt: now + 4 * DAY, lengthMs: 7 * DAY }],
       }],
     });
-    expect(sections.length).toBe(1);
+    // Unified weekly overview at the top plus the single provider section below.
+    expect(sections.length).toBe(2);
+    expect(hasClass(sections[0], 'limits-overview')).toBe(true);
+    expect(hasClass(sections[1], 'limits-provider')).toBe(true);
     expect(walk(sections, (n) => hasClass(n, 'acct')).length).toBe(0);
     expect(walk(sections, (n) => hasClass(n, 'meter')).length).toBe(1);
-    const sub = walk(sections, (n) => hasClass(n, 'sub'))[0];
-    expect(textOf(sub)).toBe('eu@example.com, Pro Lite');
-    const head = walk(sections, (n) => hasClass(n, 'pool-head'))[0];
+    const sub = walk([sections[1]], (n) => hasClass(n, 'sub'))[0];
+    expect(textOf(sub).replace(/\s+/g, ' ').trim()).toBe('eu@example.com , Pro Lite');
+    expect(walk([sections[1]], (n) => hasClass(n, 'acct-email')).length).toBe(1);
+    const head = walk([sections[1]], (n) => hasClass(n, 'pool-head'))[0];
     expect(textOf(head)).toContain('93% used');
     expect(textOf(head)).toContain('Resets in');
     expect(textOf(head)).not.toContain('of the pool');
-    const stats = walk(sections, (n) => hasClass(n, 'trend-stats'))[0];
-    expect(textOf(stats)).toContain('At limit:');
-    expect(textOf(stats)).not.toContain('First at limit:');
-    expect(textOf(stats)).not.toContain('Whole pool at limit:');
-    expect(textOf(stats)).not.toContain('of the pool per hour');
+    const legendBtn = walk([sections[0]], (n) => hasClass(n, 'limits-legend-btn'))[0];
+    expect(textOf(legendBtn)).toContain('Codex');
+    expect(textOf(legendBtn)).toContain('At limit:');
+    expect(textOf(legendBtn)).not.toContain('First at limit');
+    expect(textOf(legendBtn)).not.toContain('Pool full');
   });
 
   test('single-account blocked, limit-reached and not-started states render on the single bar', () => {
@@ -627,10 +631,11 @@ describe('limits rendering', () => {
     expect(textOf(poolsRendered[0])).toContain('of the pool used');
     // Single-member scoped window omits duplicate .acct row and names its owner.
     expect(walk([poolsRendered[1]], (n) => hasClass(n, 'acct')).length).toBe(0);
-    expect(textOf(poolsRendered[1])).toContain('first@example.com, Max 20x');
+    expect(textOf(poolsRendered[1]).replace(/\s+/g, ' ')).toContain('first@example.com , Max 20x');
+    expect(walk([poolsRendered[1]], (n) => hasClass(n, 'acct-email')).length).toBe(1);
   });
 
-  test('Antigravity weekly pools render consumption and projection charts per group', () => {
+  test('Antigravity weekly pools combine into one top chart with distinct colors per group', () => {
     const sections = renderView({
       checkedAt: now,
       disabled: 0,
@@ -670,13 +675,17 @@ describe('limits rendering', () => {
         ],
       }],
     });
+    expect(hasClass(sections[0], 'limits-overview')).toBe(true);
+    expect(walk(sections, (n) => hasClass(n, 'trend')).length).toBe(1);
+    const legendBtns = walk([sections[0]], (n) => hasClass(n, 'limits-legend-btn'));
+    expect(legendBtns.length).toBe(2);
+    expect(textOf(legendBtns[0])).toContain('Antigravity, Gemini');
+    expect(textOf(legendBtns[1])).toContain('Antigravity, Claude and GPT');
+    const swatches = walk(legendBtns, (n) => hasClass(n, 'key-line'));
+    expect(swatches[0].attrs.style).toContain('var(--provider-antigravity)');
+    expect(swatches[1].attrs.style).toContain('var(--provider-antigravity-2)');
     const poolsRendered = walk(sections, (n) => hasClass(n, 'pool'));
     expect(poolsRendered.length).toBe(3);
-    // 5-hour session window has no trend chart; both weekly group windows do.
-    expect(walk([poolsRendered[0]], (n) => hasClass(n, 'trend-stats')).length).toBe(0);
-    expect(walk([poolsRendered[1]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
-    expect(walk([poolsRendered[2]], (n) => hasClass(n, 'trend-stats')).length).toBe(1);
-    expect(walk(sections, (n) => hasClass(n, 'trend')).length).toBe(2);
   });
 
   test('multi-account pool at 100% renders critical red Limit reached and Antigravity empty trend explains polling', () => {
@@ -707,7 +716,7 @@ describe('limits rendering', () => {
     expect(textOf(pool)).toContain('polled every 5 minutes');
   });
 
-  test('short recorded history under 24 h shows Recorded since in trend stats', () => {
+  test('short recorded history under 24 h shows Recorded since in unified weekly legend', () => {
     const sections = renderView({
       checkedAt: now,
       disabled: 0,
@@ -731,7 +740,7 @@ describe('limits rendering', () => {
         windows: [{ id: 'weekly:gemini', label: 'Weekly, Gemini', used: 3.1, resetsAt: now + 6 * DAY, lengthMs: 7 * DAY }],
       }],
     });
-    const stats = walk(sections, (n) => hasClass(n, 'trend-stats'))[0];
-    expect(textOf(stats)).toContain('Recorded since');
+    const legendBtn = walk([sections[0]], (n) => hasClass(n, 'limits-legend-btn'))[0];
+    expect(textOf(legendBtn)).toContain('Recorded since');
   });
 });
