@@ -575,3 +575,200 @@ func TestAntigravityPolledJitterDoesNotDoubleCountWeeklyBurn(t *testing.T) {
 		t.Fatalf("PlanValue = %+v, want 1.46%% and $12.00", pv.Accounts)
 	}
 }
+
+func TestAntigravityStaleReplicaResetFlipDoesNotInflateBurnOrHistory(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-stale-replica.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset1 := day4.Add(14 * time.Hour)
+	reset2 := reset1.Add(25 * time.Hour)
+	t0 := day2.Add(14 * time.Hour)
+	// Mirrors the live Google Antigravity reset flip:
+	//   cycle A (1.63 -> 4.3552) -> transient 0% -> stale cycle A (4.5175)
+	//   -> real 0% -> cycle B (0.2421 -> 0.5089) -> stale cycle A (4.4004 x2)
+	//   -> cycle B (0.5089 -> 1.2842).
+	snaps := []store.QuotaSnapshot{
+		{RecordedAt: t0.UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 1.63, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(60 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 4.3552, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(63 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: t0.Add(65 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 4.5175, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(68 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: t0.Add(69 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0.2421, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(70 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0.5089, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(71 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 4.4004, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(74 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 4.4004, ResetAt: sql.NullInt64{Int64: reset1.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(75 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0.5089, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		{RecordedAt: t0.Add(90 * time.Minute).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 1.2842, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+		// Next day reading with no reset on day3.
+		{RecordedAt: day3.Add(2 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 1.2842, ResetAt: sql.NullInt64{Int64: reset2.UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.Row{
+		{RequestID: "r1", TraceID: "r1", RequestedAt: t0.Add(30 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 10_000_000}, // $30
+		{RequestID: "r2", TraceID: "r2", RequestedAt: t0.Add(64 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},  // $3 (between transient 0% and 4.5175)
+		{RequestID: "r3", TraceID: "r3", RequestedAt: t0.Add(68*time.Minute + 30*time.Second).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000}, // $3 (0 -> 0.2421)
+		{RequestID: "r4", TraceID: "r4", RequestedAt: t0.Add(72 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 2_000_000},  // $6 (during stale flip, must carry into cycle B)
+		{RequestID: "r5", TraceID: "r5", RequestedAt: t0.Add(80 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 2_000_000},  // $6
+		{RequestID: "r6", TraceID: "r6", RequestedAt: day3.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},   // $3 on day3
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-4-neon": {Input: 3.0, Output: 15.0},
+	})
+
+	// Expected clean weekly pct: cycle A (4.5175 - 1.63 = 2.8875) + cycle B (0 -> 1.2842 = 1.2842) = 4.1717%.
+	// Expected measured cost: r1 ($30) + r2 ($3) + r3 ($3) + r4 ($6) + r5 ($6) = $48.00 (r6 is after last pct change).
+	wantPct := (4.5175 - 1.63) + 1.2842
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 1 {
+		t.Fatalf("PlanValue accounts = %+v", pv.Accounts)
+	}
+	a := pv.Accounts[0]
+	if a.EarlyResets != 1 || !near(a.WeeklyPct, wantPct) || !near(a.MeasuredCostUSD, 48.0) {
+		t.Fatalf("PlanValue = %+v, want early_resets=1 weekly_pct=%.4f measured_cost=$48.00", a, wantPct)
+	}
+
+	// Sub-window starting on day3 must NOT count day2's early reset in EarlyResets.
+	pvDay3, err := PlanValue(s.DB(), Filter{From: day3, To: day4, Provider: "antigravity"}, tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pvDay3.Accounts) != 1 || pvDay3.Accounts[0].EarlyResets != 0 {
+		t.Fatalf("PlanValue day3 = %+v, want early_resets=0", pvDay3.Accounts)
+	}
+
+	burn, err := LimitBurn(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(burn.Points) != 1 || !near(burn.Points[0].WeeklyPct, wantPct) || !near(burn.Points[0].CostUSD, 48.0) {
+		t.Fatalf("LimitBurn = %+v, want 1 point with pct=%.4f cost=$48.00", burn.Points, wantPct)
+	}
+
+	left, err := LimitLeftover(s.DB(), rangeFilter(), tbl, day4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left.Cycles) != 1 || !left.Cycles[0].Early || !near(left.Cycles[0].UsedPct, 4.5175) {
+		t.Fatalf("LimitLeftover = %+v, want 1 early cycle with used=4.5175%%", left.Cycles)
+	}
+
+	// LimitHistory must drop stale cycle A points after cycle B began.
+	hist, err := LimitHistory(s.DB(), rangeFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Accounts) != 1 {
+		t.Fatalf("LimitHistory accounts = %+v", hist.Accounts)
+	}
+	seenR2 := false
+	for _, pt := range hist.Accounts[0].Points {
+		if pt.WeeklyReset == reset2.UnixMilli() {
+			seenR2 = true
+		}
+		if seenR2 && pt.WeeklyReset == reset1.UnixMilli() {
+			t.Fatalf("LimitHistory regressed to stale reset1 after reset2: %+v", hist.Accounts[0].Points)
+		}
+	}
+}
+
+func TestAntigravityBurstPeakSettlementUsesNetWeeklyDelta(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-settle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset := day3.Add(6 * time.Hour)
+	// Mimics Antigravity temporary burst reservation: rises to 2.75% during traffic,
+	// then settles to 1.00% after traffic stops (true $25 / 1%).
+	snaps := []store.QuotaSnapshot{
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 2.75, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(4 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 1.00, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.Row{
+		{RequestID: "b1", TraceID: "b1", RequestedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 5_000_000}, // $25
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-4-neon": {Input: 5.0, Output: 15.0},
+	})
+
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 1 || !near(pv.Accounts[0].WeeklyPct, 1.00) || !near(pv.Accounts[0].MeasuredCostUSD, 25.0) {
+		t.Fatalf("PlanValue = %+v, want settled 1.00%% and $25.00", pv.Accounts)
+	}
+	burn, err := LimitBurn(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(burn.Points) != 1 || !near(burn.Points[0].WeeklyPct, 1.00) || !near(burn.Points[0].USDPerPct, 25.0) {
+		t.Fatalf("LimitBurn = %+v, want settled 1.00%% and $25.00/pct", burn.Points)
+	}
+
+	// A range starting mid-burst (2.75% -> 1.00% with no traffic) clamps WeeklyPct at 0, never negative.
+	pvAfter, err := PlanValue(s.DB(), Filter{From: day1.Add(3 * time.Hour), To: day4, Provider: "antigravity"}, tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range pvAfter.Accounts {
+		if a.WeeklyPct < 0 {
+			t.Fatalf("PlanValue negative WeeklyPct: %+v", a)
+		}
+	}
+}
+
+func TestAntigravityTransientZeroMidCycleDoesNotBreakCycle(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ag-transient-zero.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	reset := day3.Add(6 * time.Hour)
+	snaps := []store.QuotaSnapshot{
+		{RecordedAt: day1.Add(1 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 10, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+		{RecordedAt: day1.Add(2 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 0},
+		{RecordedAt: day1.Add(3 * time.Hour).UnixMilli(), Provider: "antigravity", AuthIndex: "ag1", GroupID: "gemini", GroupLabel: "Gemini", WindowKind: "weekly", UsedPct: 12, ResetAt: sql.NullInt64{Int64: reset.UnixMilli(), Valid: true}},
+	}
+	if err := s.InsertQuotaSnapshots(snaps); err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.Row{
+		{RequestID: "z1", TraceID: "z1", RequestedAt: day1.Add(90 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000},  // $5
+		{RequestID: "z2", TraceID: "z2", RequestedAt: day1.Add(150 * time.Minute).UnixMilli(), Provider: "antigravity", Model: "gemini-4-neon", AuthIndex: "ag1", Generate: true, UncachedInput: 1_000_000}, // $5
+	}
+	if err := s.InsertBatch(rows); err != nil {
+		t.Fatal(err)
+	}
+	tbl := pricing.WithOverrides(testPrices(t), map[string]pricing.PriceOverride{
+		"gemini-4-neon": {Input: 5.0, Output: 15.0},
+	})
+
+	pv, err := PlanValue(s.DB(), rangeFilter(), tbl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pv.Accounts) != 1 || pv.Accounts[0].EarlyResets != 0 || !near(pv.Accounts[0].WeeklyPct, 2.0) || !near(pv.Accounts[0].MeasuredCostUSD, 10.0) {
+		t.Fatalf("PlanValue = %+v, want early_resets=0 weekly_pct=2%% measured_cost=$10", pv.Accounts)
+	}
+}

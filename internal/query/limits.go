@@ -259,6 +259,60 @@ type polledReading struct {
 	reset sql.NullInt64
 }
 
+// sanitizePolledSnapshots drops stale-replica anomalies from one account/group's
+// chronologically ordered weekly snapshots:
+//  1. Any snapshot whose reset_at regresses to an earlier cycle than the newest
+//     reset_at already seen (beyond resetJitterMillis) is dropped.
+//  2. Any 0% (NULL reset_at) run bracketed by valid-reset readings of the same
+//     cycle is a transient glitch, not a reset, and is dropped.
+func sanitizePolledSnapshots(snaps []polledReading) []polledReading {
+	if len(snaps) == 0 {
+		return nil
+	}
+	mono := make([]polledReading, 0, len(snaps))
+	var maxReset int64
+	for _, sn := range snaps {
+		if sn.reset.Valid {
+			if maxReset > 0 && sn.reset.Int64 < maxReset-resetJitterMillis {
+				continue
+			}
+			if sn.reset.Int64 > maxReset {
+				maxReset = sn.reset.Int64
+			}
+		}
+		mono = append(mono, sn)
+	}
+
+	out := make([]polledReading, 0, len(mono))
+	var lastReset int64
+	for i := 0; i < len(mono); {
+		sn := mono[i]
+		if !sn.reset.Valid && sn.pct == 0 && lastReset > 0 {
+			j := i + 1
+			for j < len(mono) && !mono[j].reset.Valid && mono[j].pct == 0 {
+				j++
+			}
+			next := j
+			for next < len(mono) && !mono[next].reset.Valid {
+				next++
+			}
+			if next < len(mono) && abs(mono[next].reset.Int64-lastReset) <= resetJitterMillis {
+				i = j
+				continue
+			}
+			out = append(out, mono[i:j]...)
+			i = j
+			continue
+		}
+		if sn.reset.Valid {
+			lastReset = sn.reset.Int64
+		}
+		out = append(out, sn)
+		i++
+	}
+	return out
+}
+
 type polledReq struct {
 	at       int64
 	cost     float64
@@ -345,14 +399,12 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 
 	var cycles []weeklyCycle
 	for _, gk := range orderedKeys {
-		snaps := readings[gk]
+		snaps := sanitizePolledSnapshots(readings[gk])
 		reqs := reqsByGroup[gk]
 		label := labels[gk]
 		prov := origProvider[gk]
 		var (
 			cur        *weeklyCycle
-			highPct    float64
-			highAt     int64
 			zeroAt     int64
 			hasZero    bool
 			earlyUntil int64
@@ -365,7 +417,6 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 			if cur != nil {
 				cycles = append(cycles, *cur)
 				cur = nil
-				highPct, highAt = 0, 0
 			}
 		}
 		consumeReq := func(r polledReq) {
@@ -392,12 +443,18 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 						if sn.at < cur.reset {
 							earlyUntil = max(earlyUntil, cur.reset)
 						}
-						cur.nextAt = sn.at
-						flush()
+						if sn.at >= measureFrom {
+							cur.nextAt = sn.at
+							flush()
+						} else {
+							cur = nil
+						}
 					}
-					hasZero = true
-					zeroAt = sn.at
-					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+					if !hasZero || zeroAt < measureFrom {
+						hasZero = true
+						zeroAt = sn.at
+						spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
+					}
 				}
 				for ri < len(reqs) && reqs[ri].at == sn.at {
 					consumeReq(reqs[ri])
@@ -423,34 +480,29 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 			if sn.at < measureFrom {
 				if sameCycle {
 					cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
-					if sn.pct > highPct {
-						highPct, highAt = sn.pct, sn.at
-					}
 				} else {
 					cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
-					highPct, highAt = sn.pct, sn.at
 				}
 				hasZero = false
 				spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
 				continue
 			}
-			// Within one polled cycle, Google's remainingFraction can jitter
-			// slightly downward between polls (e.g. in-flight reservation
-			// adjustments). Track a high-water mark so downward jitter never
-			// drops accumulated cost or double-counts the rebound.
+			// Within one polled cycle, Google's remainingFraction rises during
+			// active traffic (temporary burst reservation) and settles downward
+			// after traffic stops. Emit signed deltas on every pct change so
+			// pairs telescope to the exact net cycle movement (lastPct - firstPct)
+			// without double-counting rebounds or locking in burst peaks.
 			if sameCycle {
-				cur.reset, cur.lastPct, cur.lastAt = sn.reset.Int64, sn.pct, sn.at
-				if highAt < measureFrom {
-					if sn.pct > highPct {
-						highPct = sn.pct
-					}
-					highAt = sn.at
+				prevAt := cur.lastAt
+				cur.reset, cur.lastAt = sn.reset.Int64, sn.at
+				if prevAt < measureFrom {
+					cur.lastPct = sn.pct
 					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
-				} else if sn.pct > highPct {
-					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - highPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
-					highPct, highAt = sn.pct, sn.at
+				} else if sn.pct != cur.lastPct {
+					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct - cur.lastPct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
+					cur.lastPct = sn.pct
 					spanCost, spanUnpr, spanTokens = 0, 0, Tokens{}
-				} else if sn.pct == highPct && spanCost == 0 && spanUnpr == 0 && len(cur.pairs) == 0 {
+				} else if spanCost == 0 && spanUnpr == 0 && len(cur.pairs) == 0 {
 					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at})
 				}
 			} else {
@@ -459,7 +511,6 @@ func polledWeeklyCycles(db querier, f Filter, table *pricing.Table, measureFrom 
 					flush()
 				}
 				cur = &weeklyCycle{account: gk.authIndex, provider: prov, group: gk.group, groupLabel: label, reset: sn.reset.Int64, lastPct: sn.pct, lastAt: sn.at}
-				highPct, highAt = sn.pct, sn.at
 				if hasZero && zeroAt >= measureFrom && sn.pct > 0 {
 					cur.pairs = append(cur.pairs, weeklyPair{at: sn.at, pct: sn.pct, cost: spanCost, unpriced: spanUnpr, tokens: spanTokens})
 				}
@@ -709,7 +760,7 @@ func LimitHistory(db *sql.DB, f Filter) (HistoryResult, error) {
 		}
 
 		snapWhere, snapArgs := snapshotFilterWhere(f, f.From.UnixMilli()-cycleLookbackMillis, f.To.UnixMilli())
-		snapRows, err := q.Query(`SELECT auth_index, provider, group_id, group_label, recorded_at, used_pct, COALESCE(reset_at, 0)
+		snapRows, err := q.Query(`SELECT auth_index, provider, group_id, group_label, recorded_at, used_pct, reset_at
 			FROM quota_snapshots WHERE window_kind = 'weekly' AND `+snapWhere+`
 			ORDER BY auth_index, lower(provider), group_id, recorded_at, id`, snapArgs...)
 		if err != nil {
@@ -717,36 +768,55 @@ func LimitHistory(db *sql.DB, f Filter) (HistoryResult, error) {
 		}
 		defer snapRows.Close()
 
-		cur = nil
-		lastBucket = int64(math.MinInt64)
+		type snapSeries struct {
+			acct, provider, gid, label string
+			snaps                      []polledReading
+		}
+		var series []snapSeries
 		for snapRows.Next() {
 			var (
 				acct, provider, gid, label string
-				pt                         HistoryPoint
+				r                          polledReading
 			)
-			if err := snapRows.Scan(&acct, &provider, &gid, &label, &pt.T, &pt.WeeklyPct, &pt.WeeklyReset); err != nil {
+			if err := snapRows.Scan(&acct, &provider, &gid, &label, &r.at, &r.pct, &r.reset); err != nil {
 				return fmt.Errorf("limit history snapshots scan: %w", err)
 			}
-			if cur == nil || cur.AuthIndex != acct || !strings.EqualFold(cur.Provider, provider) || cur.Group != gid {
-				res.Accounts = append(res.Accounts, HistoryAccount{AuthIndex: acct, Provider: provider, Group: gid, GroupLabel: label})
-				cur = &res.Accounts[len(res.Accounts)-1]
-				lastBucket = math.MinInt64
+			n := len(series)
+			if n == 0 || series[n-1].acct != acct || !strings.EqualFold(series[n-1].provider, provider) || series[n-1].gid != gid {
+				series = append(series, snapSeries{acct: acct, provider: provider, gid: gid, label: label})
+				n = len(series)
 			} else if label != "" {
-				cur.GroupLabel = label
+				series[n-1].label = label
 			}
-			b := int64(beforeRange)
-			if pt.T >= from {
-				b = f.bucketStart(pt.T, bucket)
-			}
-			if b == lastBucket {
-				cur.Points[len(cur.Points)-1] = pt
-				continue
-			}
-			cur.Points = append(cur.Points, pt)
-			lastBucket = b
+			series[n-1].snaps = append(series[n-1].snaps, r)
 		}
 		if err := snapRows.Err(); err != nil {
 			return fmt.Errorf("limit history snapshots rows: %w", err)
+		}
+		for _, s := range series {
+			clean := sanitizePolledSnapshots(s.snaps)
+			if len(clean) == 0 {
+				continue
+			}
+			ha := HistoryAccount{AuthIndex: s.acct, Provider: s.provider, Group: s.gid, GroupLabel: s.label}
+			lastBucket = math.MinInt64
+			for _, sn := range clean {
+				pt := HistoryPoint{T: sn.at, WeeklyPct: sn.pct}
+				if sn.reset.Valid {
+					pt.WeeklyReset = sn.reset.Int64
+				}
+				b := int64(beforeRange)
+				if pt.T >= from {
+					b = f.bucketStart(pt.T, bucket)
+				}
+				if b == lastBucket {
+					ha.Points[len(ha.Points)-1] = pt
+					continue
+				}
+				ha.Points = append(ha.Points, pt)
+				lastBucket = b
+			}
+			res.Accounts = append(res.Accounts, ha)
 		}
 		return nil
 	})
@@ -919,6 +989,9 @@ func PlanValue(db *sql.DB, f Filter, table *pricing.Table) (PlanValueResult, err
 		}
 		res = PlanValueResult{DataSince: since, RateLimits: limits, Accounts: make([]AccountValue, 0, len(byAcct))}
 		for k, av := range byAcct {
+			if av.WeeklyPct < 0 {
+				av.WeeklyPct = 0
+			}
 			av.CacheHitRate = cacheHitRate(av.Tokens)
 			if av.WeeklyPct > 0 && av.WeeklyPct < lowSampleBurnPct {
 				av.LowSample = true
